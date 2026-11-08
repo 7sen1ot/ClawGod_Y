@@ -2,7 +2,7 @@
 param(
     [Parameter(Position = 0)]
     [ValidatePattern('^(latest|stable|[0-9]+\.[0-9]+\.[0-9]+)$')]
-    [string]$Version = "2.1.316",
+    [string]$Version = "2.1.319",
     [switch]$Uninstall
 )
 
