@@ -164,7 +164,7 @@ const upstreamPatches = [
     id: 'classifier-model',
     toggleable: true,
     name: 'Auto-mode classifier model override (CLAWGOD_CLASSIFIER_MODEL)',
-    pattern: /function ([\w$]+)\(\)\{let [\w$]+=[\w$]+\(\),[\w$]+=[\w$]+\(.*?\),[\w$]+=[\w$]+\([\w$]+\?\.modelByMainModel,\{vet:/g,
+    pattern: /function ([\w$]+)\(\)\{(?:if\([\w$]+\.CLAUDE_CODE_USER_DELEGATED_SESSION_DIRECT_API\)return\{value:[\w$]+\(\)\?\?"",src:"default"\};)?let [\w$]+=[\w$]+\(\),[\w$]+=[\w$]+\(.*?\),[\w$]+=[\w$]+\([\w$]+\?\.modelByMainModel,\{vet:/g,
     replacer: (m, fn) =>
       `function ${fn}(){let _cm=process.env.CLAWGOD_CLASSIFIER_MODEL?.trim();if(_cm&&${gate('classifier-model')})return{value:_cm,src:"default"};` + m.slice(m.indexOf('{') + 1),
     unique: true,
