@@ -24,21 +24,6 @@ function fixFileURLs(c) {
 function fixAssetRequires(c, assets) {
   if (!c.includes('require')) return c;
   const marker = '/*clawgod:asset-require*/';
-  const loader = `(() => {${marker}
-        const fs = import.meta.require('node:fs');
-        const path = import.meta.require('node:path');
-    const types = new Map(${JSON.stringify([...assets])});
-    return (id) => {
-      if (typeof id === 'string' && path.isAbsolute(id) && fs.existsSync(id)) {
-        const canonical = fs.realpathSync.native(id);
-        const key = process.platform === 'win32' ? canonical.toLowerCase() : canonical;
-        const type = types.get(key);
-        if (type === 'text') return fs.readFileSync(id, 'utf8');
-        if (type === 'file') return id;
-      }
-      return import.meta.require(id);
-    };
-  })()`;
   const isRequire = node => node?.type === 'MemberExpression' &&
     (node.computed ? node.property.value === 'require' : node.property.name === 'require') &&
     node.object.type === 'MetaProperty' && node.object.meta.name === 'import';
@@ -61,10 +46,30 @@ function fixAssetRequires(c, assets) {
       else if (Array.isArray(value)) pending.push(...value.filter(child => child?.type));
     }
   }
-  for (const node of edits.sort((a, b) => b.start - a.start)) {
-    c = c.slice(0, node.start) + loader + c.slice(node.end);
+  if (!edits.length) return c;
+  const loader = `(() => {${marker}
+        const fs = import.meta.require('node:fs');
+        const path = import.meta.require('node:path');
+    const types = new Map(${JSON.stringify([...assets])});
+    return (id) => {
+      if (typeof id === 'string' && path.isAbsolute(id) && fs.existsSync(id)) {
+        const canonical = fs.realpathSync.native(id);
+        const key = process.platform === 'win32' ? canonical.toLowerCase() : canonical;
+        const type = types.get(key);
+        if (type === 'text') return fs.readFileSync(id, 'utf8');
+        if (type === 'file') return id;
+      }
+      return import.meta.require(id);
+    };
+  })()`;
+  const parts = [];
+  let cursor = 0;
+  for (const node of edits.sort((a, b) => a.start - b.start)) {
+    parts.push(c.slice(cursor, node.start), loader);
+    cursor = node.end;
   }
-  return c;
+  parts.push(c.slice(cursor));
+  return parts.join('');
 }
 
 if (isChunked) {

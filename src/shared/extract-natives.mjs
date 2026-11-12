@@ -249,7 +249,6 @@ function parseModules(payload, offsets) {
     const name = decodeName(checkedSlice(payload, nameOff, nameSize, `module[${i}].name`));
     const content = checkedSlice(payload, contentOff, contentSize, `module[${i}].content`);
     out.push({
-      index: i,
       entry: i === offsets.entry_point_id,
       name,
       content,
@@ -257,12 +256,6 @@ function parseModules(payload, offsets) {
     });
   }
   return out;
-}
-
-function napiBasename(name) {
-  const flat = name.replaceAll('\\', '/');
-  const tail = flat.split('/').pop() ?? '';
-  return tail.replace(/\.node$/i, '');
 }
 
 function main() {
@@ -293,27 +286,31 @@ function main() {
   const entryMod = modules.find((m) => m.entry);
   const entryText = entryMod ? entryMod.content.toString('utf8') : '';
   const BUN_MOUNT_RE = /^(?:\/\$bunfs\/root|[A-Za-z]:\/~BUN\/root)\//;
-  const bunSub = (name) => {
-    const n = name.replaceAll('\\', '/');
-    const mm = n.match(BUN_MOUNT_RE);
-    return mm ? n.slice(mm[0].length) : null;
-  };
   const isChunked = !!entryMod &&
     !entryText.includes('(function(exports, require, module') &&
     (entryText.includes('import{') || BUN_MOUNT_RE.test(entryText));
 
   const platDir = `${section.arch}-${section.os}`;
   const graphDir = join(outputDir, 'bunfs');
+  const pathMap = {};
 
   let cliCount = 0, napiCount = 0, dropped = 0;
   for (const m of modules) {
+    const normName = m.name.replaceAll('\\', '/');
+    const mount = isChunked && normName.match(BUN_MOUNT_RE);
+    const sub = mount ? normName.slice(mount[0].length) : null;
+    const flat = sub?.replace(/\//g, '__');
+    const base = m.loader === 'napi' ? normName.split('/').pop().replace(/\.node$/i, '') : null;
+    if (sub) {
+      pathMap[normName] = { path: m.entry ? 'cli.original.cjs'
+        : m.loader === 'napi' ? `vendor/${base}/${platDir}/${base}.node` : `bunfs/${flat}`, loader: m.loader };
+    }
     if (m.entry) {
       const out = join(outputDir, 'cli.original.js');
       writeFileSync(out, m.content);
       console.log(`  cli.js   ${(m.content.length / 1024 / 1024).toFixed(2)} MB → ${out} (${m.name})`);
       cliCount++;
     } else if (m.loader === 'napi') {
-      const base = napiBasename(m.name);
       if (!base) { console.warn(`  skip napi ${m.name}: empty basename`); dropped++; continue; }
       const dir = join(outputDir, 'vendor', base, platDir);
       mkdirSync(dir, { recursive: true });
@@ -322,9 +319,7 @@ function main() {
       console.log(`  napi     ${(m.content.length / 1024).toFixed(0).padStart(5)} KB → ${out}`);
       napiCount++;
     } else if (isChunked) {
-      const sub = bunSub(m.name);
       if (!sub) { dropped++; continue; }
-      const flat = sub.replace(/\//g, '__');
       mkdirSync(graphDir, { recursive: true });
       writeFileSync(join(graphDir, flat), m.content);
       console.log(`  chunk    ${(m.content.length / 1024).toFixed(0).padStart(6)} KB → bunfs/${flat}`);
@@ -340,21 +335,6 @@ function main() {
     process.exit(2);
   }
   if (isChunked) {
-    const pathMap = {};
-    for (const m of modules) {
-      const normName = m.name.replaceAll('\\', '/');
-      if (!BUN_MOUNT_RE.test(normName)) continue;
-      const sub = normName.replace(BUN_MOUNT_RE, '');
-      if (!sub) continue;
-      if (m.entry) {
-        pathMap[normName] = { path: 'cli.original.cjs', loader: m.loader };
-      } else if (m.loader === 'napi') {
-        const base = napiBasename(m.name);
-        pathMap[normName] = { path: `vendor/${base}/${platDir}/${base}.node`, loader: m.loader };
-      } else {
-        pathMap[normName] = { path: `bunfs/${sub.replace(/\//g, '__')}`, loader: m.loader };
-      }
-    }
     writeFileSync(join(outputDir, 'pathmap.json'), JSON.stringify(pathMap, null, 0) + '\n');
     console.log(`Graph chunks: ${modules.filter((m) => m.loader === 'js').length} js + napi in vendor/`);
   }

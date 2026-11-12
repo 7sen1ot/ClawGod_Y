@@ -286,15 +286,12 @@ class CellSegmenter {
       }
 
       const width = packed & WIDTH_MASK;
-      if (width >= 2) {
+      if (width > 0) {
         const charId = charMap ? charMap[cells[i * 2]] | 0 : cells[i * 2] | 0;
-        this._put(target, rowBase, columns, column, charId, styleBits | this.kinds.wide);
-        this._put(target, rowBase, columns, column + 1, spacerCharId, styleBits | this.kinds.spacerTail);
-        column += 2;
-      } else if (width === 1) {
-        const charId = charMap ? charMap[cells[i * 2]] | 0 : cells[i * 2] | 0;
-        this._put(target, rowBase, columns, column, charId, styleBits | this.kinds.narrow);
-        column += 1;
+        this._put(target, rowBase, columns, column, charId,
+          styleBits | (width >= 2 ? this.kinds.wide : this.kinds.narrow));
+        if (width >= 2) this._put(target, rowBase, columns, column + 1, spacerCharId, styleBits | this.kinds.spacerTail);
+        column += width >= 2 ? 2 : 1;
       }
     }
 

@@ -32,6 +32,12 @@ const FEATURES_LOCKED_ON = {
 
 function leanApply(clawgodSettingsPath, sharedSettingsPath, patchesJsonPath) {
   const fs = require("fs");
+  const writeSettings = (file, value) => {
+    try {
+      fs.mkdirSync(require("path").dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify(value, null, 2) + "\n");
+    } catch {}
+  };
   let s = {};
   try { s = JSON.parse(fs.readFileSync(clawgodSettingsPath, "utf8")); } catch {}
   if (typeof s !== "object" || !s) s = {};
@@ -54,12 +60,7 @@ function leanApply(clawgodSettingsPath, sharedSettingsPath, patchesJsonPath) {
   if (kept.length !== s.permissions.deny.length) { s.permissions.deny = kept; changed = true; }
   const ex = new Set(s.permissions.deny);
   for (const t of DENY) { if (!ex.has(t)) { s.permissions.deny.push(t); changed = true; } }
-  if (changed) {
-    try {
-      fs.mkdirSync(require("path").dirname(clawgodSettingsPath), { recursive: true });
-      fs.writeFileSync(clawgodSettingsPath, JSON.stringify(s, null, 2) + "\n");
-    } catch {}
-  }
+  if (changed) writeSettings(clawgodSettingsPath, s);
   if (patchesJsonPath) {
     let p = {};
     try { p = JSON.parse(fs.readFileSync(patchesJsonPath, "utf8")); } catch {}
@@ -68,12 +69,7 @@ function leanApply(clawgodSettingsPath, sharedSettingsPath, patchesJsonPath) {
     for (const [k, v] of Object.entries(FEATURES_LOCKED_ON)) {
       if (!(k in p)) { p[k] = v; pchanged = true; }
     }
-    if (pchanged) {
-      try {
-        fs.mkdirSync(require("path").dirname(patchesJsonPath), { recursive: true });
-        fs.writeFileSync(patchesJsonPath, JSON.stringify(p, null, 2) + "\n");
-      } catch {}
-    }
+    if (pchanged) writeSettings(patchesJsonPath, p);
   }
   if (sharedSettingsPath) {
     try {

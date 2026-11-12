@@ -176,6 +176,14 @@ function walkScope(root, visit) {
   });
 }
 
+export function ownReturns(body) {
+  const returns = [];
+  walkScope(body, node => {
+    if (node.type === 'ReturnStatement') returns.push(node);
+  });
+  return returns;
+}
+
 function pairingScopeResolver(tree, sentinel) {
   const scopes = new WeakMap(), writes = [];
   const declare = (scope, pattern, value) => {
@@ -505,15 +513,8 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
     replace(`((_original)=>function(){'use strict';if(${gate(id)})return!0;return _original.apply(this,arguments)})(${code.slice(value.start, value.end)})`);
     return true;
   };
-  const ownReturns = fn => {
-    if (fn.body.type !== 'BlockStatement') return [fn.body];
-    const values = [];
-    walk(fn.body, child => {
-      if (functionNode(child)) return false;
-      if (child.type === 'ReturnStatement' && child.argument) values.push(child.argument);
-    });
-    return values;
-  };
+  const returnValues = fn => fn.body.type !== 'BlockStatement' ? [fn.body]
+    : ownReturns(fn.body).map(statement => statement.argument).filter(Boolean);
 
   const wigglyLiterals = new Set(), wigglyHandled = new Set();
   let pairingHandled = false;
@@ -578,7 +579,7 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
         }
         return false;
       };
-      const returns = teamEnv ? ownReturns(node) : [];
+      const returns = teamEnv ? returnValues(node) : [];
       if (teamEnv && returns.length && returns.every(value => booleanResult(value)) &&
           flagArguments.some(argument => context.text(argument) === 'tengu_amber_flint')) {
         const id = 'agent-teams-graph';
@@ -665,7 +666,7 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
         return member(expression, 'enabled') ? expression : undefined;
       };
       if (alreadyPatched(node, id)) results[id].patched = true;
-      else for (const value of ownReturns(node)) {
+      else for (const value of returnValues(node)) {
         const child = enabledResult(value);
         if (!child) continue;
         const config = context.resolve(child.object);
@@ -703,7 +704,7 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
       };
       let candidate = false, rewritten = false;
       if (alreadyPatched(node, id)) results[id].patched = true;
-      else for (const date of ownReturns(node)) {
+      else for (const date of returnValues(node)) {
         const parts = [];
         for (const part of partsOf(date)) {
           if (typeof part === 'string' && typeof parts.at(-1) === 'string') parts[parts.length - 1] += part;

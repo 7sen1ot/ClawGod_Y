@@ -56,14 +56,18 @@ const TARGETS = [
   },
 ];
 
+const sourceCache = new Map();
 function readSource(relativePath) {
+  if (sourceCache.has(relativePath)) return sourceCache.get(relativePath);
   const path = join(SOURCE_ROOT, relativePath);
   if (!existsSync(path)) throw new Error(`Missing build source: ${relativePath}`);
   const content = readFileSync(path, 'utf8');
   if (!content.endsWith('\n')) {
     throw new Error(`Build source must end with a newline: ${relativePath}`);
   }
-  return content.slice(0, -1);
+  const source = content.slice(0, -1);
+  sourceCache.set(relativePath, source);
+  return source;
 }
 
 function render(target, meta) {

@@ -625,9 +625,6 @@ for (const p of [...patches.filter(p => p.ast), ...patches.filter(p => !p.ast)])
   let fileChangedCount = 0;
   const strategies = new Map();
 
-  let totalMatches = 0;
-  for (const fm of fileMatches) totalMatches += fm.matches.length;
-
   if (fileMatches.length === 0) {
     if (p.appliedSentinel && Object.values(files).some(content => content.includes(p.appliedSentinel))) {
       console.log(`  ✅ ${p.name} (already applied, patch marker present)`);
@@ -681,6 +678,7 @@ for (const p of [...patches.filter(p => p.ast), ...patches.filter(p => !p.ast)])
   }
 
   if (verify) {
+    const totalMatches = fileMatches.reduce((total, fm) => total + fm.matches.length, 0);
     console.log(`  ⬚  ${p.name} — ${totalMatches} match(es), not yet applied`);
     skipped++;
     continue;
