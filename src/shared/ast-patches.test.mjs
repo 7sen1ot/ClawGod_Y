@@ -5,8 +5,12 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { runInNewContext } from 'node:vm';
 import { AST_PATCH_IDS, scanAstPatches, applyAstEdits, parsePatchSource } from './ast-patches.mjs';
+import { requiredRuntime } from './required-runtime.fixture.mjs';
 
 const source = `
+function projects(){return paths.join(root,'projects')}
+function history(){return paths.join(root,'history.jsonl')}
+function instructions(settings){const excludes=settings.claudeMdExcludes;return(file)=>excludes.includes(file)}
 // function userType(){return"external"} name:"ultraplan"
 const decoy='function userType(){return"external"}';
 function userType () { return 'external'; }
@@ -33,7 +37,8 @@ const unrelated={method(){return this.environmentOverridesParsed=true,this.envir
 const dateSource = 'function dateText (input) {let info=probe(),mark=apostrophe(info?.known??false,info?.labKw??false),formatted=info?.cnTZ?input.replaceAll("-","/"):input;return`Today${mark}s date is ${formatted}.`}';
 const scanned = scanAstPatches(source + dateSource);
 for (const id of AST_PATCH_IDS) assert.equal(scanned[id].matches.length,
-  ['remote-settings-off', 'wiggly-dove', 'computer-use-gate-semantic', 'ultrareview-command', 'growthbook-config-overrides-graph'].includes(id) ? 0 : 1, id);
+  ['remote-settings-off', 'wiggly-dove', 'computer-use-gate-semantic', 'ultrareview-command', 'growthbook-config-overrides-graph',
+    'session-state-paths', 'agents-md-off'].includes(id) ? 0 : 1, id);
 const edits = Object.values(scanned).flatMap(result => result.matches);
 const patched = applyAstEdits(source + dateSource, edits);
 parsePatchSource(patched);
@@ -217,7 +222,7 @@ try {
       assert.match(failure.stderr, /AST scan failed/);
       assert.equal(readFileSync(target, 'utf8'), invalid);
     }
-    const unsupported = "const command={name:'ultraplan',isEnabled:futureGate};function userType(){return 'external'}";
+    const unsupported = requiredRuntime + "const command={name:'ultraplan',isEnabled:futureGate};function userType(){return 'external'}";
     writeFileSync(target, unsupported);
     assert.equal(run('--capture-clean-source').status, 0);
     const bestEffort = run();

@@ -3,9 +3,10 @@ import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { requiredRuntime } from './required-runtime.fixture.mjs';
 
 const root = mkdtempSync(join(tmpdir(), 'clawgod-source-backup-'));
-const command = 'function userType(){return"external"}';
+const command = requiredRuntime + 'function userType(){return"external"}';
 const colors = 'const color="rgb(215,119,87)";';
 try {
   for (const graph of [false, true]) {
@@ -91,7 +92,7 @@ try {
     for (const args of [[], ['--dry-run']]) {
       const failed = run(...args);
       assert.equal(failed.status, 1);
-      assert.match(failed.stdout, /required application prompt hook did not match/);
+      assert.match(failed.stdout, /required runtime hook did not match/);
       assert.equal(readFileSync(target, 'utf8'), before);
       assert.equal(existsSync(entry + '.bak'), false);
       if (graph) assert.equal(readFileSync(join(dir, 'bunfs/colors.mjs'), 'utf8'), colors);

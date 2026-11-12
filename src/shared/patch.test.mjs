@@ -9,6 +9,7 @@ import { runInNewContext } from 'node:vm';
 import { createServer, request } from 'node:http';
 import { scanPentestPatches } from './pentest-patches.mjs';
 import { applyAstEdits } from './ast-patches.mjs';
+import { requiredRuntime } from './required-runtime.fixture.mjs';
 
 const patchFiles = [
   'patch.mjs', 'patch-registry.mjs', 'ast-patches.mjs', 'acorn.mjs', 'pentest-patches.mjs',
@@ -99,7 +100,7 @@ try {
   for (const graph of [false, true]) {
     if (graph) mkdirSync(join(testDir, 'bunfs'));
     for (const fixture of ultraplanFixtures) {
-      const source = `var command={type:"local-jsx",name:"ultraplan",${fixture.description},argumentHint:"<prompt>",${fixture.metadata || ''}isEnabled:()=>${fixture.original},policyGate:policy,load:()=>load()};var neighbor={name:"other",argumentHint:"<prompt>",isEnabled:()=>!1};`;
+      const source = requiredRuntime + `var command={type:"local-jsx",name:"ultraplan",${fixture.description},argumentHint:"<prompt>",${fixture.metadata || ''}isEnabled:()=>${fixture.original},policyGate:policy,load:()=>load()};var neighbor={name:"other",argumentHint:"<prompt>",isEnabled:()=>!1};`;
       const target = join(testDir, graph ? 'bunfs/commands.js' : 'cli.original.cjs');
       if (graph) writeFileSync(join(testDir, 'cli.original.cjs'), '// entry');
       writeFileSync(target, source);
@@ -131,7 +132,7 @@ try {
       'description:"Future gate",argumentHint:"<prompt>",newMetadata:!0,isEnabled:futureGate',
       'description:"Cloud command stub"',
     ]) {
-      const source = `var command={name:"ultraplan",${body}};var neighbor={name:"other",argumentHint:"<prompt>",isEnabled:()=>!1};`;
+      const source = requiredRuntime + `var command={name:"ultraplan",${body}};var neighbor={name:"other",argumentHint:"<prompt>",isEnabled:()=>!1};`;
       const target = join(testDir, graph ? 'bunfs/commands.js' : 'cli.original.cjs');
       writeFileSync(target, source);
       const result = spawnSync(process.execPath, [join(testDir, 'patch.mjs')], { encoding: 'utf8' });
@@ -145,15 +146,15 @@ try {
         assert.equal(readFileSync(target, 'utf8'), source);
       }
     }
-    const minimal = 'function userType(){return "external"}';
+    const minimal = requiredRuntime + 'function userType(){return "external"}';
     const target = join(testDir, graph ? 'bunfs/commands.js' : 'cli.original.cjs');
     writeFileSync(target, minimal);
     const missing = spawnSync(process.execPath, [join(testDir, 'patch.mjs')], { encoding: 'utf8' });
-    assert.equal(missing.status, 0, `${graph ? 'graph' : 'legacy'}: absent anchors do not abort the install`);
+    assert.equal(missing.status, 0, `${graph ? 'graph' : 'legacy'}: absent optional anchors do not abort the install`);
     assert.match(missing.stdout, /0 failed/);
     assert.match(missing.stdout, /not present in this version/);
     assert.match(missing.stdout, /Patching completed;/);
-    const drifted = 'async function decide(a,b,c,d,e,f){return a.checkPermissions("tengu_mcp_server_policy_bypass_exempt")}';
+    const drifted = requiredRuntime + 'async function decide(a,b,c,d,e,f){return a.checkPermissions("tengu_mcp_server_policy_bypass_exempt")}';
     writeFileSync(target, drifted);
     const strict = spawnSync(process.execPath, [join(testDir, 'patch.mjs')], { encoding: 'utf8' });
     assert.equal(strict.status, 0, strict.stderr);
@@ -166,7 +167,7 @@ try {
     if (graph) mkdirSync(join(testDir, 'bunfs'));
     const target = join(testDir, graph ? 'bunfs/mixed.js' : 'cli.original.cjs');
     if (graph) writeFileSync(join(testDir, 'cli.original.cjs'), '// entry');
-    const source =
+    const source = requiredRuntime +
       'var command={name:"ultraplan",description:"Cloud command stub"};' +
       'function isThirdParty(){return provider!=="firstParty"&&!isAws(provider)}' +
       'function isAws(value){return value==="anthropicAws"}' +
@@ -192,7 +193,7 @@ try {
       ['provider helper with haiku exemption (v2.1.293+)', 'isThirdParty()&&(model==="claude-opus-4-6"||model==="claude-sonnet-4-6"||model.includes("haiku")&&model!=="claude-haiku-5-5")'],
       ['provider helper with future exclusions', 'isThirdParty()&&(model==="claude-opus-4-6"||model==="claude-sonnet-4-6"||model.includes("haiku")&&model!=="claude-haiku-5-5"&&!isExcluded(model))'],
     ]) {
-      const source = `function isThirdParty(){return provider!=="firstParty"&&!isAws(provider)}function isAws(value){return value==="anthropicAws"}function supports(model){if(${condition})return!1;return!0}`;
+      const source = requiredRuntime + `function isThirdParty(){return provider!=="firstParty"&&!isAws(provider)}function isAws(value){return value==="anthropicAws"}function supports(model){if(${condition})return!1;return!0}`;
       const target = join(testDir, graph ? 'bunfs/auto-mode.js' : 'cli.original.cjs');
       if (graph) writeFileSync(join(testDir, 'cli.original.cjs'), '// entry');
       writeFileSync(target, source);
@@ -230,6 +231,7 @@ try {
   const legacy = 'function legacy({customSystemPrompt,appendSystemPrompt,defaultSystemPrompt}){' +
     'return{prompt:defaultSystemPrompt,servesDefault:true}}';
   const authority = {
+    runtime: requiredRuntime,
     snapshot: 'function snapshot(history,current,{stamp}){const saved=loadSnapshot(history);' +
       'if(saved)return{systemPrompt:saved.systemPrompt,source:"from_snapshot",snapshotHash:saved.systemPromptHash};' +
       'return{systemPrompt:current,source:"live_recorded",snapshotHash:fingerprint(current),' +
@@ -272,7 +274,7 @@ try {
       assert.ok(Number.isInteger(result.status), result.error?.message || label);
       if (scenario.startsWith('missing')) {
         assert.notEqual(result.status, 0, label);
-        assert.match(result.stdout, /required application prompt hook did not match/);
+        assert.match(result.stdout, /required runtime hook did not match/);
         assert.deepEqual(readSources(), before,
           `${label}: a required hook failure must not partially write other patches`);
         continue;
@@ -330,7 +332,7 @@ const fixtures = [
   ['renamed', '$flag', '$gate'],
 ];
 function privacyFixture(version, flag, check) {
-  return `var ${flag}="tengu_wiggly_dove";var other="tengu_other";` +
+  return requiredRuntime + `var ${flag}="tengu_wiggly_dove";var other="tengu_other";` +
     'function neighbor(){if(!isFirstParty())return!1;if(!feature(other,!1))return!1;return routeAllowed()}' +
     `function ${check}(){if(!isFirstParty())return!1;if(!feature(${flag},!1))return!1;return routeAllowed()}` +
     `async function collect(){if(!${check}())return;return 'jy="'+readOrigin()+'", ob="${version}"'}` +
@@ -383,10 +385,10 @@ try {
       }
       lastPatched = patched;
     }
-    writeFileSync(target, '// no wiggly-dove in this version');
+    writeFileSync(target, requiredRuntime + '// no wiggly-dove in this version');
     execFileSync(process.execPath, [join(privacyDir, 'patch.mjs')]);
     for (const declaration of ['var', 'let', 'const']) {
-      const stale = `function userType(){return"external"}${declaration} flag="tengu_wiggly_dove";function changed(){return feature(flag,!1)}`;
+      const stale = requiredRuntime + `function userType(){return"external"}${declaration} flag="tengu_wiggly_dove";function changed(){return feature(flag,!1)}`;
       writeFileSync(target, stale);
       const result = spawnSync(process.execPath, [join(privacyDir, 'patch.mjs')], { encoding: 'utf8' });
       assert.equal(result.status, 0, result.stderr);

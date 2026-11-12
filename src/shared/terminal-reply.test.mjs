@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import { terminalReplyDelay } from './runtime-helpers.cjs';
+import { requiredRuntime } from './required-runtime.fixture.mjs';
 
 const pending = { queue: [{ kind: 'sentinel', written: true }] };
 const reader = (incomplete, mode = 'NORMAL') => ({ parse: { mode, incomplete }, lastInputAt: 100 });
@@ -38,7 +39,7 @@ try {
     }
     for (const names of [['Hf', 'za', 't', 'Ry'], ['zf', 'Lr', 'n', 'E0']]) {
       const [hasInput, wait, now, flush] = names;
-      const source = `globalThis.App=class{flushIncomplete=()=>{if(this.incompleteEscapeTimer=null,!${hasInput}(this.keyReader))return;if(this.props.stdin.readableLength>0){this.incompleteEscapeTimer=setTimeout(this.flushIncomplete,${wait});return}let ${now}=performance.now();this.applyKeysRead(${flush}(this.keyReader,${now}),${now})}};`;
+      const source = requiredRuntime + `globalThis.App=class{flushIncomplete=()=>{if(this.incompleteEscapeTimer=null,!${hasInput}(this.keyReader))return;if(this.props.stdin.readableLength>0){this.incompleteEscapeTimer=setTimeout(this.flushIncomplete,${wait});return}let ${now}=performance.now();this.applyKeysRead(${flush}(this.keyReader,${now}),${now})}};`;
       const target = join(dir, graph ? 'bunfs/renderer.js' : 'cli.original.cjs');
       if (graph) writeFileSync(join(dir, 'cli.original.cjs'), '// graph entry\n');
       writeFileSync(target, source);
