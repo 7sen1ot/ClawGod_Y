@@ -38,7 +38,7 @@ const payloads = {
 if(process.env.CLAWGOD_FAIL_STAGE==='startup')throw new Error('fixture startup failure');
 if(process.argv[2]==='--probe-tools')globalThis.__clawgodTables={tools:[()=>[{name:'fixture'}]],commands:[()=>[{name:'fixture'}]]};
 else console.log(require('fs').readFileSync(require('path').join(__dirname,'.source-version'),'utf8').trim()+' (Claude Code)');`)});`,
-  'patch.mjs': `import{writeFileSync}from'node:fs';if(process.env.CLAWGOD_FAIL_STAGE==='patch'&&!process.argv.includes('--capture-clean-source'))throw new Error('fixture patch failure');if(process.argv.includes('--capture-clean-source'))writeFileSync(new URL('./source-backup.json',import.meta.url),'{}');`,
+  'patch.mjs': `import{writeFileSync}from'node:fs';if(process.env.CLAWGOD_FAIL_STAGE==='patch'&&!process.argv.includes('--capture-clean-source'))throw new Error('fixture patch failure');if(process.argv.includes('--capture-clean-source')||process.argv.includes('--capture-and-apply'))writeFileSync(new URL('./source-backup.json',import.meta.url),'{}');`,
   'compile-runtime.mjs': `import{rmSync}from'node:fs';rmSync(new URL('./.compiled-runtime',import.meta.url),{force:true});`,
   'npm-fetch.mjs': `import{mkdirSync,copyFileSync,writeFileSync}from'node:fs';import{join}from'node:path';
     writeFileSync(join(process.env.USERPROFILE,'requested-package.txt'),process.argv[2]);

@@ -28,25 +28,18 @@ const SGR_ATTRS = new Map([
   [53, ['overline', 55]],
 ]);
 
-const SGR_CLOSES = new Map([
-  [22, ['bold', 'dim']],
-  [23, ['italic']],
-  [24, ['underline', 'underline-double']],
-  [25, ['blink', 'blink-fast']],
-  [27, ['inverse']],
-  [28, ['hidden']],
-  [29, ['strike']],
-  [39, ['fg']],
-  [49, ['bg']],
-  [55, ['overline']],
-  [59, ['underline-color']],
-]);
-
 const SGR_EXTENDED = new Map([
   [38, ['fg', 39]],
   [48, ['bg', 49]],
   [58, ['underline-color', 59]],
 ]);
+
+const SGR_CLOSES = new Map();
+for (const [slot, close] of [...SGR_ATTRS.values(), ...SGR_EXTENDED.values()]) {
+  const slots = SGR_CLOSES.get(close) ?? [];
+  slots.push(slot);
+  SGR_CLOSES.set(close, slots);
+}
 
 function slotFor(param) {
   const attr = SGR_ATTRS.get(param);

@@ -8,7 +8,6 @@ const {
 } = require('node:fs');
 const { join } = require('node:path');
 const { pathToFileURL } = require('node:url');
-const { spawnSync } = require('node:child_process');
 
 const ROOT = __dirname;
 const SOURCE_ROOT = join(ROOT, 'src');
@@ -23,23 +22,10 @@ const escapeNonAscii = (content) => content.replace(
 
 const FEATURES_META_MARKER = 'const CLAWGOD_FEATURES_META = {};';
 
-function featuresMeta() {
-  const registryUrl = pathToFileURL(join(SOURCE_ROOT, 'shared/patch-registry.mjs')).href;
-  const result = spawnSync(process.execPath, ['-e',
-    `import(${JSON.stringify(registryUrl)}).then(m=>console.log(JSON.stringify(m.featuresMeta())))`], {
-    encoding: 'utf8',
-  });
-  if (result.status !== 0) {
-    throw new Error(`patch-registry.mjs featuresMeta failed: ${result.stderr}`);
-  }
-  return JSON.parse(result.stdout);
-}
-
-function weaveFeaturesMeta(content) {
+function weaveFeaturesMeta(content, meta) {
   if (!content.includes(FEATURES_META_MARKER)) {
     throw new Error(`wrapper source missing ${FEATURES_META_MARKER} marker`);
   }
-  const meta = featuresMeta();
   const rendered = `const CLAWGOD_FEATURES_META = ${JSON.stringify(meta, null, 2)};`;
   return content.replace(FEATURES_META_MARKER, () => rendered);
 }
@@ -53,7 +39,7 @@ const SHARED_SOURCES = {
   'compile-runtime.mjs': ['shared/compile-runtime.mjs'],
   'runtime-helpers.cjs': ['shared/runtime-helpers.cjs'],
   'bun-ant-shim.cjs': ['shared/bun-ant-shim.cjs'],
-  'feature-gates.cjs': ['shared/feature-gates.cjs', weaveFeaturesMeta, c => escapeNonAscii(weaveFeaturesMeta(c))],
+  'feature-gates.cjs': ['shared/feature-gates.cjs', weaveFeaturesMeta, (c, meta) => escapeNonAscii(weaveFeaturesMeta(c, meta))],
   'patch.mjs': ['shared/patch.mjs'],
   'patch-registry.mjs': ['shared/patch-registry.mjs'],
   'ast-patches.mjs': ['shared/ast-patches.mjs'],
@@ -100,19 +86,20 @@ function readSource(relativePath) {
   return content.slice(0, -1);
 }
 
-function render(target) {
+function render(target, meta) {
   const templatePath = join(SOURCE_ROOT, target.template);
   if (!existsSync(templatePath)) throw new Error(`Missing template: ${target.template}`);
-  let output = readFileSync(templatePath, 'utf8').replace(/^\uFEFF/, '');
-
-  for (const [name, [sourcePath, transform]] of Object.entries(target.sources)) {
-    const placeholder = `{{CLAWGOD:${name}}}`;
-    const matches = output.split(placeholder).length - 1;
-    if (matches !== 1) {
-      throw new Error(`${target.template}: expected one ${placeholder}, found ${matches}`);
-    }
-    const source = transform(readSource(sourcePath));
-    output = output.replace(placeholder, () => source);
+  const used = new Set();
+  const output = readFileSync(templatePath, 'utf8').replace(/^\uFEFF/, '').replace(PLACEHOLDER_RE, placeholder => {
+    const name = placeholder.slice('{{CLAWGOD:'.length, -2);
+    if (!Object.hasOwn(target.sources, name)) throw new Error(`${target.template}: unknown placeholder: ${placeholder}`);
+    if (used.has(name)) throw new Error(`${target.template}: duplicate placeholder: ${placeholder}`);
+    used.add(name);
+    const [sourcePath, transform] = target.sources[name];
+    return transform(readSource(sourcePath), meta);
+  });
+  for (const name of Object.keys(target.sources)) {
+    if (!used.has(name)) throw new Error(`${target.template}: missing placeholder: {{CLAWGOD:${name}}}`);
   }
 
   const unresolved = output.match(PLACEHOLDER_RE);
@@ -153,7 +140,7 @@ function checkTarget(target, expected) {
   return false;
 }
 
-function main() {
+async function main() {
   const check = process.argv.includes('--check');
   const unknown = process.argv.slice(2).filter((arg) => arg !== '--check');
   if (unknown.length > 0) {
@@ -161,9 +148,11 @@ function main() {
     process.exit(2);
   }
 
+  const { featuresMeta } = await import(pathToFileURL(join(SOURCE_ROOT, 'shared/patch-registry.mjs')).href);
+  const meta = featuresMeta();
   let success = true;
   for (const target of TARGETS) {
-    const content = render(target);
+    const content = render(target, meta);
     if (check) {
       success = checkTarget(target, content) && success;
       continue;
@@ -176,9 +165,7 @@ function main() {
   if (!success) process.exit(1);
 }
 
-try {
-  main();
-} catch (error) {
+main().catch(error => {
   console.error(error instanceof Error ? error.message : error);
   process.exit(1);
-}
+});

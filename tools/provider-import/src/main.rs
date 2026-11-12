@@ -12,12 +12,8 @@ fn home_dir() -> PathBuf {
         .expect("Cannot determine home directory")
 }
 
-fn clawgod_dir() -> PathBuf {
-    home_dir().join(".clawgod")
-}
-
 fn provider_json_path() -> PathBuf {
-    clawgod_dir().join("provider.json")
+    home_dir().join(".clawgod").join("provider.json")
 }
 
 
@@ -125,12 +121,7 @@ fn select_model(models: &[String], default: &str) -> String {
         eprintln!("    [{}] {}{}", i + 1, m, marker);
     }
 
-    eprint!("\n  Select model [default: {}]: ", default);
-    io::stderr().flush().unwrap();
-
-    let mut input = String::new();
-    io::stdin().read_line(&mut input).unwrap();
-    let input = input.trim();
+    let input = prompt(&format!("\n  Select model [default: {}]: ", default));
 
     if input.is_empty() {
         return default.to_string();
@@ -142,11 +133,11 @@ fn select_model(models: &[String], default: &str) -> String {
         }
     }
 
-    input.to_string()
+    input
 }
 
-fn prompt_key() -> String {
-    eprint!("  Enter API key: ");
+fn prompt(label: &str) -> String {
+    eprint!("{}", label);
     io::stderr().flush().unwrap();
     let mut input = String::new();
     io::stdin().read_line(&mut input).unwrap();
@@ -154,141 +145,66 @@ fn prompt_key() -> String {
 }
 
 
-fn cmd_grok(args: &[String]) {
-    eprintln!("\n  ── Grok / xAI Import ──\n");
+fn cmd_import(args: &[String], provider_type: &str) {
+    let grok = provider_type == "grok";
+    let label = if grok { "Grok / xAI" } else { "OpenAI-Compatible" };
+    eprintln!("\n  ── {} Import ──\n", label);
 
     let mut key = None;
     let mut model_override = None;
     let mut small_model_override = None;
-    let mut base_url = "https://api.x.ai/v1".to_string();
+    let mut base_url = if grok { Some("https://api.x.ai/v1".to_string()) } else { None };
 
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
             "--key" | "-k" => {
-                i += 1;
-                key = args.get(i).cloned();
+                key = args.next().cloned();
             }
             "--model" | "-m" => {
-                i += 1;
-                model_override = args.get(i).cloned();
+                model_override = args.next().cloned();
             }
             "--small-model" => {
-                i += 1;
-                small_model_override = args.get(i).cloned();
+                small_model_override = args.next().cloned();
             }
             "--base-url" => {
-                i += 1;
-                if let Some(u) = args.get(i) {
-                    base_url = u.clone();
+                let value = args.next().cloned();
+                if value.is_some() || !grok {
+                    base_url = value;
                 }
             }
+            "-u" if !grok => base_url = args.next().cloned(),
             _ => {}
         }
-        i += 1;
     }
 
     let api_key = match key {
         Some(k) => {
-            eprintln!("  Using provided key");
+            if grok { eprintln!("  Using provided key"); }
             k
         }
         None => {
-            eprintln!("  Searching for grok-cli credentials...");
-            match detect_grok_key() {
-                Some(k) => k,
-                None => {
+            let detected = if grok {
+                eprintln!("  Searching for grok-cli credentials...");
+                let key = detect_grok_key();
+                if key.is_none() {
                     eprintln!("  No grok-cli key found.");
-                    let k = prompt_key();
-                    if k.is_empty() {
-                        eprintln!("  Aborted.");
-                        process::exit(1);
-                    }
-                    k
                 }
-            }
+                key
+            } else { None };
+            detected.unwrap_or_else(|| {
+                let k = prompt("  Enter API key: ");
+                if k.is_empty() {
+                    eprintln!("  Aborted.");
+                    process::exit(1);
+                }
+                k
+            })
         }
     };
-
-    eprintln!("\n  Verifying key with {}...", base_url);
-    let models = validate_key(&api_key, &base_url).unwrap_or_else(|error| {
-        eprintln!("  FAILED: {}", error);
-        process::exit(1);
-    });
-
-    eprintln!("  Key valid.");
-
-    let default_model = "grok-4";
-    let default_small = "grok-3-mini";
-
-    let model = model_override.unwrap_or_else(|| select_model(&models, default_model));
-
-    let small_model = match small_model_override {
-        Some(m) => m,
-        None => {
-            let candidates = ["grok-3-mini", "grok-3-mini-fast"];
-            let auto = models
-                .iter()
-                .find(|m| candidates.contains(&m.as_str()))
-                .map(|s| s.as_str())
-                .unwrap_or(default_small);
-            auto.to_string()
-        }
-    };
-
-    eprintln!("\n  model: {}", model);
-    eprintln!("  smallModel: {}", small_model);
-    write_provider("grok", &api_key, &base_url, &model, &small_model);
-    eprintln!("\n  Done. Run `claude` to start.\n");
-}
-
-fn cmd_openai_compat(args: &[String]) {
-    eprintln!("\n  ── OpenAI-Compatible Import ──\n");
-
-    let mut key = None;
-    let mut base_url = None;
-    let mut model = None;
-    let mut small_model = None;
-
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--key" | "-k" => {
-                i += 1;
-                key = args.get(i).cloned();
-            }
-            "--base-url" | "-u" => {
-                i += 1;
-                base_url = args.get(i).cloned();
-            }
-            "--model" | "-m" => {
-                i += 1;
-                model = args.get(i).cloned();
-            }
-            "--small-model" => {
-                i += 1;
-                small_model = args.get(i).cloned();
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-
-    let api_key = key.unwrap_or_else(|| {
-        let k = prompt_key();
-        if k.is_empty() {
-            eprintln!("  Aborted.");
-            process::exit(1);
-        }
-        k
-    });
 
     let url = base_url.unwrap_or_else(|| {
-        eprint!("  Base URL: ");
-        io::stderr().flush().unwrap();
-        let mut input = String::new();
-        io::stdin().read_line(&mut input).unwrap();
-        let v = input.trim().to_string();
+        let v = prompt("  Base URL: ");
         if v.is_empty() {
             eprintln!("  Aborted.");
             process::exit(1);
@@ -302,6 +218,10 @@ fn cmd_openai_compat(args: &[String]) {
             eprintln!("  Key valid.");
             models
         }
+        Err(error) if grok => {
+            eprintln!("  FAILED: {}", error);
+            process::exit(1);
+        }
         Err(error) => {
             eprintln!("  WARNING: {}", error);
             eprintln!("  Continuing anyway (some APIs don't expose /models)...\n");
@@ -309,23 +229,30 @@ fn cmd_openai_compat(args: &[String]) {
         }
     };
 
-    let selected_model = model.unwrap_or_else(|| {
-        if !models.is_empty() {
-            select_model(&models, &models[0])
+    let model = model_override.unwrap_or_else(|| {
+        if grok {
+            select_model(&models, "grok-4")
+        } else if let Some(default) = models.first() {
+            select_model(&models, default)
         } else {
-            eprint!("  Model name: ");
-            io::stderr().flush().unwrap();
-            let mut input = String::new();
-            io::stdin().read_line(&mut input).unwrap();
-            input.trim().to_string()
+            prompt("  Model name: ")
         }
     });
 
-    let selected_small = small_model.unwrap_or_else(|| selected_model.clone());
+    let small_model = small_model_override.unwrap_or_else(|| {
+        if grok {
+            models.iter()
+                .find(|m| ["grok-3-mini", "grok-3-mini-fast"].contains(&m.as_str()))
+                .cloned()
+                .unwrap_or_else(|| "grok-3-mini".to_string())
+        } else {
+            model.clone()
+        }
+    });
 
-    eprintln!("\n  model: {}", selected_model);
-    eprintln!("  smallModel: {}", selected_small);
-    write_provider("openai-compat", &api_key, &url, &selected_model, &selected_small);
+    eprintln!("\n  model: {}", model);
+    eprintln!("  smallModel: {}", small_model);
+    write_provider(provider_type, &api_key, &url, &model, &small_model);
     eprintln!("\n  Done. Run `claude` to start.\n");
 }
 
@@ -419,8 +346,8 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     match args.get(1).map(|s| s.as_str()) {
-        Some("grok") => cmd_grok(&args[2..]),
-        Some("openai-compat") | Some("openai") => cmd_openai_compat(&args[2..]),
+        Some("grok") => cmd_import(&args[2..], "grok"),
+        Some("openai-compat") | Some("openai") => cmd_import(&args[2..], "openai-compat"),
         Some("status") => cmd_status(),
         Some("reset") => cmd_reset(),
         Some("--help") | Some("-h") | Some("help") => print_usage(),

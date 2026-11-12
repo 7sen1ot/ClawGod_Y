@@ -14,10 +14,9 @@ for (var _name in process.env) {
   _cfg[_name.slice('CLAWGOD_FEATURE_'.length).toLowerCase().replace(/_/g, '-')] = _val === 'true';
 }
 
+var _known = new Set([...CLAWGOD_RUNTIME_FEATURES, ...Object.values(CLAWGOD_FEATURES_META).flat()]);
 for (var _k in _cfg) {
-  var _known = CLAWGOD_RUNTIME_FEATURES.includes(_k) ||
-    Object.values(CLAWGOD_FEATURES_META).some(features => features.includes(_k));
-  if (!_known) process.stderr.write('[clawgod] warning: unknown feature "' + _k + '" in patches.json\n');
+  if (!_known.has(_k)) process.stderr.write('[clawgod] warning: unknown feature "' + _k + '" in patches.json\n');
 }
 
 var _gate = {};

@@ -2,7 +2,7 @@
 param(
     [Parameter(Position = 0)]
     [ValidatePattern('^(latest|stable|[0-9]+\.[0-9]+\.[0-9]+)$')]
-    [string]$Version = "2.1.319",
+    [string]$Version = "2.1.322",
     [switch]$Uninstall
 )
 
@@ -37,7 +37,7 @@ if ($Uninstall) {
         $p = Join-Path $ClawDir $f
         if (Test-Path $p) { Remove-Item -Recurse -Force $p }
     }
-    Remove-Item -LiteralPath (Join-Path $ClawDir "compile-runtime.mjs"), (Join-Path $ClawDir ".compiled-runtime") -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $ClawDir "compile-runtime.mjs"), (Join-Path $ClawDir ".compiled-runtime"), (Join-Path $ClawDir ".compiled-runtime-cache.json") -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath (Join-Path $ClawDir "patch-registry.mjs"), (Join-Path $ClawDir "system-prompt.md"), (Join-Path $ClawDir "probe-tools.log"), (Join-Path $ClawDir ".clawgod-version") -Force -ErrorAction SilentlyContinue
     Get-ChildItem -LiteralPath $ClawDir -Filter "cli.compiled-*" -File -ErrorAction SilentlyContinue |
         ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
@@ -254,7 +254,7 @@ $script:RollbackPending = $false
 $RollbackFiles = @("cli.original.cjs","cli.original.cjs.bak","cli.original.js",".source-version",
     "source-backup.json","bunfs","vendor","pathmap.json","extract-natives.mjs","post-process.mjs",
     "openai-proxy.cjs","feature-gates.cjs","cli.cjs",".clawgod-version","claude.fallback.exe","install.ps1","lean-settings.json","patches.json",
-    "startup-check.cjs","compile-runtime.mjs",".compiled-runtime","runtime-helpers.cjs","bun-ant-shim.cjs","system-prompt.md","patch.mjs","patch-registry.mjs","ast-patches.mjs","pentest-patches.mjs","pentest-scanners.mjs","pentest-trimming.mjs","pentest-policy-text.mjs","pentest-pruner.mjs","lean-mode.cjs","acorn.mjs","acorn.LICENSE")
+    "startup-check.cjs","compile-runtime.mjs",".compiled-runtime",".compiled-runtime-cache.json","runtime-helpers.cjs","bun-ant-shim.cjs","system-prompt.md","patch.mjs","patch-registry.mjs","ast-patches.mjs","pentest-patches.mjs","pentest-scanners.mjs","pentest-trimming.mjs","pentest-policy-text.mjs","pentest-pruner.mjs","lean-mode.cjs","acorn.mjs","acorn.LICENSE")
 $origCjs = Join-Path $ClawDir "cli.original.cjs"
 $sourceVerFile = Join-Path $ClawDir ".source-version"
 if ((Test-Path $origCjs) -and (Test-Path $sourceVerFile)) {
@@ -428,16 +428,10 @@ Set-Content (Join-Path $ClawDir "patch-registry.mjs") $patchRegistryCode -Encodi
 Write-OK "Patcher created (patch.mjs)"
 
 
-& {
-    $ErrorActionPreference = 'Continue'
-    node (Join-Path $ClawDir "patch.mjs") --capture-clean-source 2>&1 | ForEach-Object { Write-Host "  $_" }
-    $script:captureExitCode = $LASTEXITCODE
-}
-if ($captureExitCode -ne 0) { Restore-Install; exit $captureExitCode }
 Write-Dim "Applying patches ..."
 $patchExitCode = & {
     $ErrorActionPreference = 'Continue'
-    node (Join-Path $ClawDir "patch.mjs") 2>&1 | ForEach-Object { Write-Host "  $_" }
+    node (Join-Path $ClawDir "patch.mjs") --capture-and-apply 2>&1 | ForEach-Object { Write-Host "  $_" }
     $LASTEXITCODE
 }
 if ($patchExitCode -ne 0) {

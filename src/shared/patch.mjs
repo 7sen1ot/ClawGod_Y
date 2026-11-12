@@ -2,7 +2,8 @@
 import { readFileSync, writeFileSync, existsSync, copyFileSync, readdirSync, renameSync, unlinkSync } from 'fs';
 import { join, dirname, relative, resolve as resolvePath, sep } from 'path';
 import { fileURLToPath } from 'url';
-import { AST_PATCH_IDS, scanAstPatches, applyAstEdits, parsePatchSource, createPatchContext, hasPatchAnchors } from './ast-patches.mjs';
+import { AST_PATCH_IDS, scanAstPatches, applyAstEdits, parsePatchSource, hasPatchAnchors,
+  getPatchNodeIndex, getCachedPatchContext, releasePatchContexts, releasePatchSource } from './ast-patches.mjs';
 import { PENTEST_AST_PATCH_IDS, PENTEST_AST_META, PENTEST_REQUIRED, scanPentestPatches, pruneRuntimeGraph } from './pentest-patches.mjs';
 import { FEATURES, featuresMeta } from './patch-registry.mjs';
 
@@ -380,7 +381,13 @@ const verify = args.includes('--verify');
 const revert = args.includes('--revert');
 const dumpFeatures = args.includes('--dump-features');
 const captureCleanSource = args.includes('--capture-clean-source');
+const captureAndApply = args.includes('--capture-and-apply');
 const promptRequired = existsSync(join(__dirname, 'system-prompt.md'));
+
+if (captureAndApply && (captureCleanSource || dryRun || verify || revert || dumpFeatures)) {
+  console.error('--capture-and-apply cannot be combined with other patch modes');
+  process.exit(1);
+}
 
 if (dumpFeatures) {
   console.log(JSON.stringify(featuresMeta()));
@@ -390,6 +397,7 @@ if (dumpFeatures) {
 (function validateRegistry() {
   const errs = [];
   const byId = new Map();
+  const referenced = new Set();
   for (const p of patches) {
     if (!p.id) errs.push(`patch without id: ${p.name}`);
     else if (byId.has(p.id)) errs.push(`duplicate patch id: ${p.id}`);
@@ -397,14 +405,14 @@ if (dumpFeatures) {
   }
   for (const [fid, def] of Object.entries(FEATURES)) {
     for (const pid of def.patchIds) {
+      referenced.add(pid);
       const p = byId.get(pid);
       if (!p) { errs.push(`feature '${fid}' references unknown patch id '${pid}'`); continue; }
       if (!p.toggleable) errs.push(`feature '${fid}' references non-toggleable patch '${pid}'`);
     }
   }
   for (const p of patches) {
-    const referenced = Object.values(FEATURES).some((f) => f.patchIds.includes(p.id));
-    if (p.toggleable && !referenced) errs.push(`toggleable patch '${p.id}' is referenced by no feature`);
+    if (p.toggleable && !referenced.has(p.id)) errs.push(`toggleable patch '${p.id}' is referenced by no feature`);
   }
   if (errs.length > 0) {
     console.error('❌ Feature registry invalid:');
@@ -443,36 +451,31 @@ if (revert && !existsSync(CLEAN_SOURCE)) {
   process.exit(0);
 }
 
-let files = {};
-if (isGraph) {
-  files[TARGET] = readFileSync(TARGET, 'utf8');
-  for (const name of sourcePaths) {
-    if (name !== TARGET && existsSync(name)) files[name] = readFileSync(name, 'utf8');
-  }
-} else {
-  if (!existsSync(TARGET)) {
-    console.error('❌ Target not found:', TARGET);
-    process.exit(1);
-  }
-  files[TARGET] = readFileSync(TARGET, 'utf8');
+if (!isGraph && !existsSync(TARGET)) {
+  console.error('❌ Target not found:', TARGET);
+  process.exit(1);
+}
+let files = { [TARGET]: readFileSync(TARGET, 'utf8') };
+for (const name of sourcePaths) {
+  if (name !== TARGET && existsSync(name)) files[name] = readFileSync(name, 'utf8');
 }
 const installedFiles = { ...files };
 
 const version = (files[TARGET] || '').match(/Version:\s*([\d.]+)/)?.[1] || 'unknown';
 
-if (captureCleanSource) {
+if (captureCleanSource || captureAndApply) {
   const snapshot = { format: 1, version, files: Object.fromEntries(
     Object.entries(files).map(([name, content]) => [relative(__dirname, name).replaceAll('\\', '/'), content]),
   ) };
   const temporary = `${CLEAN_SOURCE}.${process.pid}.tmp`;
   writeFileSync(temporary, JSON.stringify(snapshot));
   renameSync(temporary, CLEAN_SOURCE);
-  copyFileSync(TARGET, BACKUP);
+  writeFileSync(BACKUP, files[TARGET], 'utf8');
   console.log(`Saved clean source: ${Object.keys(files).length} files (v${version})`);
-  process.exit(0);
+  if (captureCleanSource) process.exit(0);
 }
 
-if (existsSync(CLEAN_SOURCE) && !verify) {
+if (!captureAndApply && existsSync(CLEAN_SOURCE) && !verify) {
   try {
     const snapshot = JSON.parse(readFileSync(CLEAN_SOURCE, 'utf8'));
     const sourceFiles = Object.fromEntries(Object.entries(snapshot.files ?? {})
@@ -515,20 +518,7 @@ function collectMatches(p) {
     const accepted = [];
     let nodes;
     const syntaxMatch = (match, type) => {
-      if (!nodes) {
-        nodes = new Map();
-        const pending = [parsePatchSource(content)];
-        while (pending.length) {
-          const node = pending.pop();
-          const at = nodes.get(node.start) ?? [];
-          at.push(node);
-          nodes.set(node.start, at);
-          for (const value of Object.values(node)) {
-            if (value?.type) pending.push(value);
-            else if (Array.isArray(value)) for (const child of value) if (child?.type) pending.push(child);
-          }
-        }
-      }
+      nodes ??= getPatchNodeIndex(content);
       const types = Array.isArray(type) ? type : [type];
       return nodes.get(match.index)?.some(node =>
         types.includes(node.type) && node.end === match.index + match[0].length);
@@ -569,30 +559,10 @@ const astSkipped = new Map();
 const astEdits = new Map();
 const promptFallbacks = [];
 try {
-  const contexts = new Map();
-  let cachedBytes = 0;
-  const readSource = name => {
-    const cached = contexts.get(name);
-    if (cached) {
-      contexts.delete(name);
-      contexts.set(name, cached);
-      return cached;
-    }
-    const source = files[name];
-    if (source === undefined) return;
-    const record = { tree: parsePatchSource(source), bytes: source.length * 2 };
-    contexts.set(name, record);
-    cachedBytes += record.bytes;
-    while (cachedBytes > 32 * 1024 * 1024 && contexts.size > 1) {
-      const oldest = contexts.keys().next().value;
-      cachedBytes -= contexts.get(oldest).bytes;
-      contexts.delete(oldest);
-    }
-    return record;
-  };
-  const readContext = (name, record = readSource(name)) => {
-    if (!record) return;
-    return record.context ??= createPatchContext(record.tree, files[name], specifier => {
+  const readContext = name => {
+    const content = files[name];
+    if (content === undefined) return;
+    return getCachedPatchContext(content, name, specifier => {
       if (typeof specifier !== 'string') return;
       const target = specifier.startsWith('file:') ? fileURLToPath(specifier) :
         resolvePath(dirname(name), specifier.replaceAll('\\', sep));
@@ -600,30 +570,25 @@ try {
     });
   };
   for (const [file, content] of Object.entries(files)) {
-    let record;
-    const readTree = () => (record ??= readSource(file)).tree;
-    const result = scanAstPatches(content, readTree, () => readContext(file, record ??= readSource(file)));
-    for (const id of AST_PATCH_IDS) {
-      if (result[id].present) astPresent.add(id);
-      if (result[id].patched) astPatched.add(id);
-      if (result[id].skipped) astSkipped.set(id, (astSkipped.get(id) ?? 0) + result[id].skipped);
-      if (result[id].matches.length) astMatches.get(id).push({ file, content, matches: result[id].matches });
-    }
+    let tree;
+    const readTree = () => tree ??= parsePatchSource(content);
+    const result = scanAstPatches(content, readTree, () => readContext(file));
     const upstreamRanges = [];
     for (const id of AST_PATCH_IDS) {
       for (const m of result[id].matches) upstreamRanges.push([m.start, m.end]);
       upstreamRanges.push(...result[id].protected);
     }
     const pentest = scanPentestPatches(content, upstreamRanges, readTree);
-    for (const id of PENTEST_AST_PATCH_IDS) {
-      if (pentest[id].present) astPresent.add(id);
-      if (pentest[id].patched) astPatched.add(id);
-      if (pentest[id].skipped) astSkipped.set(id, (astSkipped.get(id) ?? 0) + pentest[id].skipped);
-      if (pentest[id].matches.length) astMatches.get(id).push({ file, content, matches: pentest[id].matches });
-      if (id === 'pentest-prompt-assembly' && pentest[id].fallbackMatches.length) {
-        promptFallbacks.push({ file, content, matches: pentest[id].fallbackMatches });
+    for (const scan of [result, pentest]) {
+      for (const [id, found] of Object.entries(scan)) {
+        if (found.present) astPresent.add(id);
+        if (found.patched) astPatched.add(id);
+        if (found.skipped) astSkipped.set(id, (astSkipped.get(id) ?? 0) + found.skipped);
+        if (found.matches.length) astMatches.get(id).push({ file, content, matches: found.matches });
       }
     }
+    const fallbackMatches = pentest['pentest-prompt-assembly'].fallbackMatches;
+    if (fallbackMatches.length) promptFallbacks.push({ file, content, matches: fallbackMatches });
   }
   if (!astMatches.get('pentest-prompt-assembly').length && !astPatched.has('pentest-prompt-assembly') && promptFallbacks.length) {
     astMatches.set('pentest-prompt-assembly', promptFallbacks);
@@ -633,6 +598,7 @@ try {
   console.error(`AST scan failed: ${error.message}. Source files were not changed.`);
   process.exit(1);
 }
+releasePatchContexts();
 
 let astFlushed = false;
 for (const p of [...patches.filter(p => p.ast), ...patches.filter(p => !p.ast)]) {
@@ -742,7 +708,10 @@ for (const p of [...patches.filter(p => p.ast), ...patches.filter(p => !p.ast)])
         }
       }
     }
-    if (replacements.length) files[fm.file] = applyAstEdits(fm.content, replacements);
+    if (replacements.length) {
+      files[fm.file] = applyAstEdits(fm.content, replacements);
+      if (fm.content !== originalFiles[fm.file] && fm.content !== files[fm.file]) releasePatchSource(fm.content);
+    }
     if (count > 0) appliedFiles++;
     fileChangedCount += count;
   }
@@ -767,6 +736,10 @@ for (const p of [...patches.filter(p => p.ast), ...patches.filter(p => !p.ast)])
     skipped++;
   }
 }
+
+astMatches.clear();
+astEdits.clear();
+promptFallbacks.length = 0;
 
 console.log(`\n${'─'.repeat(55)}`);
 console.log(`  Result: ${applied} applied, ${skipped} skipped, ${failed} failed`);
@@ -809,9 +782,11 @@ if (!dryRun && !verify && applied > 0) {
   const probeModules = Object.entries(files)
     .filter(([, content]) => content.includes('/*clawgod:runtime-table-probe*/'))
     .map(([name]) => relative(__dirname, name).replaceAll('\\', '/')).sort();
+  const previousEntry = files[TARGET];
   files[TARGET] = files[TARGET].replace(/^\/\/ clawgod:probe-modules .+\r?\n/gm, '');
   if (probeModules.length) files[TARGET] = `// clawgod:probe-modules ${JSON.stringify(probeModules)}\n${files[TARGET]}`;
   parsePatchSource(files[TARGET]);
+  if (previousEntry !== files[TARGET]) releasePatchSource(previousEntry);
   if (!existsSync(BACKUP)) {
     copyFileSync(TARGET, BACKUP);
     console.log(`  📦 Backup: ${BACKUP}`);

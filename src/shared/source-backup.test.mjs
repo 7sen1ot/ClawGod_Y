@@ -104,7 +104,7 @@ try {
     const env = { ...process.env, CLAWGOD_DIR: dir, BIN_DIR: join(dir, 'bin'), VERSION: '2.1.312' };
     const shell = (body, extraEnv = {}) => spawnSync('bash', ['-c', 'set -e\ninfo() { echo "$*"; }; warn() { echo "$*"; }; dim() { :; };\n' + body], { env: { ...env, ...extraEnv }, encoding: 'utf8' });
     writeFileSync(join(dir, 'patch.mjs'), "if(process.argv.includes('--capture-clean-source'))process.exit(0);process.exit(7)");
-    const applyStart = template.indexOf('node "$CLAWGOD_DIR/patch.mjs" --capture-clean-source');
+    const applyStart = template.indexOf('dim "Applying patches ..."');
     const apply = template.slice(applyStart, template.indexOf('if grep -rqs "Bun', applyStart));
     const snapshotStart = template.indexOf('PREV_BACKUP_DIR=""');
     const snapshotInstall = template.slice(snapshotStart, template.indexOf('cat > "$CLAWGOD_DIR/extract-natives.mjs"', snapshotStart));

@@ -2,7 +2,7 @@
 param(
     [Parameter(Position = 0)]
     [ValidatePattern('^(latest|stable|[0-9]+\.[0-9]+\.[0-9]+)$')]
-    [string]$Version = "2.1.319",
+    [string]$Version = "2.1.322",
     [switch]$Uninstall
 )
 
@@ -37,7 +37,7 @@ if ($Uninstall) {
         $p = Join-Path $ClawDir $f
         if (Test-Path $p) { Remove-Item -Recurse -Force $p }
     }
-    Remove-Item -LiteralPath (Join-Path $ClawDir "compile-runtime.mjs"), (Join-Path $ClawDir ".compiled-runtime") -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $ClawDir "compile-runtime.mjs"), (Join-Path $ClawDir ".compiled-runtime"), (Join-Path $ClawDir ".compiled-runtime-cache.json") -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath (Join-Path $ClawDir "patch-registry.mjs"), (Join-Path $ClawDir "system-prompt.md"), (Join-Path $ClawDir "probe-tools.log"), (Join-Path $ClawDir ".clawgod-version") -Force -ErrorAction SilentlyContinue
     Get-ChildItem -LiteralPath $ClawDir -Filter "cli.compiled-*" -File -ErrorAction SilentlyContinue |
         ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
@@ -317,7 +317,7 @@ $script:RollbackPending = $false
 $RollbackFiles = @("cli.original.cjs","cli.original.cjs.bak","cli.original.js",".source-version",
     "source-backup.json","bunfs","vendor","pathmap.json","extract-natives.mjs","post-process.mjs",
     "openai-proxy.cjs","feature-gates.cjs","cli.cjs",".clawgod-version","claude.fallback.exe","install.ps1","lean-settings.json","patches.json",
-    "startup-check.cjs","compile-runtime.mjs",".compiled-runtime","runtime-helpers.cjs","bun-ant-shim.cjs","system-prompt.md","patch.mjs","patch-registry.mjs","ast-patches.mjs","pentest-patches.mjs","pentest-scanners.mjs","pentest-trimming.mjs","pentest-policy-text.mjs","pentest-pruner.mjs","lean-mode.cjs","acorn.mjs","acorn.LICENSE")
+    "startup-check.cjs","compile-runtime.mjs",".compiled-runtime",".compiled-runtime-cache.json","runtime-helpers.cjs","bun-ant-shim.cjs","system-prompt.md","patch.mjs","patch-registry.mjs","ast-patches.mjs","pentest-patches.mjs","pentest-scanners.mjs","pentest-trimming.mjs","pentest-policy-text.mjs","pentest-pruner.mjs","lean-mode.cjs","acorn.mjs","acorn.LICENSE")
 $origCjs = Join-Path $ClawDir "cli.original.cjs"
 $sourceVerFile = Join-Path $ClawDir ".source-version"
 if ((Test-Path $origCjs) -and (Test-Path $sourceVerFile)) {
@@ -1312,10 +1312,9 @@ for (var _name in process.env) {
   _cfg[_name.slice('CLAWGOD_FEATURE_'.length).toLowerCase().replace(/_/g, '-')] = _val === 'true';
 }
 
+var _known = new Set([...CLAWGOD_RUNTIME_FEATURES, ...Object.values(CLAWGOD_FEATURES_META).flat()]);
 for (var _k in _cfg) {
-  var _known = CLAWGOD_RUNTIME_FEATURES.includes(_k) ||
-    Object.values(CLAWGOD_FEATURES_META).some(features => features.includes(_k));
-  if (!_known) process.stderr.write('[clawgod] warning: unknown feature "' + _k + '" in patches.json\n');
+  if (!_known.has(_k)) process.stderr.write('[clawgod] warning: unknown feature "' + _k + '" in patches.json\n');
 }
 
 var _gate = {};
@@ -2089,25 +2088,18 @@ const SGR_ATTRS = new Map([
   [53, ['overline', 55]],
 ]);
 
-const SGR_CLOSES = new Map([
-  [22, ['bold', 'dim']],
-  [23, ['italic']],
-  [24, ['underline', 'underline-double']],
-  [25, ['blink', 'blink-fast']],
-  [27, ['inverse']],
-  [28, ['hidden']],
-  [29, ['strike']],
-  [39, ['fg']],
-  [49, ['bg']],
-  [55, ['overline']],
-  [59, ['underline-color']],
-]);
-
 const SGR_EXTENDED = new Map([
   [38, ['fg', 39]],
   [48, ['bg', 49]],
   [58, ['underline-color', 59]],
 ]);
+
+const SGR_CLOSES = new Map();
+for (const [slot, close] of [...SGR_ATTRS.values(), ...SGR_EXTENDED.values()]) {
+  const slots = SGR_CLOSES.get(close) ?? [];
+  slots.push(slot);
+  SGR_CLOSES.set(close, slots);
+}
 
 function slotFor(param) {
   const attr = SGR_ATTRS.get(param);
@@ -2412,79 +2404,166 @@ if (install() && process.env.CLAWGOD_BUN_ANT_SHIM_DEBUG === '1') {
 Write-OK "Bun.ant runtime shim created (bun-ant-shim.cjs)"
 
 @'
-import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { accessSync, constants, createReadStream, existsSync, lstatSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parsePatchSource, walk } from './ast-patches.mjs';
+import { applyAstEdits, parsePatchSource, releasePatchSource, walk } from './ast-patches.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const entry = join(here, 'cli.cjs');
 const marker = join(here, '.compiled-runtime');
+const cacheFile = join(here, '.compiled-runtime-cache.json');
 const name = `cli.compiled-${Date.now()}-${process.pid}${process.platform === 'win32' ? '.exe' : ''}`;
 const output = join(here, name);
 const temporaryMarker = `${marker}.${process.pid}.tmp`;
+const temporaryCache = `${cacheFile}.${process.pid}.tmp`;
+
+async function fileDigest(path) {
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(path)) hash.update(chunk);
+  return hash.digest('hex');
+}
+
+async function buildInputs() {
+  const paths = new Set();
+  // These files are read at runtime, not bundled. onLoad below rejects reuse if
+  // a customized source imports one of them (or any other untracked input).
+  const runtimeFiles = new Set(['source-backup.json', 'provider.json', 'features.json',
+    'patches.json', 'assembly.json', 'flags.json', 'lean-settings.json', '.compiled-runtime-cache.json']);
+  const customConfig = /^(?:tsconfig\.json|jsconfig\.json|\.?bunfig\.toml)$/;
+  function collect(dir) {
+    for (const item of readdirSync(dir, { withFileTypes: true })) {
+      if (dir === here && !['bunfs', 'vendor'].includes(item.name) &&
+          (!/\.(?:[cm]?js|jsx|tsx?|json|toml)$/.test(item.name) || runtimeFiles.has(item.name))) continue;
+      const path = join(dir, item.name);
+      if (item.isSymbolicLink() || customConfig.test(item.name)) throw new Error('custom build input');
+      if (item.isDirectory()) collect(path);
+      else if (item.isFile()) paths.add(path);
+      else throw new Error('unsupported build input');
+    }
+  }
+  collect(here);
+  // Bun may resolve package/config metadata from ancestors or the working
+  // directory. Custom tsconfig/bunfig chains are left to a fresh build.
+  const visited = new Set();
+  for (const start of [here, resolve(process.cwd())]) {
+    for (let dir = start; ; dir = dirname(dir)) {
+      if (visited.has(dir)) break;
+      visited.add(dir);
+      for (const name of ['tsconfig.json', 'jsconfig.json', 'bunfig.toml', '.bunfig.toml']) {
+        if (existsSync(join(dir, name))) return null;
+      }
+      const pkg = join(dir, 'package.json');
+      if (existsSync(pkg)) paths.add(pkg);
+      if (dir === dirname(dir)) break;
+    }
+  }
+  const hash = createHash('sha256');
+  hash.update(JSON.stringify([1, Bun.version, Bun.revision, process.platform, process.arch,
+    realpathSync(here), process.execPath, process.cwd(), process.env.NODE_ENV ?? '', process.env.BUN_ENV ?? '']));
+  const files = new Set([...paths].sort());
+  for (const path of files) hash.update(JSON.stringify([path, await fileDigest(path)]));
+  return { key: hash.digest('hex'), files };
+}
+
+function activate(filename) {
+  writeFileSync(temporaryMarker, filename + '\n');
+  renameSync(temporaryMarker, marker);
+}
 
 rmSync(marker, { force: true });
-try {
-  const original = readFileSync(join(here, 'cli.original.cjs'), 'utf8');
-  const manifest = original.match(/^\/\/ clawgod:probe-modules (.+)$/m);
-  const probes = manifest && JSON.parse(manifest[1]);
-  if (!Array.isArray(probes) || !probes.length) throw new Error('tool probe manifest is missing');
+async function compile() {
+  try {
+    const original = readFileSync(join(here, 'cli.original.cjs'), 'utf8');
+    const manifest = original.match(/^\/\/ clawgod:probe-modules (.+)$/m);
+    const probes = manifest && JSON.parse(manifest[1]);
+    if (!Array.isArray(probes) || !probes.length) throw new Error('tool probe manifest is missing');
 
-  const result = await Bun.build({
-    entrypoints: [entry],
-    target: 'bun',
-    format: 'esm',
-    bytecode: true,
-    bytecodeDepth: 0,
-    compile: { outfile: output },
-    packages: 'external',
-    external: ['*.node', '*.txt', '*.md'],
-    minify: { whitespace: true },
-    ignoreDCEAnnotations: true,
-    plugins: [{
-      name: 'clawgod-local-modules',
-      setup(build) {
-        build.onLoad({ filter: /\.(?:[cm]?js)$/ }, ({ path }) => {
-          let contents = readFileSync(path, 'utf8');
-          if (resolve(path) === entry) {
-            const loop = 'for (const name of modules) require(join(__dirname, name));';
-            if (!contents.includes(loop)) throw new Error('unsupported tool probe loader');
-            contents = contents.replace(loop, () => probes.map(module => `require(${JSON.stringify(join(here, module))});`).join(''));
-            contents = contents.replace(/\b__dirname\b/g, () => JSON.stringify(here));
-          }
-          if (contents.includes('import.meta.require')) {
-            const edits = [];
-            walk(parsePatchSource(contents), node => {
-              const callee = node.callee;
-              if (node.type !== 'CallExpression' || node.arguments.length !== 1 ||
-                  callee.type !== 'MemberExpression' || callee.computed || callee.property.name !== 'require' ||
-                  callee.object.type !== 'MetaProperty' || callee.object.meta.name !== 'import') return;
-              const argument = node.arguments[0];
-              if (argument.type !== 'Literal' || typeof argument.value !== 'string' || !/\.[cm]?js$/.test(argument.value)) return;
-              const target = resolve(dirname(path), argument.value);
-              const local = relative(here, target);
-              if (local === '..' || local.startsWith('../') || local.startsWith('..\\') || isAbsolute(local) || !existsSync(target)) return;
-              edits.push({ start: callee.start, end: callee.end });
-            });
-            for (const edit of edits.sort((a, b) => b.start - a.start)) {
-              contents = contents.slice(0, edit.start) + 'require' + contents.slice(edit.end);
+    const inputs = await buildInputs().catch(() => null);
+    try {
+      const cached = JSON.parse(readFileSync(cacheFile, 'utf8'));
+      if (inputs && cached.key === inputs.key && /^cli\.compiled-\d+-\d+(?:\.exe)?$/.test(cached.name)) {
+        const executable = join(here, cached.name);
+        accessSync(executable, constants.X_OK);
+        if (lstatSync(executable).isFile() && await fileDigest(executable) === cached.digest) {
+          activate(cached.name);
+          console.log('[clawgod] Reusing unchanged compiled startup runtime.');
+          return;
+        }
+      }
+    } catch { /* Missing, damaged or unusable cache: compile normally. */ }
+    let reusable = Boolean(inputs);
+
+    const result = await Bun.build({
+      entrypoints: [entry],
+      target: 'bun',
+      format: 'esm',
+      bytecode: true,
+      bytecodeDepth: 0,
+      compile: { outfile: output },
+      packages: 'external',
+      external: ['*.node', '*.txt', '*.md'],
+      minify: { whitespace: true },
+      ignoreDCEAnnotations: true,
+      plugins: [{
+        name: 'clawgod-local-modules',
+        setup(build) {
+          build.onLoad({ filter: /.*/ }, ({ path }) => {
+            if (!inputs?.files.has(resolve(path))) reusable = false;
+            if (!/\.(?:[cm]?js)$/.test(path)) return;
+            let contents = readFileSync(path, 'utf8').replace(/^\uFEFF/, '');
+            if (resolve(path) === entry) {
+              const loop = 'for (const name of modules) require(join(__dirname, name));';
+              if (!contents.includes(loop)) throw new Error('unsupported tool probe loader');
+              contents = contents.replace(loop, () => probes.map(module => `require(${JSON.stringify(join(here, module))});`).join(''));
+              contents = contents.replace(/\b__dirname\b/g, () => JSON.stringify(here));
             }
-          }
-          return { contents, loader: 'js' };
-        });
-      },
-    }],
-  });
-  if (!result.success) throw new Error(result.logs.map(log => log.message).join('\n'));
-  writeFileSync(temporaryMarker, name + '\n');
-  renameSync(temporaryMarker, marker);
-  console.log('[clawgod] Compiled startup runtime ready.');
-} catch (error) {
-  rmSync(output, { force: true });
-  rmSync(temporaryMarker, { force: true });
-  console.warn('[clawgod] Startup compilation skipped; using Bun source runtime: ' + error.message);
+            if (contents.includes('import.meta.require')) {
+              const edits = [];
+              walk(parsePatchSource(contents), node => {
+                const callee = node.callee;
+                if (node.type !== 'CallExpression' || node.arguments.length !== 1 ||
+                    callee.type !== 'MemberExpression' || callee.computed || callee.property.name !== 'require' ||
+                    callee.object.type !== 'MetaProperty' || callee.object.meta.name !== 'import') return;
+                const argument = node.arguments[0];
+                if (argument.type !== 'Literal' || typeof argument.value !== 'string' || !/\.[cm]?js$/.test(argument.value)) return;
+                const target = resolve(dirname(path), argument.value);
+                const local = relative(here, target);
+                if (local === '..' || local.startsWith('../') || local.startsWith('..\\') || isAbsolute(local) || !existsSync(target)) return;
+                edits.push({ start: callee.start, end: callee.end, replacement: 'require' });
+              });
+              releasePatchSource(contents);
+              contents = applyAstEdits(contents, edits);
+            }
+            return { contents, loader: 'js' };
+          });
+        },
+      }],
+    });
+    if (!result.success) throw new Error(result.logs.map(log => log.message).join('\n'));
+    try {
+      rmSync(cacheFile, { force: true });
+      if (reusable && (await buildInputs())?.key === inputs.key) {
+        writeFileSync(temporaryCache, JSON.stringify({ key: inputs.key, name, digest: await fileDigest(output) }) + '\n');
+        renameSync(temporaryCache, cacheFile);
+      }
+    } catch { /* Cache persistence must not prevent using a successful build. */ }
+    activate(name);
+    console.log('[clawgod] Compiled startup runtime ready.');
+  } catch (error) {
+    rmSync(output, { force: true });
+    rmSync(temporaryMarker, { force: true });
+    const details = error.errors?.map(issue => {
+      const pos = issue.position;
+      return (pos ? `${pos.file}:${pos.line}:${pos.column}: ` : '') + issue.message;
+    }).join('\n') || error.message;
+    console.warn('[clawgod] Startup compilation skipped; using Bun source runtime: ' + details);
+  } finally {
+    try { rmSync(temporaryCache, { force: true }); } catch {}
+  }
 }
+await compile();
 '@ | Set-Content (Join-Path $ClawDir "compile-runtime.mjs") -Encoding UTF8
 
 @'
@@ -8899,14 +8978,51 @@ const firstPromptText = node => staticText(node) ?? (node?.type === 'BinaryExpre
 const isUndefined = node => node?.type === 'UnaryExpression' && node.operator === 'void' &&
   literal(node.argument, 0);
 
-export const AST_HELPERS = { literal, propertyName, member, boolean, staticText, firstPromptText };
+const functionNode = node => ['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node?.type);
+const declaredNames = node => !node ? [] : node.type === 'Identifier' ? [node.name]
+  : node.type === 'RestElement' ? declaredNames(node.argument)
+  : node.type === 'AssignmentPattern' ? declaredNames(node.left)
+  : node.type === 'ArrayPattern' ? node.elements.flatMap(declaredNames)
+  : node.type === 'ObjectPattern' ? node.properties.flatMap(property =>
+    declaredNames(property.type === 'RestElement' ? property.argument : property.value)) : [];
+
+export const AST_HELPERS = { literal, propertyName, member, boolean, staticText, firstPromptText, functionNode, declaredNames };
+
+const sourceCache = new Map();
+const scopeCache = new WeakMap();
+const noImports = () => undefined;
+let cachedSourceBytes = 0;
+
+export function releasePatchSource(code) {
+  const record = sourceCache.get(code);
+  if (!record) return;
+  cachedSourceBytes -= code.length * 2;
+  sourceCache.delete(code);
+  if (record.tree) scopeCache.delete(record.tree);
+}
+
+function sourceRecord(code) {
+  let record = sourceCache.get(code);
+  if (record) sourceCache.delete(code);
+  else {
+    record = {};
+    cachedSourceBytes += code.length * 2;
+  }
+  sourceCache.set(code, record);
+  // ASTs, indexes and file contexts share one LRU; the byte budget measures source text.
+  while (sourceCache.size > 1 && (cachedSourceBytes > 32 * 1024 * 1024 || sourceCache.size > 256)) {
+    releasePatchSource(sourceCache.keys().next().value);
+  }
+  return record;
+}
 
 export function hasPatchAnchors(code, anchors) {
   const matches = source => anchors.some(group =>
     (Array.isArray(group) ? group : [group]).every(token => source.includes(token)));
   if (matches(code)) return true;
   // Normalize only the prefilter; edits still use original AST ranges.
-  const normalized = code.replace(/\\(?:u\{([\da-f]+)\}|u([\da-f]{4})|x([\da-f]{2}))/gi,
+  const record = sourceRecord(code);
+  const normalized = record.normalized ??= code.replace(/\\(?:u\{([\da-f]+)\}|u([\da-f]{4})|x([\da-f]{2}))/gi,
     (match, point, unit, byte) => {
       const value = parseInt(point ?? unit ?? byte, 16);
       return value <= 0x10ffff ? String.fromCodePoint(value) : match;
@@ -8914,20 +9030,49 @@ export function hasPatchAnchors(code, anchors) {
   return matches(normalized);
 }
 
-export const parsePatchSource = code => parse(code, {
+// Cached trees are read-only; rewriting source selects a fresh cache record.
+export const parsePatchSource = code => sourceRecord(code).tree ??= parse(code, {
   ecmaVersion: 'latest', sourceType: 'script', allowHashBang: true,
   allowReturnOutsideFunction: true, allowImportExportEverywhere: true,
 });
 
+export function getPatchNodeIndex(code) {
+  const record = sourceRecord(code);
+  if (!record.nodes) {
+    const nodes = new Map();
+    walk(parsePatchSource(code), node => {
+      const at = nodes.get(node.start) ?? [];
+      at.push(node);
+      nodes.set(node.start, at);
+    });
+    record.nodes = nodes;
+  }
+  return record.nodes;
+}
+
+export function getCachedPatchContext(code, name, loadImport) {
+  const record = sourceRecord(code);
+  const contexts = record.contexts ??= new Map();
+  if (!contexts.has(name)) contexts.set(name, createPatchContext(parsePatchSource(code), code, loadImport));
+  return contexts.get(name);
+}
+
+export function releasePatchContexts() {
+  for (const record of sourceCache.values()) {
+    delete record.contexts;
+    if (record.tree) scopeCache.delete(record.tree);
+  }
+}
+
 export function walk(root, visit) {
-  const pending = [[root, null]];
+  const pending = [root, null];
   while (pending.length) {
-    const [node, parent] = pending.pop();
+    const parent = pending.pop(), node = pending.pop();
     if (visit(node, parent) === false) continue;
     for (const value of Object.values(node)) {
-      if (value?.type) pending.push([value, node]);
+      if (value?.type) pending.push(value, node);
       else if (Array.isArray(value)) {
-        for (const child of value) if (child?.type) pending.push([child, node]);
+        for (const child of value) if (child?.type) pending.push(child, node);
       }
     }
   }
@@ -8936,27 +9081,14 @@ export function walk(root, visit) {
 function walkScope(root, visit) {
   walk(root, node => {
     visit(node);
-    if (['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node.type)) return false;
+    if (functionNode(node)) return false;
   });
 }
 
 function pairingScopeResolver(tree, sentinel) {
   const scopes = new WeakMap(), writes = [];
-  const names = pattern => {
-    const pending = [pattern], result = [];
-    while (pending.length) {
-      const node = pending.pop();
-      if (!node) continue;
-      if (node.type === 'Identifier') result.push(node.name);
-      if (node.type === 'RestElement') pending.push(node.argument);
-      if (node.type === 'AssignmentPattern') pending.push(node.left);
-      if (node.type === 'ArrayPattern') pending.push(...node.elements);
-      if (node.type === 'ObjectPattern') pending.push(...node.properties.map(p => p.type === 'RestElement' ? p.argument : p.value));
-    }
-    return result;
-  };
   const declare = (scope, pattern, value) => {
-    for (const name of names(pattern)) {
+    for (const name of declaredNames(pattern)) {
       if (!scope.bindings.has(name)) scope.bindings.set(name, []);
       if (value !== null) scope.bindings.get(name).push(value);
     }
@@ -8969,7 +9101,7 @@ function pairingScopeResolver(tree, sentinel) {
   const pending = [{ node: tree, scope: null }];
   while (pending.length) {
     let { node, scope } = pending.pop();
-    const fn = ['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node.type);
+    const fn = functionNode(node);
     const cls = node.type === 'ClassDeclaration' || node.type === 'ClassExpression';
     if (node.type === 'FunctionDeclaration' || node.type === 'ClassDeclaration') declare(scope, node.id);
     if (fn || cls || ['Program', 'BlockStatement', 'StaticBlock', 'CatchClause', 'ForStatement', 'ForInStatement', 'ForOfStatement', 'SwitchStatement'].includes(node.type)) {
@@ -9004,7 +9136,7 @@ function pairingScopeResolver(tree, sentinel) {
     }
   }
   for (const { scope, pattern, value } of writes) {
-    for (const name of names(pattern)) resolve(scope, name)?.push(value);
+    for (const name of declaredNames(pattern)) resolve(scope, name)?.push(value);
   }
   return (expr, callback, owner) => {
     const history = owner.params[0].name;
@@ -9017,16 +9149,15 @@ function pairingScopeResolver(tree, sentinel) {
 }
 
 
-export function createPatchContext(tree, code, loadImport = () => undefined) {
+function patchScope(tree, loadImport) {
+  // Different import resolvers need separate binding identities for cycle detection.
+  let contexts = scopeCache.get(tree);
+  if (!contexts) scopeCache.set(tree, contexts = new WeakMap());
+  const cached = contexts.get(loadImport);
+  if (cached) return cached;
   const scopes = new WeakMap(), root = { parent: null, function: true, bindings: new Map() };
   const writes = [], exports = new Map();
   let commonJS;
-  const functionNode = node => ['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node?.type);
-  const names = node => !node ? [] : node.type === 'Identifier' ? [node.name]
-    : node.type === 'RestElement' ? names(node.argument)
-    : node.type === 'AssignmentPattern' ? names(node.left)
-    : node.type === 'ArrayPattern' ? node.elements.flatMap(names)
-    : node.type === 'ObjectPattern' ? node.properties.flatMap(property => names(property.value ?? property.argument)) : [];
   const bind = (scope, name, value) => {
     if (scope.bindings.has(name)) scope.bindings.set(name, { unknown: true });
     else scope.bindings.set(name, value);
@@ -9043,17 +9174,17 @@ export function createPatchContext(tree, code, loadImport = () => undefined) {
     if (functionNode(node)) {
       scope = { parent: scope, function: true, bindings: new Map() };
       if (node.type === 'FunctionExpression' && node.id) bind(scope, node.id.name, { node });
-      for (const param of node.params) for (const name of names(param)) bind(scope, name, { unknown: true });
+      for (const param of node.params) for (const name of declaredNames(param)) bind(scope, name, { unknown: true });
     } else if (['BlockStatement', 'CatchClause', 'ForStatement', 'ForInStatement', 'ForOfStatement', 'SwitchStatement', 'ClassExpression'].includes(node.type)) {
       scope = { parent: scope, bindings: new Map() };
-      for (const name of names(node.param)) bind(scope, name, { unknown: true });
+      for (const name of declaredNames(node.param)) bind(scope, name, { unknown: true });
       if (node.type === 'ClassExpression' && node.id) bind(scope, node.id.name, { unknown: true });
     }
     scopes.set(node, scope);
     if (node.type === 'VariableDeclarator') {
       let target = scope;
       if (parent.kind === 'var') while (!target.function) target = target.parent;
-      for (const name of names(node.id)) {
+      for (const name of declaredNames(node.id)) {
         const property = node.id.type === 'ObjectPattern' && node.id.properties.find(entry =>
           entry.type === 'Property' && entry.value.type === 'Identifier' && entry.value.name === name);
         const key = property && propertyName(property);
@@ -9091,6 +9222,13 @@ export function createPatchContext(tree, code, loadImport = () => undefined) {
     for (const specifier of statement.specifiers) exports.set(specifier.exported.name ?? specifier.exported.value,
       statement.source ? { source: statement.source.value, imported: specifier.local.name ?? specifier.local.value } : { node: specifier.local });
   }
+  const scope = { lookup, exports, commonJS };
+  contexts.set(loadImport, scope);
+  return scope;
+}
+
+export function createPatchContext(tree, code, loadImport = noImports) {
+  const { lookup, exports, commonJS } = patchScope(tree, loadImport);
   const context = {
     code,
     refers(node, name, budget = 32) {
@@ -9240,7 +9378,6 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
   if (!hasPatchAnchors(code, anchors)) return results;
   const tree = readTree();
   const context = readContext ? readContext() : createPatchContext(tree, code);
-  const functionNode = node => ['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node?.type);
   const edit = (id, node, replacement, strategy = 'ast') => {
     results[id].matches.push({ start: node.start, end: node.end, replacement, strategy });
   };
@@ -9250,7 +9387,7 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
     return true;
   };
   const injectReturn = (id, fn, value) => {
-    if (!['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(fn?.type) || fn.async || fn.generator) return false;
+    if (!functionNode(fn) || fn.async || fn.generator) return false;
     if (alreadyPatched(fn, id)) return true;
     const body = fn.body;
     const original = code.slice(body.start, body.end);
@@ -9563,7 +9700,7 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
       }
     }
 
-    if (['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node.type) &&
+    if (functionNode(node) &&
         node.params.length > 0 && node.params[0].type === 'Identifier') {
       const historyParam = node.params[0].name;
       let isHistoryArray = false;
@@ -9846,7 +9983,7 @@ const claimedRanges = (results, upstreamRanges, except = new Set()) => {
   return ranges;
 };
 
-const { literal, propertyName, member, boolean, staticText, firstPromptText } = AST_HELPERS;
+const { literal, propertyName, member, boolean, staticText, firstPromptText, functionNode } = AST_HELPERS;
 
 const contains = (root, predicate) => {
   let found = false;
@@ -9869,25 +10006,6 @@ const longContentReturn = fn => {
   const text = staticTextOf(fn.body.body[0].argument);
   return text !== null && text.length >= 1000;
 };
-
-const PENTEST_AST_PATCH_IDS = [
-  'permission-decisions-allow', 'permission-classifier-off', 'permission-hooks-allow',
-  'permission-mode-bypass', 'permission-confirmations-off', 'permission-subagent-review-off',
-  'permission-web-policy-off',
-  'permission-mcp-allowlist-off', 'permission-fs-path-off', 'permission-shell-pattern-off',
-  'permission-modes-delete', 'permission-deny-rules-off', 'permission-disallowed-tools-off',
-  'security-managed-settings-off',
-  'security-bundled-skills', 'security-builtin-plugins', 'security-tool-startup',
-  'security-remote-control-off', 'security-voice-off',
-  'security-brief-off', 'security-cowork-off', 'security-output-styles-off',
-  'security-update-off', 'security-telemetry-off', 'security-checkpoint-off',
-  'runtime-table-probe',
-  'security-warnings-off', 'security-command-surface',
-  'security-cloud-entrypoints-off',
-  'cli-header-label',
-  'pentest-prompt-assembly', 'pentest-prompt-rewrite',
-  'pentest-runtime-gates', 'pentest-flags-generic',
-];
 
 const PENTEST_AST_META = {
   'permission-decisions-allow': 'Allow tool execution without permission rules or safety classification',
@@ -9925,6 +10043,13 @@ const PENTEST_AST_META = {
   'pentest-runtime-gates': 'Force GrowthBook runtime gates and lift agent turn ceilings',
   'pentest-flags-generic': 'Wrap every tengu_* GrowthBook getter with the local override map (flags.json / CLAWGOD_FLAGS)',
 };
+const PENTEST_AST_PATCH_IDS = Object.keys(PENTEST_AST_META);
+
+const returnsBoolean = node => node.body.type === 'BlockStatement' &&
+  node.body.body.some(s => s.type === 'ReturnStatement' &&
+    (boolean(s.argument, true) || boolean(s.argument, false) ||
+      (s.argument?.type === 'BinaryExpression' && ['===', '!==', '==', '!='].includes(s.argument.operator)) ||
+      s.argument?.type === 'LogicalExpression'));
 
 function scanPermissionBypasses(tree, code, results, edit, upstreamRanges = []) {
   const ranges = [];
@@ -9981,13 +10106,13 @@ function scanPermissionBypasses(tree, code, results, edit, upstreamRanges = []) 
         ranges.push(rule.value);
       }
     }
-    if (['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node.type) &&
+    if (functionNode(node) &&
         node.body.type === 'BlockStatement' && !node.async && !node.generator && node.params.length === 2 &&
         node.params.every(param => param.type === 'Identifier')) {
       const own = predicate => {
         let found = false;
         walk(node.body, child => {
-          if (found || ['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(child.type)) return false;
+          if (found || functionNode(child)) return false;
           if (predicate(child)) { found = true; return false; }
         });
         return found;
@@ -10279,7 +10404,7 @@ function scanPermissionBypasses(tree, code, results, edit, upstreamRanges = []) 
 
   const blocked = claimedRanges(results, upstreamRanges);
   walk(tree, node => {
-    if (!['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node.type)) return;
+    if (!functionNode(node)) return;
     if (blocked.some(([start, end]) => node.body.start < end && node.body.end > start)) return;
     if (node.generator) return;
     if (loopShield(node)) return; // never touch /loop machinery
@@ -10289,7 +10414,7 @@ function scanPermissionBypasses(tree, code, results, edit, upstreamRanges = []) 
     // (a) Return of {behavior:"deny"|"ask", decisionReason:{...}} \u2192 force allow
     const returnDecisions = [];
     walk(node.body, child => {
-      if (['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(child.type) && child !== node) return false;
+      if (functionNode(child) && child !== node) return false;
       if (child.type === 'ReturnStatement' && child.argument?.type === 'ObjectExpression') {
         const behaviorProp = child.argument.properties.find(p => p.type === 'Property' && propertyName(p) === 'behavior');
         const reasonProp = child.argument.properties.find(p => p.type === 'Property' && propertyName(p) === 'decisionReason');
@@ -10330,14 +10455,8 @@ function scanPermissionBypasses(tree, code, results, edit, upstreamRanges = []) 
       'askForConfirmation', 'promptForConsent', 'requestConsent',
     ];
     if (trustSignals.some(sig => body.includes(sig))) {
-      const returnsBoolean = node.body.type === 'BlockStatement' &&
-        node.body.body.some(s => s.type === 'ReturnStatement' &&
-          (boolean(s.argument, true) || boolean(s.argument, false) ||
-            (s.argument?.type === 'BinaryExpression' && ['===', '!==', '==', '!='].includes(s.argument.operator)) ||
-            (s.argument?.type === 'LogicalExpression')));
-      if (returnsBoolean && !node.async) {
+      if (returnsBoolean(node) && !node.async) {
         const id = 'permission-confirmations-off';
-        results[id].present = true;
         replace(id, node, 'return!0;');
         return false;
       }
@@ -10355,7 +10474,6 @@ function scanPermissionBypasses(tree, code, results, edit, upstreamRanges = []) 
         node.body.body.some(s => s.type === 'ReturnStatement' && s.argument?.type === 'ObjectExpression');
       if (hasReturnObject || node.async) {
         const id = 'permission-classifier-off';
-        results[id].present = true;
         replace(id, node, node.async ? 'return null;' : 'return void 0;');
         return false;
       }
@@ -10368,14 +10486,8 @@ function scanPermissionBypasses(tree, code, results, edit, upstreamRanges = []) 
     ];
     if (fsSignals.some(sig => body.includes(sig)) &&
         /deny|denied|forbid|reject|refus|permission|allow/i.test(body)) {
-      const returnsBoolean = node.body.type === 'BlockStatement' &&
-        node.body.body.some(s => s.type === 'ReturnStatement' &&
-          (boolean(s.argument, true) || boolean(s.argument, false) ||
-            (s.argument?.type === 'BinaryExpression' && ['===', '!==', '==', '!='].includes(s.argument.operator)) ||
-            (s.argument?.type === 'LogicalExpression')));
-      if (returnsBoolean && !node.async) {
+      if (returnsBoolean(node) && !node.async) {
         const id = 'permission-fs-path-off';
-        results[id].present = true;
         replace(id, node, 'return!0;');
         return false;
       }
@@ -10415,7 +10527,6 @@ function scanPermissionBypasses(tree, code, results, edit, upstreamRanges = []) 
           (s.argument?.type === 'BinaryExpression')));
       if (returnsBoolean) {
         const id = 'permission-mcp-allowlist-off';
-        results[id].present = true;
         replace(id, node, 'return!0;');
         return false;
       }
@@ -10432,7 +10543,6 @@ function scanPermissionBypasses(tree, code, results, edit, upstreamRanges = []) 
         node.body.body.some(s => s.type === 'ReturnStatement' && s.argument);
       if (hasReturn) {
         const id = 'permission-subagent-review-off';
-        results[id].present = true;
         replace(id, node, 'return null;');
         return false;
       }
@@ -10450,7 +10560,6 @@ function scanPermissionBypasses(tree, code, results, edit, upstreamRanges = []) 
           s.argument.properties.some(p => propertyName(p) === 'denyMessage'));
       if (returnsDenyObject && !node.async) {
         const id = 'permission-web-policy-off';
-        results[id].present = true;
         replace(id, node, 'return{denyMessage:null,classifiedAs:null,activeLatch:null};');
         return false;
       }
@@ -10498,7 +10607,7 @@ function scanCombinerWrap(tree, code, results, edit) {
     node.arguments[1].object.type === 'Identifier' && node.arguments[1].object.name === 'globalThis';
   walk(tree, node => {
     if (assemblyCall(node)) results[id].patched = true;
-    if (!['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node.type)) return;
+    if (!functionNode(node)) return;
     const params = node.params.map(param => param.type === 'AssignmentPattern' ? param.left : param);
     const inputs = new Set(params.filter(param => param.type === 'ObjectPattern')
       .flatMap(param => param.properties.filter(property => property.type === 'Property').map(propertyName)));
@@ -10507,7 +10616,7 @@ function scanCombinerWrap(tree, code, results, edit) {
       const objects = [];
       if (node.body.type === 'ObjectExpression') objects.push(node.body);
       else walk(node.body, child => {
-        if (['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(child.type)) return false;
+        if (functionNode(child)) return false;
         if (child.type === 'ReturnStatement' && child.argument?.type === 'ObjectExpression') objects.push(child.argument);
       });
       for (const object of objects) {
@@ -10534,7 +10643,7 @@ function scanCombinerWrap(tree, code, results, edit) {
       const statements = node.body.body;
       const retStatements = [];
       walk(node.body, child => {
-        if (['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(child.type)) return false;
+        if (functionNode(child)) return false;
         if (child.type === 'ReturnStatement' && child.argument) retStatements.push(child);
       });
       const pendingReturns = retStatements.filter(ret => !contains(ret.argument, assemblyCall));
@@ -10795,7 +10904,7 @@ export {
 import { AST_HELPERS, createPatchContext, walk } from './ast-patches.mjs';
 import { contains, longContentReturn, PENTEST_AST_PATCH_IDS } from './pentest-scanners.mjs';
 
-const { literal, propertyName, member, boolean, staticText } = AST_HELPERS;
+const { literal, propertyName, member, boolean, staticText, functionNode } = AST_HELPERS;
 
 export const REMOVE_COMMANDS = new Set(['update', 'upgrade', 'release-notes', 'privacy-settings',
   'feedback', 'bug', 'statusline', 'doctor', 'cost', 'usage', 'vim', 'ide',
@@ -10849,7 +10958,6 @@ function scanRuntimeTrimming(tree, code, results, edit) {
     }
     return fields;
   };
-  const functionNode = node => ['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node?.type);
   const containsOwn = (root, predicate) => {
     let found = false;
     walk(root, node => {
@@ -11735,9 +11843,9 @@ export {
 };
 '@ | Set-Content (Join-Path $ClawDir "pentest-policy-text.mjs") -Encoding UTF8
 @'
-import { AST_HELPERS, parsePatchSource, walk } from './ast-patches.mjs';
+import { AST_HELPERS, applyAstEdits, parsePatchSource, releasePatchSource, walk } from './ast-patches.mjs';
 
-const { propertyName, member, staticText } = AST_HELPERS;
+const { propertyName, member, staticText, functionNode, declaredNames } = AST_HELPERS;
 
 const KILLED_FEATURE_ANCHORS = [
   'Toggle voice mode', 'voice_init_gate',
@@ -11755,17 +11863,6 @@ export function pruneRuntimeGraph(files, originalFiles) {
   const names = new Map(Object.keys(files).map(name => [normalize(name).split('/').at(-1), name]));
   const resolve = value => typeof value === 'string' ? names.get(normalize(value).split('/').at(-1)) : undefined;
   const patchId = text => text.match(/\/\*clawgod:(security-[\w-]+)\*\//)?.[1];
-  const functionNode = node => ['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node?.type);
-  const declaredNames = node => {
-    if (!node) return [];
-    if (node.type === 'Identifier') return [node.name];
-    if (node.type === 'RestElement') return declaredNames(node.argument);
-    if (node.type === 'AssignmentPattern') return declaredNames(node.left);
-    if (node.type === 'ArrayPattern') return node.elements.flatMap(declaredNames);
-    if (node.type === 'ObjectPattern') return node.properties.flatMap(property =>
-      declaredNames(property.type === 'RestElement' ? property.argument : property.value));
-    return [];
-  };
   const reference = (node, parent) => {
     if (node.type !== 'Identifier' || !parent) return false;
     if ((parent.type === 'MemberExpression' && parent.property === node && !parent.computed) ||
@@ -11777,22 +11874,39 @@ export function pruneRuntimeGraph(files, originalFiles) {
         parent.type === 'ContinueStatement') return false;
     return true;
   };
-  const inspect = (code, name) => {
-    let tree;
-    try { tree = parsePatchSource(code); }
+  const readTree = (code, name) => {
+    try { return parsePatchSource(code); }
     catch (error) { throw new Error(`${name}: ${error.message}`, { cause: error }); }
+  };
+  const dependency = node => node.type === 'Literal' && typeof node.value === 'string' && /[\\/]/.test(node.value)
+    ? resolve(node.value) : undefined;
+  const summarize = (code, name) => {
+    const refs = new Map(), dependencies = new Set();
+    walk(readTree(code, name), (node, parent) => {
+      if (reference(node, parent)) refs.set(node.name, (refs.get(node.name) ?? 0) + 1);
+      const target = dependency(node);
+      if (target) dependencies.add(target);
+    });
+    releasePatchSource(code);
+    return { refs, dependencies };
+  };
+  const inspect = (code, name) => {
+    const tree = readTree(code, name);
     const parents = new Map(), refs = new Map(), declarations = new Map();
     const scopes = new Map(), imports = new Map(), exports = new Map(), dependencies = new Set();
-    const dynamicDependencies = new Set();
+    const dynamicDependencies = new Set(), analysisDependencies = new Set();
     walk(tree, (node, parent) => {
       parents.set(node, parent);
       if (reference(node, parent)) refs.set(node.name, (refs.get(node.name) ?? 0) + 1);
-      if (node.type === 'Literal') {
-        const target = typeof node.value === 'string' && /[\\/]/.test(node.value) ? resolve(node.value) : undefined;
-        if (target) {
-          dependencies.add(target);
-          if (parent?.type !== 'ImportDeclaration') dynamicDependencies.add(target);
-        }
+      const target = dependency(node);
+      if (target) {
+        dependencies.add(target);
+        if (parent?.type !== 'ImportDeclaration') dynamicDependencies.add(target);
+      }
+      if (node.type === 'CallExpression' && node.arguments.length === 1 &&
+          (node.callee.name === 'require' || member(node.callee, 'require'))) {
+        const target = resolve(staticText(node.arguments[0]));
+        if (target) analysisDependencies.add(target);
       }
       if (node.type === 'BlockStatement' || node.type === 'CatchClause' ||
           ['ForStatement', 'ForInStatement', 'ForOfStatement'].includes(node.type)) {
@@ -11861,13 +11975,17 @@ export function pruneRuntimeGraph(files, originalFiles) {
       const binding = getBinding(node, node.name);
       if (binding) boundRefs.set(binding, (boundRefs.get(binding) ?? 0) + 1);
     });
-    return { code, tree, parents, refs, boundRefs, writes, getBinding, declarations, imports, exports, dependencies, dynamicDependencies };
+    // Extra resolved edges invalidate analyses without changing module-retention rules.
+    for (const target of dependencies) analysisDependencies.add(target);
+    for (const entry of imports.values()) if (entry.file) analysisDependencies.add(entry.file);
+    return { code, tree, parents, refs, boundRefs, writes, getBinding, declarations, imports, exports,
+      dependencies, dynamicDependencies, analysisDependencies };
   };
-  let current = new Map(Object.entries(output).map(([name, code]) =>
+  const current = new Map(Object.entries(output).map(([name, code]) =>
     [name, inspect(code, name)]));
   const before = new Map(Object.entries(originalFiles).map(([name, code]) => {
     const info = current.get(name);
-    const { refs, dependencies } = info?.code === code ? info : inspect(code, name);
+    const { refs, dependencies } = info?.code === code ? info : summarize(code, name);
     return [name, { refs, dependencies }];
   }));
   const touched = new Set(Object.keys(output).filter(name => output[name] !== originalFiles[name] &&
@@ -11886,37 +12004,74 @@ export function pruneRuntimeGraph(files, originalFiles) {
     }
     return unknown;
   };
+  const ownConstants = info => {
+    if (info.constants) return info.constants;
+    const local = new Map();
+    for (const [binding, node] of info.declarations) {
+      const text = info.code.slice(node.start, node.end), id = patchId(text);
+      if (!id) continue;
+      let valueNode, call = false;
+      const fn = node.type === 'VariableDeclarator' ? node.init : node;
+      if (functionNode(fn) && !fn.async && !fn.generator && fn.params.length === 0) {
+        let body = fn.body;
+        while (body.type === 'BlockStatement' && body.body.length === 1 && body.body[0].type === 'BlockStatement') body = body.body[0];
+        valueNode = body.type === 'BlockStatement' && body.body.length === 1 &&
+          body.body[0].type === 'ReturnStatement' ? body.body[0].argument :
+          body.type !== 'BlockStatement' ? body : undefined;
+        call = true;
+      } else if (node.type === 'VariableDeclarator') valueNode = node.init;
+      const value = simpleValue(valueNode);
+      if (value !== unknown) local.set(binding, { value, call, id });
+    }
+    return info.constants = local;
+  };
+  const order = new Map([...current.keys()].map((name, index) => [name, index]));
+  const ordered = names => [...names].sort((a, b) => order.get(a) - order.get(b));
+  const dependents = new Map();
+  const link = (name, info) => {
+    for (const target of info.analysisDependencies) {
+      if (!dependents.has(target)) dependents.set(target, new Set());
+      dependents.get(target).add(name);
+    }
+  };
+  for (const [name, info] of current) link(name, info);
+  const constants = new Map();
+  let dirty = new Set(current.keys());
+  const sweep = new Set(touched);
+  const refresh = changed => {
+    for (const name of changed) {
+      const previous = current.get(name), next = inspect(output[name], name);
+      for (const target of previous.analysisDependencies) {
+        dependents.get(target).delete(name);
+        sweep.add(target);
+      }
+      current.set(name, next);
+      if (previous.code !== next.code) releasePatchSource(previous.code);
+      link(name, next);
+      for (const target of next.analysisDependencies) sweep.add(target);
+      sweep.add(name);
+    }
+    dirty = new Set(changed);
+    for (const name of dirty) {
+      for (const dependent of dependents.get(name) ?? []) dirty.add(dependent);
+    }
+  };
   let iterations = 0;
   for (;;) {
     if (++iterations > 50) throw new Error('pruneRuntimeGraph: fixpoint did not converge in 50 iterations');
-    const constants = new Map();
-    for (const [name, info] of current) {
-      const local = new Map();
-      for (const [binding, node] of info.declarations) {
-        const text = info.code.slice(node.start, node.end), id = patchId(text);
-        if (!id) continue;
-        let valueNode, call = false;
-        const fn = node.type === 'VariableDeclarator' ? node.init : node;
-        if (functionNode(fn) && !fn.async && !fn.generator && fn.params.length === 0) {
-          let body = fn.body;
-          while (body.type === 'BlockStatement' && body.body.length === 1 && body.body[0].type === 'BlockStatement') body = body.body[0];
-          valueNode = body.type === 'BlockStatement' && body.body.length === 1 &&
-            body.body[0].type === 'ReturnStatement' ? body.body[0].argument :
-            body.type !== 'BlockStatement' ? body : undefined;
-          call = true;
-        } else if (node.type === 'VariableDeclarator') valueNode = node.init;
-        const value = simpleValue(valueNode);
-        if (value !== unknown) local.set(binding, { value, call, id });
-      }
-      constants.set(name, local);
-    }
-    for (const [name, info] of current) for (const [binding, imported] of info.imports) {
-      const actual = current.get(imported.file)?.exports.get(imported.name);
-      const constant = constants.get(imported.file)?.get(actual);
+    const pending = ordered(dirty);
+    for (const name of pending) constants.set(name, new Map(ownConstants(current.get(name))));
+    for (const name of pending) for (const [binding, imported] of current.get(name).imports) {
+      const target = current.get(imported.file);
+      if (!target) continue;
+      // Preserve the original single-pass import order, including forward references.
+      const source = order.get(imported.file) > order.get(name) ? ownConstants(target) : constants.get(imported.file);
+      const constant = source.get(target.exports.get(imported.name));
       if (constant) constants.get(name).set(binding, constant);
     }
-    let changed = false;
-    for (const [name, info] of current) {
+    const changed = new Set();
+    for (const name of pending) {
+      const info = current.get(name);
       const local = constants.get(name);
       if (!touched.has(name) && !local.size && ![...info.dependencies].some(target => constants.get(target)?.size)) continue;
       const edits = [], src = node => info.code.slice(node.start, node.end);
@@ -12067,25 +12222,26 @@ export function pruneRuntimeGraph(files, originalFiles) {
       if (edits.length) {
         const sorted = edits.sort((a, b) => a.start - b.start || b.end - a.end), outer = [];
         for (const entry of sorted) if (!outer.length || entry.start >= outer.at(-1).end) outer.push(entry);
-        const code = applyPruneEdits(info.code, outer);
-        if (code !== info.code) { output[name] = code; touched.add(name); changed = true; }
+        const code = applyAstEdits(info.code, outer);
+        if (code !== info.code) { output[name] = code; touched.add(name); changed.add(name); }
       }
     }
-    if (changed) {
-      for (const name of touched) if (output[name] !== current.get(name).code) current.set(name, inspect(output[name], name));
+    if (changed.size) {
+      refresh(changed);
       continue;
     }
-    const imported = new Map();
-    const dynamicallyUsed = new Set([...current.values()].flatMap(info => [...info.dynamicDependencies]));
-    for (const info of current.values()) for (const entry of info.imports.values()) {
-      if (!entry.file) continue;
-      const used = imported.get(entry.file) ?? new Set();
-      if (entry.name) used.add(current.get(entry.file)?.exports.get(entry.name));
-      else for (const binding of current.get(entry.file)?.exports.values() ?? []) used.add(binding);
-      imported.set(entry.file, used);
-    }
-    for (const [name, info] of current) {
+    for (const name of ordered(sweep)) {
       if (!touched.has(name)) continue;
+      const info = current.get(name), imported = new Set();
+      let dynamicallyUsed = false;
+      for (const dependent of dependents.get(name) ?? []) {
+        const owner = current.get(dependent);
+        if (owner.dynamicDependencies.has(name)) dynamicallyUsed = true;
+        for (const entry of owner.imports.values()) if (entry.file === name) {
+          if (entry.name) imported.add(info.exports.get(entry.name));
+          else for (const binding of info.exports.values()) imported.add(binding);
+        }
+      }
       const remove = new Set(), original = before.get(name), edits = [];
       const exported = new Set(info.exports.values());
       const pure = node => !node || isLiteralValue(node) || functionNode(node) ||
@@ -12093,9 +12249,9 @@ export function pruneRuntimeGraph(files, originalFiles) {
         node.type === 'ObjectExpression' && node.properties.every(property =>
           property.type === 'Property' && !property.computed && pure(property.value));
       for (const [binding, node] of info.declarations) {
-        if (info.boundRefs.get(node) || imported.get(name)?.has(binding)) continue;
+        if (info.boundRefs.get(node) || imported.has(binding)) continue;
         const marked = patchId(info.code.slice(node.start, node.end));
-        if (exported.has(binding) && (!marked || dynamicallyUsed.has(name))) continue;
+        if (exported.has(binding) && (!marked || dynamicallyUsed)) continue;
         if (!(original?.refs.get(binding) > 0) && !marked) continue;
         const init = node.init;
         if (node.type === 'FunctionDeclaration' || pure(init) ||
@@ -12134,10 +12290,11 @@ export function pruneRuntimeGraph(files, originalFiles) {
           }
         }
       }
-      if (edits.length) { output[name] = applyPruneEdits(info.code, edits); changed = true; }
+      if (edits.length) { output[name] = applyAstEdits(info.code, edits); changed.add(name); }
     }
-    if (!changed) break;
-    for (const name of touched) if (output[name] !== current.get(name).code) current.set(name, inspect(output[name], name));
+    sweep.clear();
+    if (!changed.size) break;
+    refresh(changed);
   }
   const candidates = new Set(), queue = [];
   for (const name of touched) for (const target of before.get(name)?.dependencies ?? []) {
@@ -12160,42 +12317,29 @@ export function pruneRuntimeGraph(files, originalFiles) {
     if (!candidates.delete(name)) continue;
     keep.push(...current.get(name)?.dependencies ?? []);
   }
-  const importers = new Map();
-  for (const [name, info] of current) {
-    for (const dep of info.dependencies) {
-      if (!importers.has(dep)) importers.set(dep, new Set());
-      importers.get(dep).add(name);
+  const liveImporters = new Map();
+  for (const name of current.keys()) {
+    const importers = [...(dependents.get(name) ?? [])].filter(owner => current.get(owner).dependencies.has(name));
+    if (!importers.length) continue;
+    const count = importers.filter(owner => !candidates.has(owner)).length;
+    liveImporters.set(name, count);
+    if (!count) queue.push(name);
+  }
+  while (queue.length) {
+    const name = queue.pop();
+    if (candidates.has(name) || normalize(name).split('/').at(-1) === 'cli.original.cjs') continue;
+    candidates.add(name);
+    for (const target of current.get(name).dependencies) {
+      const count = liveImporters.get(target) - 1;
+      liveImporters.set(target, count);
+      if (!count) queue.push(target);
     }
   }
-  for (;;) {
-    let grew = false;
-    for (const [name] of current) {
-      if (candidates.has(name)) continue;
-      if (normalize(name).split('/').at(-1) === 'cli.original.cjs') continue;
-      const imps = importers.get(name);
-      if (!imps || imps.size === 0) continue;
-      let allDead = true;
-      for (const imp of imps) if (!candidates.has(imp)) { allDead = false; break; }
-      if (allDead) { candidates.add(name); grew = true; }
-    }
-    if (!grew) break;
+  for (const name of candidates) if (/(?:^|\/)bunfs\/[^/]+$/.test(normalize(name))) {
+    releasePatchSource(output[name]);
+    delete output[name];
   }
-  for (const name of candidates) if (/(?:^|\/)bunfs\/[^/]+$/.test(normalize(name))) delete output[name];
   return output;
-}
-
-function applyPruneEdits(code, edits) {
-  const sorted = [...edits].sort((a, b) => a.start - b.start || b.end - a.end);
-  const parts = [];
-  let cursor = 0;
-  for (const edit of sorted) {
-    if (edit.start < cursor) throw new Error('Overlapping prune edits');
-    const padding = code[edit.start - 1] === '/' && edit.replacement.startsWith('/*') ? ' ' : '';
-    parts.push(code.slice(cursor, edit.start), padding, edit.replacement);
-    cursor = edit.end;
-  }
-  parts.push(code.slice(cursor));
-  return parts.join('');
 }
 '@ | Set-Content (Join-Path $ClawDir "pentest-pruner.mjs") -Encoding UTF8
 @'
@@ -12393,7 +12537,8 @@ $patcherCode = @'
 import { readFileSync, writeFileSync, existsSync, copyFileSync, readdirSync, renameSync, unlinkSync } from 'fs';
 import { join, dirname, relative, resolve as resolvePath, sep } from 'path';
 import { fileURLToPath } from 'url';
-import { AST_PATCH_IDS, scanAstPatches, applyAstEdits, parsePatchSource, createPatchContext, hasPatchAnchors } from './ast-patches.mjs';
+import { AST_PATCH_IDS, scanAstPatches, applyAstEdits, parsePatchSource, hasPatchAnchors,
+  getPatchNodeIndex, getCachedPatchContext, releasePatchContexts, releasePatchSource } from './ast-patches.mjs';
 import { PENTEST_AST_PATCH_IDS, PENTEST_AST_META, PENTEST_REQUIRED, scanPentestPatches, pruneRuntimeGraph } from './pentest-patches.mjs';
 import { FEATURES, featuresMeta } from './patch-registry.mjs';
 
@@ -12771,7 +12916,13 @@ const verify = args.includes('--verify');
 const revert = args.includes('--revert');
 const dumpFeatures = args.includes('--dump-features');
 const captureCleanSource = args.includes('--capture-clean-source');
+const captureAndApply = args.includes('--capture-and-apply');
 const promptRequired = existsSync(join(__dirname, 'system-prompt.md'));
+
+if (captureAndApply && (captureCleanSource || dryRun || verify || revert || dumpFeatures)) {
+  console.error('--capture-and-apply cannot be combined with other patch modes');
+  process.exit(1);
+}
 
 if (dumpFeatures) {
   console.log(JSON.stringify(featuresMeta()));
@@ -12781,6 +12932,7 @@ if (dumpFeatures) {
 (function validateRegistry() {
   const errs = [];
   const byId = new Map();
+  const referenced = new Set();
   for (const p of patches) {
     if (!p.id) errs.push(`patch without id: ${p.name}`);
     else if (byId.has(p.id)) errs.push(`duplicate patch id: ${p.id}`);
@@ -12788,14 +12940,14 @@ if (dumpFeatures) {
   }
   for (const [fid, def] of Object.entries(FEATURES)) {
     for (const pid of def.patchIds) {
+      referenced.add(pid);
       const p = byId.get(pid);
       if (!p) { errs.push(`feature '${fid}' references unknown patch id '${pid}'`); continue; }
       if (!p.toggleable) errs.push(`feature '${fid}' references non-toggleable patch '${pid}'`);
     }
   }
   for (const p of patches) {
-    const referenced = Object.values(FEATURES).some((f) => f.patchIds.includes(p.id));
-    if (p.toggleable && !referenced) errs.push(`toggleable patch '${p.id}' is referenced by no feature`);
+    if (p.toggleable && !referenced.has(p.id)) errs.push(`toggleable patch '${p.id}' is referenced by no feature`);
   }
   if (errs.length > 0) {
     console.error('\u274c Feature registry invalid:');
@@ -12834,36 +12986,31 @@ if (revert && !existsSync(CLEAN_SOURCE)) {
   process.exit(0);
 }
 
-let files = {};
-if (isGraph) {
-  files[TARGET] = readFileSync(TARGET, 'utf8');
-  for (const name of sourcePaths) {
-    if (name !== TARGET && existsSync(name)) files[name] = readFileSync(name, 'utf8');
-  }
-} else {
-  if (!existsSync(TARGET)) {
-    console.error('\u274c Target not found:', TARGET);
-    process.exit(1);
-  }
-  files[TARGET] = readFileSync(TARGET, 'utf8');
+if (!isGraph && !existsSync(TARGET)) {
+  console.error('\u274c Target not found:', TARGET);
+  process.exit(1);
+}
+let files = { [TARGET]: readFileSync(TARGET, 'utf8') };
+for (const name of sourcePaths) {
+  if (name !== TARGET && existsSync(name)) files[name] = readFileSync(name, 'utf8');
 }
 const installedFiles = { ...files };
 
 const version = (files[TARGET] || '').match(/Version:\s*([\d.]+)/)?.[1] || 'unknown';
 
-if (captureCleanSource) {
+if (captureCleanSource || captureAndApply) {
   const snapshot = { format: 1, version, files: Object.fromEntries(
     Object.entries(files).map(([name, content]) => [relative(__dirname, name).replaceAll('\\', '/'), content]),
   ) };
   const temporary = `${CLEAN_SOURCE}.${process.pid}.tmp`;
   writeFileSync(temporary, JSON.stringify(snapshot));
   renameSync(temporary, CLEAN_SOURCE);
-  copyFileSync(TARGET, BACKUP);
+  writeFileSync(BACKUP, files[TARGET], 'utf8');
   console.log(`Saved clean source: ${Object.keys(files).length} files (v${version})`);
-  process.exit(0);
+  if (captureCleanSource) process.exit(0);
 }
 
-if (existsSync(CLEAN_SOURCE) && !verify) {
+if (!captureAndApply && existsSync(CLEAN_SOURCE) && !verify) {
   try {
     const snapshot = JSON.parse(readFileSync(CLEAN_SOURCE, 'utf8'));
     const sourceFiles = Object.fromEntries(Object.entries(snapshot.files ?? {})
@@ -12906,20 +13053,7 @@ function collectMatches(p) {
     const accepted = [];
     let nodes;
     const syntaxMatch = (match, type) => {
-      if (!nodes) {
-        nodes = new Map();
-        const pending = [parsePatchSource(content)];
-        while (pending.length) {
-          const node = pending.pop();
-          const at = nodes.get(node.start) ?? [];
-          at.push(node);
-          nodes.set(node.start, at);
-          for (const value of Object.values(node)) {
-            if (value?.type) pending.push(value);
-            else if (Array.isArray(value)) for (const child of value) if (child?.type) pending.push(child);
-          }
-        }
-      }
+      nodes ??= getPatchNodeIndex(content);
       const types = Array.isArray(type) ? type : [type];
       return nodes.get(match.index)?.some(node =>
         types.includes(node.type) && node.end === match.index + match[0].length);
@@ -12960,30 +13094,10 @@ const astSkipped = new Map();
 const astEdits = new Map();
 const promptFallbacks = [];
 try {
-  const contexts = new Map();
-  let cachedBytes = 0;
-  const readSource = name => {
-    const cached = contexts.get(name);
-    if (cached) {
-      contexts.delete(name);
-      contexts.set(name, cached);
-      return cached;
-    }
-    const source = files[name];
-    if (source === undefined) return;
-    const record = { tree: parsePatchSource(source), bytes: source.length * 2 };
-    contexts.set(name, record);
-    cachedBytes += record.bytes;
-    while (cachedBytes > 32 * 1024 * 1024 && contexts.size > 1) {
-      const oldest = contexts.keys().next().value;
-      cachedBytes -= contexts.get(oldest).bytes;
-      contexts.delete(oldest);
-    }
-    return record;
-  };
-  const readContext = (name, record = readSource(name)) => {
-    if (!record) return;
-    return record.context ??= createPatchContext(record.tree, files[name], specifier => {
+  const readContext = name => {
+    const content = files[name];
+    if (content === undefined) return;
+    return getCachedPatchContext(content, name, specifier => {
       if (typeof specifier !== 'string') return;
       const target = specifier.startsWith('file:') ? fileURLToPath(specifier) :
         resolvePath(dirname(name), specifier.replaceAll('\\', sep));
@@ -12991,30 +13105,25 @@ try {
     });
   };
   for (const [file, content] of Object.entries(files)) {
-    let record;
-    const readTree = () => (record ??= readSource(file)).tree;
-    const result = scanAstPatches(content, readTree, () => readContext(file, record ??= readSource(file)));
-    for (const id of AST_PATCH_IDS) {
-      if (result[id].present) astPresent.add(id);
-      if (result[id].patched) astPatched.add(id);
-      if (result[id].skipped) astSkipped.set(id, (astSkipped.get(id) ?? 0) + result[id].skipped);
-      if (result[id].matches.length) astMatches.get(id).push({ file, content, matches: result[id].matches });
-    }
+    let tree;
+    const readTree = () => tree ??= parsePatchSource(content);
+    const result = scanAstPatches(content, readTree, () => readContext(file));
     const upstreamRanges = [];
     for (const id of AST_PATCH_IDS) {
       for (const m of result[id].matches) upstreamRanges.push([m.start, m.end]);
       upstreamRanges.push(...result[id].protected);
     }
     const pentest = scanPentestPatches(content, upstreamRanges, readTree);
-    for (const id of PENTEST_AST_PATCH_IDS) {
-      if (pentest[id].present) astPresent.add(id);
-      if (pentest[id].patched) astPatched.add(id);
-      if (pentest[id].skipped) astSkipped.set(id, (astSkipped.get(id) ?? 0) + pentest[id].skipped);
-      if (pentest[id].matches.length) astMatches.get(id).push({ file, content, matches: pentest[id].matches });
-      if (id === 'pentest-prompt-assembly' && pentest[id].fallbackMatches.length) {
-        promptFallbacks.push({ file, content, matches: pentest[id].fallbackMatches });
+    for (const scan of [result, pentest]) {
+      for (const [id, found] of Object.entries(scan)) {
+        if (found.present) astPresent.add(id);
+        if (found.patched) astPatched.add(id);
+        if (found.skipped) astSkipped.set(id, (astSkipped.get(id) ?? 0) + found.skipped);
+        if (found.matches.length) astMatches.get(id).push({ file, content, matches: found.matches });
       }
     }
+    const fallbackMatches = pentest['pentest-prompt-assembly'].fallbackMatches;
+    if (fallbackMatches.length) promptFallbacks.push({ file, content, matches: fallbackMatches });
   }
   if (!astMatches.get('pentest-prompt-assembly').length && !astPatched.has('pentest-prompt-assembly') && promptFallbacks.length) {
     astMatches.set('pentest-prompt-assembly', promptFallbacks);
@@ -13024,6 +13133,7 @@ try {
   console.error(`AST scan failed: ${error.message}. Source files were not changed.`);
   process.exit(1);
 }
+releasePatchContexts();
 
 let astFlushed = false;
 for (const p of [...patches.filter(p => p.ast), ...patches.filter(p => !p.ast)]) {
@@ -13133,7 +13243,10 @@ for (const p of [...patches.filter(p => p.ast), ...patches.filter(p => !p.ast)])
         }
       }
     }
-    if (replacements.length) files[fm.file] = applyAstEdits(fm.content, replacements);
+    if (replacements.length) {
+      files[fm.file] = applyAstEdits(fm.content, replacements);
+      if (fm.content !== originalFiles[fm.file] && fm.content !== files[fm.file]) releasePatchSource(fm.content);
+    }
     if (count > 0) appliedFiles++;
     fileChangedCount += count;
   }
@@ -13158,6 +13271,10 @@ for (const p of [...patches.filter(p => p.ast), ...patches.filter(p => !p.ast)])
     skipped++;
   }
 }
+
+astMatches.clear();
+astEdits.clear();
+promptFallbacks.length = 0;
 
 console.log(`\n${'\u2500'.repeat(55)}`);
 console.log(`  Result: ${applied} applied, ${skipped} skipped, ${failed} failed`);
@@ -13200,9 +13317,11 @@ if (!dryRun && !verify && applied > 0) {
   const probeModules = Object.entries(files)
     .filter(([, content]) => content.includes('/*clawgod:runtime-table-probe*/'))
     .map(([name]) => relative(__dirname, name).replaceAll('\\', '/')).sort();
+  const previousEntry = files[TARGET];
   files[TARGET] = files[TARGET].replace(/^\/\/ clawgod:probe-modules .+\r?\n/gm, '');
   if (probeModules.length) files[TARGET] = `// clawgod:probe-modules ${JSON.stringify(probeModules)}\n${files[TARGET]}`;
   parsePatchSource(files[TARGET]);
+  if (previousEntry !== files[TARGET]) releasePatchSource(previousEntry);
   if (!existsSync(BACKUP)) {
     copyFileSync(TARGET, BACKUP);
     console.log(`  \ud83d\udce6 Backup: ${BACKUP}`);
@@ -13287,16 +13406,10 @@ Set-Content (Join-Path $ClawDir "patch-registry.mjs") $patchRegistryCode -Encodi
 Write-OK "Patcher created (patch.mjs)"
 
 
-& {
-    $ErrorActionPreference = 'Continue'
-    node (Join-Path $ClawDir "patch.mjs") --capture-clean-source 2>&1 | ForEach-Object { Write-Host "  $_" }
-    $script:captureExitCode = $LASTEXITCODE
-}
-if ($captureExitCode -ne 0) { Restore-Install; exit $captureExitCode }
 Write-Dim "Applying patches ..."
 $patchExitCode = & {
     $ErrorActionPreference = 'Continue'
-    node (Join-Path $ClawDir "patch.mjs") 2>&1 | ForEach-Object { Write-Host "  $_" }
+    node (Join-Path $ClawDir "patch.mjs") --capture-and-apply 2>&1 | ForEach-Object { Write-Host "  $_" }
     $LASTEXITCODE
 }
 if ($patchExitCode -ne 0) {

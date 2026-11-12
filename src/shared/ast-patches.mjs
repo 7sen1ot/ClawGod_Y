@@ -51,14 +51,51 @@ const firstPromptText = node => staticText(node) ?? (node?.type === 'BinaryExpre
 const isUndefined = node => node?.type === 'UnaryExpression' && node.operator === 'void' &&
   literal(node.argument, 0);
 
-export const AST_HELPERS = { literal, propertyName, member, boolean, staticText, firstPromptText };
+const functionNode = node => ['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node?.type);
+const declaredNames = node => !node ? [] : node.type === 'Identifier' ? [node.name]
+  : node.type === 'RestElement' ? declaredNames(node.argument)
+  : node.type === 'AssignmentPattern' ? declaredNames(node.left)
+  : node.type === 'ArrayPattern' ? node.elements.flatMap(declaredNames)
+  : node.type === 'ObjectPattern' ? node.properties.flatMap(property =>
+    declaredNames(property.type === 'RestElement' ? property.argument : property.value)) : [];
+
+export const AST_HELPERS = { literal, propertyName, member, boolean, staticText, firstPromptText, functionNode, declaredNames };
+
+const sourceCache = new Map();
+const scopeCache = new WeakMap();
+const noImports = () => undefined;
+let cachedSourceBytes = 0;
+
+export function releasePatchSource(code) {
+  const record = sourceCache.get(code);
+  if (!record) return;
+  cachedSourceBytes -= code.length * 2;
+  sourceCache.delete(code);
+  if (record.tree) scopeCache.delete(record.tree);
+}
+
+function sourceRecord(code) {
+  let record = sourceCache.get(code);
+  if (record) sourceCache.delete(code);
+  else {
+    record = {};
+    cachedSourceBytes += code.length * 2;
+  }
+  sourceCache.set(code, record);
+  // ASTs, indexes and file contexts share one LRU; the byte budget measures source text.
+  while (sourceCache.size > 1 && (cachedSourceBytes > 32 * 1024 * 1024 || sourceCache.size > 256)) {
+    releasePatchSource(sourceCache.keys().next().value);
+  }
+  return record;
+}
 
 export function hasPatchAnchors(code, anchors) {
   const matches = source => anchors.some(group =>
     (Array.isArray(group) ? group : [group]).every(token => source.includes(token)));
   if (matches(code)) return true;
   // Normalize only the prefilter; edits still use original AST ranges.
-  const normalized = code.replace(/\\(?:u\{([\da-f]+)\}|u([\da-f]{4})|x([\da-f]{2}))/gi,
+  const record = sourceRecord(code);
+  const normalized = record.normalized ??= code.replace(/\\(?:u\{([\da-f]+)\}|u([\da-f]{4})|x([\da-f]{2}))/gi,
     (match, point, unit, byte) => {
       const value = parseInt(point ?? unit ?? byte, 16);
       return value <= 0x10ffff ? String.fromCodePoint(value) : match;
@@ -66,20 +103,49 @@ export function hasPatchAnchors(code, anchors) {
   return matches(normalized);
 }
 
-export const parsePatchSource = code => parse(code, {
+// Cached trees are read-only; rewriting source selects a fresh cache record.
+export const parsePatchSource = code => sourceRecord(code).tree ??= parse(code, {
   ecmaVersion: 'latest', sourceType: 'script', allowHashBang: true,
   allowReturnOutsideFunction: true, allowImportExportEverywhere: true,
 });
 
+export function getPatchNodeIndex(code) {
+  const record = sourceRecord(code);
+  if (!record.nodes) {
+    const nodes = new Map();
+    walk(parsePatchSource(code), node => {
+      const at = nodes.get(node.start) ?? [];
+      at.push(node);
+      nodes.set(node.start, at);
+    });
+    record.nodes = nodes;
+  }
+  return record.nodes;
+}
+
+export function getCachedPatchContext(code, name, loadImport) {
+  const record = sourceRecord(code);
+  const contexts = record.contexts ??= new Map();
+  if (!contexts.has(name)) contexts.set(name, createPatchContext(parsePatchSource(code), code, loadImport));
+  return contexts.get(name);
+}
+
+export function releasePatchContexts() {
+  for (const record of sourceCache.values()) {
+    delete record.contexts;
+    if (record.tree) scopeCache.delete(record.tree);
+  }
+}
+
 export function walk(root, visit) {
-  const pending = [[root, null]];
+  const pending = [root, null];
   while (pending.length) {
-    const [node, parent] = pending.pop();
+    const parent = pending.pop(), node = pending.pop();
     if (visit(node, parent) === false) continue;
     for (const value of Object.values(node)) {
-      if (value?.type) pending.push([value, node]);
+      if (value?.type) pending.push(value, node);
       else if (Array.isArray(value)) {
-        for (const child of value) if (child?.type) pending.push([child, node]);
+        for (const child of value) if (child?.type) pending.push(child, node);
       }
     }
   }
@@ -88,27 +154,14 @@ export function walk(root, visit) {
 function walkScope(root, visit) {
   walk(root, node => {
     visit(node);
-    if (['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node.type)) return false;
+    if (functionNode(node)) return false;
   });
 }
 
 function pairingScopeResolver(tree, sentinel) {
   const scopes = new WeakMap(), writes = [];
-  const names = pattern => {
-    const pending = [pattern], result = [];
-    while (pending.length) {
-      const node = pending.pop();
-      if (!node) continue;
-      if (node.type === 'Identifier') result.push(node.name);
-      if (node.type === 'RestElement') pending.push(node.argument);
-      if (node.type === 'AssignmentPattern') pending.push(node.left);
-      if (node.type === 'ArrayPattern') pending.push(...node.elements);
-      if (node.type === 'ObjectPattern') pending.push(...node.properties.map(p => p.type === 'RestElement' ? p.argument : p.value));
-    }
-    return result;
-  };
   const declare = (scope, pattern, value) => {
-    for (const name of names(pattern)) {
+    for (const name of declaredNames(pattern)) {
       if (!scope.bindings.has(name)) scope.bindings.set(name, []);
       if (value !== null) scope.bindings.get(name).push(value);
     }
@@ -121,7 +174,7 @@ function pairingScopeResolver(tree, sentinel) {
   const pending = [{ node: tree, scope: null }];
   while (pending.length) {
     let { node, scope } = pending.pop();
-    const fn = ['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node.type);
+    const fn = functionNode(node);
     const cls = node.type === 'ClassDeclaration' || node.type === 'ClassExpression';
     if (node.type === 'FunctionDeclaration' || node.type === 'ClassDeclaration') declare(scope, node.id);
     if (fn || cls || ['Program', 'BlockStatement', 'StaticBlock', 'CatchClause', 'ForStatement', 'ForInStatement', 'ForOfStatement', 'SwitchStatement'].includes(node.type)) {
@@ -156,7 +209,7 @@ function pairingScopeResolver(tree, sentinel) {
     }
   }
   for (const { scope, pattern, value } of writes) {
-    for (const name of names(pattern)) resolve(scope, name)?.push(value);
+    for (const name of declaredNames(pattern)) resolve(scope, name)?.push(value);
   }
   return (expr, callback, owner) => {
     const history = owner.params[0].name;
@@ -169,16 +222,15 @@ function pairingScopeResolver(tree, sentinel) {
 }
 
 
-export function createPatchContext(tree, code, loadImport = () => undefined) {
+function patchScope(tree, loadImport) {
+  // Different import resolvers need separate binding identities for cycle detection.
+  let contexts = scopeCache.get(tree);
+  if (!contexts) scopeCache.set(tree, contexts = new WeakMap());
+  const cached = contexts.get(loadImport);
+  if (cached) return cached;
   const scopes = new WeakMap(), root = { parent: null, function: true, bindings: new Map() };
   const writes = [], exports = new Map();
   let commonJS;
-  const functionNode = node => ['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node?.type);
-  const names = node => !node ? [] : node.type === 'Identifier' ? [node.name]
-    : node.type === 'RestElement' ? names(node.argument)
-    : node.type === 'AssignmentPattern' ? names(node.left)
-    : node.type === 'ArrayPattern' ? node.elements.flatMap(names)
-    : node.type === 'ObjectPattern' ? node.properties.flatMap(property => names(property.value ?? property.argument)) : [];
   const bind = (scope, name, value) => {
     if (scope.bindings.has(name)) scope.bindings.set(name, { unknown: true });
     else scope.bindings.set(name, value);
@@ -195,17 +247,17 @@ export function createPatchContext(tree, code, loadImport = () => undefined) {
     if (functionNode(node)) {
       scope = { parent: scope, function: true, bindings: new Map() };
       if (node.type === 'FunctionExpression' && node.id) bind(scope, node.id.name, { node });
-      for (const param of node.params) for (const name of names(param)) bind(scope, name, { unknown: true });
+      for (const param of node.params) for (const name of declaredNames(param)) bind(scope, name, { unknown: true });
     } else if (['BlockStatement', 'CatchClause', 'ForStatement', 'ForInStatement', 'ForOfStatement', 'SwitchStatement', 'ClassExpression'].includes(node.type)) {
       scope = { parent: scope, bindings: new Map() };
-      for (const name of names(node.param)) bind(scope, name, { unknown: true });
+      for (const name of declaredNames(node.param)) bind(scope, name, { unknown: true });
       if (node.type === 'ClassExpression' && node.id) bind(scope, node.id.name, { unknown: true });
     }
     scopes.set(node, scope);
     if (node.type === 'VariableDeclarator') {
       let target = scope;
       if (parent.kind === 'var') while (!target.function) target = target.parent;
-      for (const name of names(node.id)) {
+      for (const name of declaredNames(node.id)) {
         const property = node.id.type === 'ObjectPattern' && node.id.properties.find(entry =>
           entry.type === 'Property' && entry.value.type === 'Identifier' && entry.value.name === name);
         const key = property && propertyName(property);
@@ -243,6 +295,13 @@ export function createPatchContext(tree, code, loadImport = () => undefined) {
     for (const specifier of statement.specifiers) exports.set(specifier.exported.name ?? specifier.exported.value,
       statement.source ? { source: statement.source.value, imported: specifier.local.name ?? specifier.local.value } : { node: specifier.local });
   }
+  const scope = { lookup, exports, commonJS };
+  contexts.set(loadImport, scope);
+  return scope;
+}
+
+export function createPatchContext(tree, code, loadImport = noImports) {
+  const { lookup, exports, commonJS } = patchScope(tree, loadImport);
   const context = {
     code,
     refers(node, name, budget = 32) {
@@ -392,7 +451,6 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
   if (!hasPatchAnchors(code, anchors)) return results;
   const tree = readTree();
   const context = readContext ? readContext() : createPatchContext(tree, code);
-  const functionNode = node => ['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node?.type);
   const edit = (id, node, replacement, strategy = 'ast') => {
     results[id].matches.push({ start: node.start, end: node.end, replacement, strategy });
   };
@@ -402,7 +460,7 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
     return true;
   };
   const injectReturn = (id, fn, value) => {
-    if (!['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(fn?.type) || fn.async || fn.generator) return false;
+    if (!functionNode(fn) || fn.async || fn.generator) return false;
     if (alreadyPatched(fn, id)) return true;
     const body = fn.body;
     const original = code.slice(body.start, body.end);
@@ -715,7 +773,7 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
       }
     }
 
-    if (['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node.type) &&
+    if (functionNode(node) &&
         node.params.length > 0 && node.params[0].type === 'Identifier') {
       const historyParam = node.params[0].name;
       let isHistoryArray = false;

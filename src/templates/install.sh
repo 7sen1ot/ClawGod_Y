@@ -4,7 +4,7 @@ set -e
 
 CLAWGOD_DIR="$HOME/.clawgod"
 BIN_DIR="$HOME/.local/bin"
-VERSION="2.1.319"
+VERSION="2.1.322"
 CLAWGOD_SELF_VERSION="0.0.0-dev"
 
 VERSION_SELECTED=0
@@ -49,7 +49,7 @@ if [ "$UNINSTALL" = "1" ]; then
   done
   rm -rf "$CLAWGOD_DIR/node_modules" "$CLAWGOD_DIR/vendor" "$CLAWGOD_DIR/bun-runtime" "$CLAWGOD_DIR/cli.original.js" "$CLAWGOD_DIR/cli.original.js.bak" "$CLAWGOD_DIR/cli.original.cjs" "$CLAWGOD_DIR/cli.original.cjs.bak" "$CLAWGOD_DIR/source-backup.json" "$CLAWGOD_DIR/cli.js" "$CLAWGOD_DIR/cli.cjs" "$CLAWGOD_DIR/patch.mjs" "$CLAWGOD_DIR/ast-patches.mjs" "$CLAWGOD_DIR/pentest-patches.mjs" "$CLAWGOD_DIR/pentest-scanners.mjs" "$CLAWGOD_DIR/pentest-trimming.mjs" "$CLAWGOD_DIR/pentest-policy-text.mjs" "$CLAWGOD_DIR/pentest-pruner.mjs" "$CLAWGOD_DIR/lean-mode.cjs" "$CLAWGOD_DIR/lean-settings.json" "$CLAWGOD_DIR/.lean-disabled" "$CLAWGOD_DIR/.lean-max" "$CLAWGOD_DIR/acorn.mjs" "$CLAWGOD_DIR/acorn.LICENSE" "$CLAWGOD_DIR/patch.js" "$CLAWGOD_DIR/extract-natives.mjs" "$CLAWGOD_DIR/post-process.mjs" "$CLAWGOD_DIR/repatch.mjs" "$CLAWGOD_DIR/startup-check.cjs" "$CLAWGOD_DIR/startup-check.log" "$CLAWGOD_DIR/openai-proxy.cjs" "$CLAWGOD_DIR/feature-gates.cjs" "$CLAWGOD_DIR/runtime-helpers.cjs" "$CLAWGOD_DIR/bun-ant-shim.cjs" "$CLAWGOD_DIR/clawgod-import" "$CLAWGOD_DIR/claude.staged" "$CLAWGOD_DIR/claude.fallback" "$CLAWGOD_DIR/.source-version"
   rm -rf "$CLAWGOD_DIR/bunfs" "$CLAWGOD_DIR/pathmap.json"
-  rm -f "$CLAWGOD_DIR/patch-registry.mjs" "$CLAWGOD_DIR/system-prompt.md" "$CLAWGOD_DIR/probe-tools.log" "$CLAWGOD_DIR/.clawgod-version" "$CLAWGOD_DIR/compile-runtime.mjs" "$CLAWGOD_DIR/.compiled-runtime" "$CLAWGOD_DIR"/cli.compiled-*
+  rm -f "$CLAWGOD_DIR/patch-registry.mjs" "$CLAWGOD_DIR/system-prompt.md" "$CLAWGOD_DIR/probe-tools.log" "$CLAWGOD_DIR/.clawgod-version" "$CLAWGOD_DIR/compile-runtime.mjs" "$CLAWGOD_DIR/.compiled-runtime" "$CLAWGOD_DIR/.compiled-runtime-cache.json" "$CLAWGOD_DIR"/cli.compiled-*
   hash -r 2>/dev/null
   info "ClawGod uninstalled"
   echo ""
@@ -183,7 +183,7 @@ PREV_BACKUP_DIR=""
 ROLLBACK_FILES=(cli.original.cjs cli.original.cjs.bak cli.original.js .source-version
   source-backup.json bunfs vendor pathmap.json extract-natives.mjs post-process.mjs
   openai-proxy.cjs feature-gates.cjs cli.cjs .clawgod-version
-  startup-check.cjs compile-runtime.mjs .compiled-runtime runtime-helpers.cjs bun-ant-shim.cjs system-prompt.md
+  startup-check.cjs compile-runtime.mjs .compiled-runtime .compiled-runtime-cache.json runtime-helpers.cjs bun-ant-shim.cjs system-prompt.md
   claude.fallback install.sh lean-settings.json patches.json
   patch.mjs patch-registry.mjs ast-patches.mjs pentest-patches.mjs pentest-scanners.mjs
   pentest-trimming.mjs pentest-policy-text.mjs pentest-pruner.mjs lean-mode.cjs acorn.mjs acorn.LICENSE)
@@ -338,9 +338,8 @@ PATCH_REGISTRY_EOF
 info "Patcher created (patch.mjs)"
 
 
-node "$CLAWGOD_DIR/patch.mjs" --capture-clean-source
 dim "Applying patches ..."
-node --max-old-space-size=4096 "$CLAWGOD_DIR/patch.mjs" 2>&1 | while IFS= read -r line; do echo "  $line"; done
+node --max-old-space-size=4096 "$CLAWGOD_DIR/patch.mjs" --capture-and-apply 2>&1 | while IFS= read -r line; do echo "  $line"; done
 patch_status=${PIPESTATUS[0]}
 if [ "$patch_status" -ne 0 ]; then
   warn "Patching failed (node exit $patch_status). Installation aborted."
