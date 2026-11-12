@@ -230,6 +230,12 @@ try {
   const legacy = 'function legacy({customSystemPrompt,appendSystemPrompt,defaultSystemPrompt}){' +
     'return{prompt:defaultSystemPrompt,servesDefault:true}}';
   const authority = {
+    snapshot: 'function snapshot(history,current,{stamp}){const saved=loadSnapshot(history);' +
+      'if(saved)return{systemPrompt:saved.systemPrompt,source:"from_snapshot",snapshotHash:saved.systemPromptHash};' +
+      'return{systemPrompt:current,source:"live_recorded",snapshotHash:fingerprint(current),' +
+      'record:record({type:"prompt_snapshot",systemPrompt:current},stamp)}}',
+    extraBody: 'function extraBody(){const raw=process.env.CLAUDE_CODE_EXTRA_BODY;let body={};' +
+      'if(raw)try{body=JSON.parse(raw)}catch{}return body}',
     base: 'function select(custom,fallback){return typeof custom==="string"?split(custom):Array.isArray(custom)?custom:fallback}',
     defaults: 'function defaults(sections,excluded){return sections.filter(section=>' +
       '(section.scope==="shared"||section.scope==="session")&&section.text!==excluded)}',

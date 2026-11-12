@@ -13,8 +13,6 @@ const ROOT = __dirname;
 const SOURCE_ROOT = join(ROOT, 'src');
 const PLACEHOLDER_RE = /{{CLAWGOD:[^}]+}}/g;
 
-const identity = (content) => content;
-
 const escapeNonAscii = (content) => content.replace(
   /[^\x00-\x7F]/g,
   (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`,
@@ -30,48 +28,30 @@ function weaveFeaturesMeta(content, meta) {
   return content.replace(FEATURES_META_MARKER, () => rendered);
 }
 
-const SHARED_SOURCES = {
-  'extract-natives.mjs': ['shared/extract-natives.mjs'],
-  'post-process.mjs': ['shared/post-process.mjs'],
-  'openai-proxy.cjs': ['shared/openai-proxy.cjs'],
-  'cli.cjs': ['shared/cli.cjs'],
-  'startup-check.cjs': ['shared/startup-check.cjs'],
-  'compile-runtime.mjs': ['shared/compile-runtime.mjs'],
-  'runtime-helpers.cjs': ['shared/runtime-helpers.cjs'],
-  'bun-ant-shim.cjs': ['shared/bun-ant-shim.cjs'],
-  'feature-gates.cjs': ['shared/feature-gates.cjs', weaveFeaturesMeta, (c, meta) => escapeNonAscii(weaveFeaturesMeta(c, meta))],
-  'patch.mjs': ['shared/patch.mjs'],
-  'patch-registry.mjs': ['shared/patch-registry.mjs'],
-  'ast-patches.mjs': ['shared/ast-patches.mjs'],
-  'pentest-patches.mjs': ['shared/pentest-patches.mjs'],
-  'pentest-scanners.mjs': ['shared/pentest-scanners.mjs'],
-  'pentest-trimming.mjs': ['shared/pentest-trimming.mjs'],
-  'pentest-policy-text.mjs': ['shared/pentest-policy-text.mjs'],
-  'pentest-pruner.mjs': ['shared/pentest-pruner.mjs'],
-  'lean-mode.cjs': ['shared/lean-mode.cjs'],
-  'system-prompt.md': ['shared/system-prompt.md'],
-  'acorn.mjs': ['shared/acorn.mjs'],
-  'acorn.LICENSE': ['shared/acorn.LICENSE'],
-  'features.json': ['shared/features.json'],
-};
+const SHARED_SOURCES = Object.fromEntries([
+  'extract-natives.mjs', 'post-process.mjs', 'openai-proxy.cjs', 'cli.cjs',
+  'startup-check.cjs', 'compile-runtime.mjs', 'runtime-helpers.cjs', 'bun-ant-shim.cjs',
+  'feature-gates.cjs', 'patch.mjs', 'patch-registry.mjs', 'ast-patches.mjs',
+  'pentest-patches.mjs', 'pentest-scanners.mjs', 'pentest-trimming.mjs',
+  'pentest-policy-text.mjs', 'pentest-pruner.mjs', 'lean-mode.cjs',
+  'system-prompt.md', 'acorn.mjs', 'acorn.LICENSE', 'features.json',
+].map(name => [name, `shared/${name}`]));
 
 const TARGETS = [
   {
     name: 'install.sh',
     template: 'templates/install.sh',
     mode: 0o755,
-    sources: Object.fromEntries(Object.entries(SHARED_SOURCES)
-      .map(([k, [path, sh]]) => [k, [path, sh ?? identity]])),
+    sources: SHARED_SOURCES,
   },
   {
     name: 'install.ps1',
     template: 'templates/install.ps1',
     asciiOnly: true,
     sources: {
-      'npm-fetch.mjs': ['windows/npm-fetch.mjs', escapeNonAscii],
-      ...Object.fromEntries(Object.entries(SHARED_SOURCES)
-        .map(([k, [path, , ps1]]) => [k, [path, ps1 ?? escapeNonAscii]])),
-      'lean-apply.cjs': ['windows/lean-apply.cjs', escapeNonAscii],
+      'npm-fetch.mjs': 'windows/npm-fetch.mjs',
+      ...SHARED_SOURCES,
+      'lean-apply.cjs': 'windows/lean-apply.cjs',
     },
   },
 ];
@@ -95,8 +75,9 @@ function render(target, meta) {
     if (!Object.hasOwn(target.sources, name)) throw new Error(`${target.template}: unknown placeholder: ${placeholder}`);
     if (used.has(name)) throw new Error(`${target.template}: duplicate placeholder: ${placeholder}`);
     used.add(name);
-    const [sourcePath, transform] = target.sources[name];
-    return transform(readSource(sourcePath), meta);
+    let content = readSource(target.sources[name]);
+    if (name === 'feature-gates.cjs') content = weaveFeaturesMeta(content, meta);
+    return target.asciiOnly ? escapeNonAscii(content) : content;
   });
   for (const name of Object.keys(target.sources)) {
     if (!used.has(name)) throw new Error(`${target.template}: missing placeholder: {{CLAWGOD:${name}}}`);

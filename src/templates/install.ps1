@@ -514,18 +514,18 @@ try {
 
 Write-Dim "Verifying Bun can load patched cli.original.cjs (bounded startup check) ..."
 $sanityCli = Join-Path $ClawDir "cli.cjs"
-$sanityOut = $null
-try {
-    $prevEAP = $ErrorActionPreference
+function Invoke-StartupProbe {
     $ErrorActionPreference = 'Continue'
-    $sanityOut = (& node (Join-Path $ClawDir "startup-check.cjs") $BunBin $sanityCli 2>&1 | Out-String)
-    $sanityExitCode = $LASTEXITCODE
-} catch {
-    $sanityOut = "$_"
-    $sanityExitCode = 1
-} finally {
-    $ErrorActionPreference = $prevEAP
+    try {
+        $output = (& node (Join-Path $ClawDir "startup-check.cjs") $BunBin $sanityCli @args 2>&1 | Out-String)
+        return @{ Output = $output; ExitCode = $LASTEXITCODE }
+    } catch {
+        return @{ Output = "$_"; ExitCode = 1 }
+    }
 }
+$sanity = Invoke-StartupProbe
+$sanityOut = $sanity.Output
+$sanityExitCode = $sanity.ExitCode
 if ($sanityOut -match "Expected CommonJS module to have a function wrapper") {
     Write-Host ""
     Write-Err "The selected Bun runtime cannot load Anthropic's cli.original.cjs."
@@ -558,18 +558,9 @@ if ($sanityExitCode -ne 0) {
 }
 Write-OK "Bun loads cli.original.cjs"
 Write-Dim "Verifying tool/command tables load (bounded probe) ..."
-$probeOut = $null
-try {
-    $prevEAP = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    $probeOut = (& node (Join-Path $ClawDir "startup-check.cjs") $BunBin $sanityCli --probe-tools 2>&1 | Out-String)
-    $probeExitCode = $LASTEXITCODE
-} catch {
-    $probeOut = "$_"
-    $probeExitCode = 1
-} finally {
-    $ErrorActionPreference = $prevEAP
-}
+$probe = Invoke-StartupProbe --probe-tools
+$probeOut = $probe.Output
+$probeExitCode = $probe.ExitCode
 if ($probeExitCode -ne 0) {
     Write-Host ""
     Write-Err "Patched Claude failed its tool-table probe (exit $probeExitCode):"

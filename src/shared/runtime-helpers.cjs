@@ -143,6 +143,51 @@ function rewritePromptAssembly(sections, options) {
 }
 
 
+function refreshPromptSnapshot(result, currentPrompt, options, hashPrompt, createRecord) {
+  const rules = rewritePromptAssembly([], options)[0];
+  if (rules === undefined) return result;
+  const prefix = '<!-- ' + CUSTOM_PROMPT_MARK + ' -->\n';
+  let replaced = false;
+  let prompt = result.systemPrompt.flatMap(section => {
+    if (typeof section !== 'string' || !section.startsWith(prefix)) return [section];
+    if (replaced) return [];
+    replaced = true;
+    return [rules];
+  });
+  // Unmarked legacy snapshots must use the live prompt, which has already passed the existing filters.
+  if (!replaced) prompt = rewritePromptAssembly(currentPrompt, options);
+  if (prompt.length === result.systemPrompt.length &&
+      prompt.every((section, index) => section === result.systemPrompt[index])) return result;
+  return {
+    ...result,
+    systemPrompt: prompt,
+    record: createRecord(prompt, result.record?.attachment),
+    snapshotHash: hashPrompt(prompt),
+    source: 'live_recorded',
+    atRenderPoint: true,
+    rewritten: true,
+  };
+}
+
+function validateExtraBody(body) {
+  const reserved = ['system', 'messages'].filter(name => Object.hasOwn(body, name));
+  if (reserved.length) {
+    throw new Error('[clawgod] CLAUDE_CODE_EXTRA_BODY cannot override ' + reserved.join(', ') +
+      '. Remove these fields; system instructions and conversation messages are managed by ClawGod.');
+  }
+  return body;
+}
+
+const DEFAULT_PROVIDER_CONFIG = {
+  protocol: 'anthropic',
+  apiKey: '',
+  baseURL: 'https://api.anthropic.com',
+  model: '',
+  smallModel: '',
+  effort: '',
+  timeoutMs: 3000000,
+};
+
 function resolveProviderConfig(raw) {
   const config = raw && typeof raw === 'object' ? raw : {};
   const protocol = config.protocol;
@@ -153,12 +198,8 @@ function resolveProviderConfig(raw) {
   const useProxy = protocol === 'openai-chat' ||
     (protocol === undefined && ['grok', 'openai-compat'].includes(type));
   return {
-    apiKey: typeof config.apiKey === 'string' ? config.apiKey : '',
-    baseURL: typeof config.baseURL === 'string' ? config.baseURL : 'https://api.anthropic.com',
-    model: typeof config.model === 'string' ? config.model : '',
-    smallModel: typeof config.smallModel === 'string' ? config.smallModel : '',
-    effort: typeof config.effort === 'string' ? config.effort : '',
-    timeoutMs: typeof config.timeoutMs === 'number' ? config.timeoutMs : 3000000,
+    ...Object.fromEntries(Object.entries(DEFAULT_PROVIDER_CONFIG).map(([key, fallback]) =>
+      [key, typeof config[key] === typeof fallback ? config[key] : fallback])),
     protocol: protocol || undefined,
     type: type || undefined,
     useProxy,
@@ -202,6 +243,9 @@ module.exports.flagOverrides = FLAG_OVERRIDES;
 module.exports.rewritePromptAssembly = rewritePromptAssembly;
 module.exports.selectApplicationPrompt = rewritePromptAssembly;
 module.exports.filterDefaultPromptSections = filterDefaultPromptSections;
+module.exports.refreshPromptSnapshot = refreshPromptSnapshot;
+module.exports.validateExtraBody = validateExtraBody;
+module.exports.defaultProviderConfig = DEFAULT_PROVIDER_CONFIG;
 module.exports.resolveProviderConfig = resolveProviderConfig;
 module.exports.probeToolTables = probeToolTables;
 globalThis.__clawgodHelpers = module.exports;

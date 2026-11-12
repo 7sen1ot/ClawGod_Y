@@ -34,15 +34,7 @@ if (!versionOnly && !probeTools && existsSync(strayClaudeJson) && !existsSync(na
 
 const configFile = join(clawgodDir, 'provider.json');
 
-const defaultConfig = {
-  protocol: 'anthropic',
-  apiKey: '',
-  baseURL: 'https://api.anthropic.com',
-  model: '',
-  smallModel: '',
-  effort: '',
-  timeoutMs: 3000000,
-};
+const { defaultProviderConfig: defaultConfig, resolveProviderConfig } = require('./runtime-helpers.cjs');
 
 let config = { ...defaultConfig };
 if (!versionOnly && !probeTools && existsSync(configFile)) {
@@ -55,7 +47,7 @@ if (!versionOnly && !probeTools && existsSync(configFile)) {
   writeFileSync(configFile, JSON.stringify(defaultConfig, null, 2) + '\n');
 }
 
-const resolved = require('./runtime-helpers.cjs').resolveProviderConfig(config);
+const resolved = resolveProviderConfig(config);
 if (!probeTools && resolved.useProxy) {
   let _proxyKey = resolved.apiKey || '';
   if (!_proxyKey && resolved.type === 'grok') {

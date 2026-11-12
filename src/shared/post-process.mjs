@@ -89,26 +89,20 @@ if (isChunked) {
   }
 
   function rewriteGraph(text) {
-    return text.replace(/["'`](?:\/\$bunfs\/root|[A-Za-z]:\/~BUN\/root)\/[^"'`]+["'`]/g, (m) => {
+    text = text.replace(/["'`](?:\/\$bunfs\/root|[A-Za-z]:\/~BUN\/root)\/[^"'`]+["'`]/g, (m) => {
       const body = m.slice(1, -1);
       const target = replaceTable.get(body) || replaceTable.get(body.replaceAll('\\','/'));
       return target ? JSON.stringify(target) : m;
     });
+    return fixAssetRequires(fixFileURLs(text), assets);
   }
 
   code = rewriteGraph(code);
-  code = fixFileURLs(code);
-  code = fixAssetRequires(code, assets);
   writeFileSync(dst, code);
   unlinkSync(src);
 
   for (const fp of graphFiles) {
-    let fc = readFileSync(fp, 'utf8');
-    fc = stripPragma(fc);
-    fc = rewriteGraph(fc);
-    fc = fixFileURLs(fc);
-    fc = fixAssetRequires(fc, assets);
-    writeFileSync(fp, fc);
+    writeFileSync(fp, rewriteGraph(stripPragma(readFileSync(fp, 'utf8'))));
   }
   console.log(`cli.original.cjs: ${code.length} bytes (chunked, rewrote ${graphFiles.size} graph files)`);
 } else {
