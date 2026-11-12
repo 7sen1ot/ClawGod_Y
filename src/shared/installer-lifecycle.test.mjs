@@ -117,7 +117,7 @@ cp "$CLAWGOD_FIXTURE_INSTALLER" "$target"\n`);
 case "$target" in */.local/bin/clawgod) [ "\${CLAWGOD_FAIL_LAUNCHER:-0}" != 1 ] || exit 73;; esac
 exec /bin/mv "$@"\n`);
   }
-  for (const [args, version] of [[[], '2.1.319'], [['latest'], '2.1.315'], [['stable'], '2.1.308'], [['2.1.309'], '2.1.309']]) {
+  for (const [args, version] of [[[], '2.1.322'], [['latest'], '2.1.315'], [['stable'], '2.1.308'], [['2.1.309'], '2.1.309']]) {
     const result = run(args);
     succeeds(result);
     assert.equal(readFileSync(join(dir, '.source-version'), 'utf8').trim(), version);
