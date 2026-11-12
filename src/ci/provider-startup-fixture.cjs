@@ -21,6 +21,6 @@ if (process.argv[2] === 'seed') {
     const output = fs.readFileSync(log, 'utf8');
     assert.doesNotMatch(output, /proxy on port/i, 'Version probes must not start a provider listener');
   }
-  assert.match(fs.readFileSync(logs[0], 'utf8'), /^\d+\.\d+\.\d+[^\r\n]*\(Claude Code\)\s*$/m);
-  console.log('Installed Claude version check passed with configured provider; settings preserved');
+  assert.match(fs.readFileSync(logs[0], 'utf8'), /^\d+\.\d+\.\d+[^\r\n]*\(ClawGod_Y\)\s*$/m);
+  console.log('Installed ClawGod_Y version check passed with configured provider; settings preserved');
 } else throw new Error('Usage: provider-startup-fixture.cjs seed|verify [installer logs...]');
