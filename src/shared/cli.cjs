@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-const { readFileSync, existsSync, mkdirSync, writeFileSync, renameSync, unlinkSync } = require('fs');
+const { readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync } = require('fs');
 const { join } = require('path');
 const { homedir } = require('os');
 const { spawnSync } = require('child_process');
@@ -26,11 +26,10 @@ const versionOnly = process.argv.length === 3 && ['--version', '-v'].includes(pr
 
 const probeTools = process.argv.length === 3 && process.argv[2] === '--probe-tools';
 
-const nativeClaudeJson = join(homedir(), '.claude.json');
-const strayClaudeJson = join(clawgodDir, '.claude.json');
-if (!versionOnly && !probeTools && existsSync(strayClaudeJson) && !existsSync(nativeClaudeJson)) {
-  try { renameSync(strayClaudeJson, nativeClaudeJson); } catch {}
-}
+// Share Claude configuration; redirect session files through the direct-file backend.
+const stateDir = join(clawgodDir, 'state');
+process.env.CLAUDE_CODE_HOVER_REST = '0';
+if (!versionOnly && !probeTools) mkdirSync(stateDir, { recursive: true });
 
 const configFile = join(clawgodDir, 'provider.json');
 
@@ -79,16 +78,10 @@ if (!probeTools && resolved.useProxy) {
     process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS ??= '1';
     process.on('exit', function () { try { _proxy.stop(); } catch {} });
     process.stderr.write('[clawgod] OpenAI Chat Completions proxy on port ' + _proxy.port + '\n');
-    resolved.apiKey = '';
-    resolved.baseURL = '';
-    resolved.model = '';
-    resolved.smallModel = '';
   } else {
     throw new Error('[clawgod] openai-chat requires an API key (grok also accepts GROK_API_KEY or ~/.grok/user-settings.json)');
   }
-}
-
-if (!probeTools && resolved.apiKey) {
+} else if (!probeTools && resolved.apiKey) {
   if (resolved.baseURL) process.env.ANTHROPIC_BASE_URL = resolved.baseURL;
   if (resolved.model) process.env.ANTHROPIC_MODEL = resolved.model;
   if (resolved.smallModel) process.env.ANTHROPIC_SMALL_FAST_MODEL = resolved.smallModel;
@@ -163,10 +156,7 @@ if (!versionOnly && !probeTools) {
     process.env.CLAUDE_CODE_NO_FLICKER ??= tui === 'default' ? '0' : '1';
     if (existsSync(leanSettings)) process.argv.push('--settings', leanSettings);
   }
-}
-
-const builtinPromptFile = join(__dirname, 'system-prompt.md');
-if (!versionOnly && !probeTools) {
+  const builtinPromptFile = join(__dirname, 'system-prompt.md');
   let _customPrompt = '';
   try {
     _customPrompt = readFileSync(builtinPromptFile, 'utf8').trim();

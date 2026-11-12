@@ -16,6 +16,36 @@ const gate = (id) => `globalThis.__clawgodPatches?.[${JSON.stringify(id)}]!==!1`
 
 const upstreamPatches = [
   {
+    id: 'session-project-paths',
+    name: 'Keep ClawGod transcripts separate from Claude Code configuration',
+    ast: true,
+    required: true,
+  },
+  {
+    id: 'session-history-paths',
+    name: 'Keep ClawGod prompt history separate from Claude Code',
+    ast: true,
+    required: true,
+  },
+  {
+    id: 'session-state-paths',
+    name: 'Keep session state and cleanup paths in the ClawGod directory',
+    ast: true,
+    optional: true,
+  },
+  {
+    id: 'instruction-files-off',
+    name: 'Exclude user and project CLAUDE.md and AGENTS.md instructions',
+    ast: true,
+    required: true,
+  },
+  {
+    id: 'agents-md-off',
+    name: 'Disable automatic AGENTS.md instruction loading',
+    ast: true,
+    optional: true,
+  },
+  {
     id: 'terminal-reply-fragments',
     name: 'Preserve split terminal replies while a DA1 probe is pending',
     pattern: /(flushIncomplete=\(\)=>\{if\(this\.incompleteEscapeTimer=null,![\w$]+\(this\.keyReader\)\)return;if\(this\.props\.stdin\.readableLength>0\)\{this\.incompleteEscapeTimer=setTimeout\(this\.flushIncomplete,[\w$]+\);return\}let ([\w$]+)=performance\.now\(\);)(this\.applyKeysRead\([\w$]+\(this\.keyReader,\2\),\2\)\})/g,
@@ -638,8 +668,8 @@ for (const p of [...patches.filter(p => p.ast), ...patches.filter(p => !p.ast)])
       appliedIds.add(p.id);
       continue;
     }
-    if (promptRequired && PENTEST_REQUIRED.has(p.id)) {
-      console.log(`  ❌ ${p.name} (required application prompt hook did not match — Claude Code changed)`);
+    if (p.required || promptRequired && PENTEST_REQUIRED.has(p.id)) {
+      console.log(`  ❌ ${p.name} (required runtime hook did not match — Claude Code changed)`);
       failed++;
       continue;
     }

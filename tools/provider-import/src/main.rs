@@ -2,7 +2,7 @@ use serde_json::{json, Value};
 use std::env;
 use std::fs;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 
 fn home_dir() -> PathBuf {
@@ -16,6 +16,13 @@ fn provider_json_path() -> PathBuf {
     home_dir().join(".clawgod").join("provider.json")
 }
 
+fn write_config(path: &Path, config: &Value) {
+    let content = serde_json::to_string_pretty(config).unwrap() + "\n";
+    fs::write(path, content).unwrap_or_else(|e| {
+        eprintln!("  Failed to write {}: {}", path.display(), e);
+        process::exit(1);
+    });
+}
 
 fn detect_grok_key() -> Option<String> {
     if let Ok(key) = env::var("GROK_API_KEY") {
@@ -93,12 +100,7 @@ fn write_provider(provider_type: &str, key: &str, base_url: &str, model: &str, s
         let _ = fs::create_dir_all(parent);
     }
 
-    let content = serde_json::to_string_pretty(&config).unwrap() + "\n";
-    fs::write(&path, &content).unwrap_or_else(|e| {
-        eprintln!("  Failed to write {}: {}", path.display(), e);
-        process::exit(1);
-    });
-
+    write_config(&path, &config);
     eprintln!("  Wrote {}", path.display());
 }
 
@@ -301,11 +303,7 @@ fn cmd_reset() {
     });
 
     let path = provider_json_path();
-    let content = serde_json::to_string_pretty(&default_config).unwrap() + "\n";
-    fs::write(&path, &content).unwrap_or_else(|e| {
-        eprintln!("  Failed to write {}: {}", path.display(), e);
-        process::exit(1);
-    });
+    write_config(&path, &default_config);
     eprintln!("\n  Reset provider.json to default (Anthropic).\n");
 }
 

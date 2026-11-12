@@ -7,13 +7,17 @@ export const AST_PATCH_IDS = [
   'agent-teams-graph',
   'computer-use-gate-semantic', 'ultrareview-command',
   'tool-result-pairing-recovery',
+  'session-project-paths', 'session-history-paths', 'session-state-paths', 'instruction-files-off', 'agents-md-off',
 ];
 
 const anchors = ['external', 'isStandaloneExecutable', 'environmentOverridesParsed',
   'pixelValidation', 'ultraplan', 'tengu_amber_quartz_disabled', 's date is ', 'getEnvironmentOverrides',
   'Remote settings:', 'remote-settings.json', 'tengu_wiggly_dove', 'tengu_amber_flint',
   'isEnabled', 'enabled', 'ultrareview', 'amber_flint', 'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS',
-  '[Tool result missing due to internal error]'];
+  '[Tool result missing due to internal error]',
+  'projects', 'history.jsonl', 'sessions', 'tasks', 'todos', 'teams', 'plans',
+  'file-history', 'session-env', 'shell-snapshots', 'debug',
+  'instructionFiles', 'claudeMdExcludes', 'sessionPath'];
 const gate = id => `globalThis.__clawgodPatches?.[${JSON.stringify(id)}]!==!1`;
 function staticText(node, budget = 32) {
   if (!node || budget <= 0) return;
@@ -467,6 +471,54 @@ function hasRemoteSettingsContext(node) {
   });
 }
 
+function scanSessionPaths(tree, code, context, results, edit) {
+  const entries = new Set(['projects', 'history.jsonl', 'sessions', 'tasks', 'todos', 'teams',
+    'plans', 'file-history', 'session-env', 'shell-snapshots', 'debug']);
+  const ids = ['session-project-paths', 'session-history-paths', 'session-state-paths', 'instruction-files-off', 'agents-md-off'];
+  for (const id of ids) if (code.includes(`/*clawgod:${id}*/`)) results[id].patched = true;
+  const isConfigRoot = node => {
+    const value = context.resolve(node);
+    if (value?.node?.type !== 'CallExpression' || value.node.arguments.length) return false;
+    const target = value.context.resolve(value.node.callee);
+    return target?.node && contains(target.node, child => literal(child, '.claude'));
+  };
+  walk(tree, node => {
+    if (node.type === 'CallExpression' && member(node.callee, 'sessionPath') &&
+        member(node.callee.object, '__clawgodHelpers')) {
+      results['session-state-paths'].protected.push([node.start, node.end]);
+      return false;
+    }
+    if (functionNode(node) && node.body.type === 'BlockStatement' &&
+        containsOwn(node.body, child => member(child, 'claudeMdExcludes'))) {
+      const returns = ownReturns(node.body);
+      if (returns.length && returns.every(statement => functionNode(statement.argument))) {
+        const id = 'instruction-files-off';
+        results[id].present = true;
+        for (const { argument } of returns) edit(id, argument,
+          `globalThis.__clawgodHelpers.instructionFileFilter(/*clawgod:${id}*/${code.slice(argument.start, argument.end)})`);
+      }
+    }
+    if (functionNode(node) && node.body.type === 'BlockStatement' &&
+        containsOwn(node.body, child => member(child, 'instructionFiles')) &&
+        containsOwn(node.body, child => member(child, 'projectInstructions')) &&
+        containsOwn(node.body, child => literal(child, 'prompt.context'))) {
+      const id = 'agents-md-off';
+      results[id].present = true;
+      edit(id, node.body, `{/*clawgod:${id}*/return;}`);
+      return false;
+    }
+    if (node.type !== 'CallExpression' || node.arguments.length < 2 ||
+        !(context.refers(node.callee, 'join') || context.refers(node.callee, 'resolve'))) return;
+    const entry = staticText(node.arguments[1]);
+    if (!entries.has(entry) && !isConfigRoot(node.arguments[0])) return;
+    const id = entry === 'projects' ? 'session-project-paths' :
+      entry === 'history.jsonl' ? 'session-history-paths' : 'session-state-paths';
+    results[id].present = true;
+    edit(id, node, `globalThis.__clawgodHelpers.sessionPath(/*clawgod:${id}*/${code.slice(node.start, node.end)})`);
+    return false;
+  });
+}
+
 export function scanAstPatches(code, readTree = () => parsePatchSource(code), readContext) {
   const results = Object.fromEntries(AST_PATCH_IDS.map(id => [id, { matches: [], protected: [], present: false, patched: false }]));
   if (!hasPatchAnchors(code, anchors)) return results;
@@ -475,6 +527,7 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
   const edit = (id, node, replacement, strategy = 'ast') => {
     results[id].matches.push({ start: node.start, end: node.end, replacement, strategy });
   };
+  scanSessionPaths(tree, code, context, results, edit);
   const alreadyPatched = (node, id) => {
     if (!hasGate(node, id)) return false;
     results[id].protected.push([node.start, node.end]);

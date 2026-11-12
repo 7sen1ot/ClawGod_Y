@@ -494,10 +494,7 @@ if (-not (Test-Path $providerFile)) {
     [System.IO.File]::WriteAllText($providerFile, $providerJson, (New-Object System.Text.UTF8Encoding $false))
 }
 
-$claudeSettingsDir = Join-Path $env:USERPROFILE ".claude"
-$claudeSettings = Join-Path $claudeSettingsDir "settings.json"
 $leanSettings = Join-Path $ClawDir "lean-settings.json"
-New-Item -ItemType Directory -Force -Path $claudeSettingsDir | Out-Null
 
 foreach ($legacyFlag in @(".lean-disabled", ".lean-max")) {
     $legacyPath = Join-Path $ClawDir $legacyFlag
@@ -508,7 +505,7 @@ $leanApplyScript = @'
 {{CLAWGOD:lean-apply.cjs}}
 '@
 try {
-    node -e $leanApplyScript "$leanSettings" "$claudeSettings" (Join-Path $ClawDir "patches.json") 2>$null
+    node -e $leanApplyScript "$leanSettings" (Join-Path $ClawDir "patches.json") 2>$null
     Write-OK "Lean settings applied (strictest, clawgod-scoped): ~\.clawgod\lean-settings.json"
 } catch {}
 

@@ -390,9 +390,9 @@ fi
 rm -f "$CLAWGOD_DIR/.lean-disabled" "$CLAWGOD_DIR/.lean-max"
 
 node -e '
-const {leanApply}=require(process.argv[3]);
-try{leanApply(process.argv[1],process.argv[2],process.argv[4])}catch{}
-' "$CLAWGOD_DIR/lean-settings.json" "$HOME/.claude/settings.json" "$CLAWGOD_DIR/lean-mode.cjs" "$CLAWGOD_DIR/patches.json" 2>/dev/null || true
+const {leanApply}=require(process.argv[2]);
+try{leanApply(process.argv[1],undefined,process.argv[3])}catch{}
+' "$CLAWGOD_DIR/lean-settings.json" "$CLAWGOD_DIR/lean-mode.cjs" "$CLAWGOD_DIR/patches.json" 2>/dev/null || true
 info "Lean settings applied (strictest, clawgod-scoped): ~/.clawgod/lean-settings.json"
 
 dim "Verifying Bun can load patched cli.original.cjs (bounded startup check) ..."

@@ -843,6 +843,10 @@ function usageOf(usage) {
   return { input_tokens: (usage && usage.prompt_tokens) || 0, output_tokens: (usage && usage.completion_tokens) || 0 };
 }
 
+function messageOf(response, model, content, stopReason, usage) {
+  return { id: response.id || ('msg_' + Date.now()), type: 'message', role: 'assistant', content, model: model || response.model, stop_reason: stopReason, stop_sequence: null, usage };
+}
+
 function translateResponse(response, model) {
   if (response.error) throw new Error(response.error.message || 'Upstream API error');
   var choice = response.choices && response.choices[0];
@@ -854,7 +858,7 @@ function translateResponse(response, model) {
     if (!tc.id || !tc.function || !tc.function.name) throw new Error('Incomplete upstream tool call');
     content.push({ type: 'tool_use', id: tc.id, name: tc.function.name, input: toolInput(tc.function.arguments) });
   }
-  return { id: response.id || ('msg_' + Date.now()), type: 'message', role: 'assistant', content: content, model: model || response.model, stop_reason: mapFinishReason(choice.finish_reason, content.some(function (b) { return b.type === 'tool_use'; })), stop_sequence: null, usage: usageOf(response.usage) };
+  return messageOf(response, model, content, mapFinishReason(choice.finish_reason, content.some(function (b) { return b.type === 'tool_use'; })), usageOf(response.usage));
 }
 
 function sse(event, data) { return 'event: ' + event + '\ndata: ' + JSON.stringify(data) + '\n\n'; }
@@ -883,7 +887,7 @@ function createStreamTranslator(model) {
     if (finished) throw new Error('Completion data after finish_reason');
     if (!started) {
       started = true;
-      emit('message_start', { message: { id: chunk.id || ('msg_' + Date.now()), type: 'message', role: 'assistant', content: [], model: model || chunk.model, stop_reason: null, stop_sequence: null, usage: usage } });
+      emit('message_start', { message: messageOf(chunk, model, [], null, usage) });
     }
     var delta = choice.delta || {};
     var text = delta.content || delta.refusal;
@@ -1159,7 +1163,7 @@ info "Patch feature gates created (feature-gates.cjs)"
 
 cat > "$CLAWGOD_DIR/cli.cjs" << 'WRAPPER_EOF'
 #!/usr/bin/env bun
-const { readFileSync, existsSync, mkdirSync, writeFileSync, renameSync, unlinkSync } = require('fs');
+const { readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync } = require('fs');
 const { join } = require('path');
 const { homedir } = require('os');
 const { spawnSync } = require('child_process');
@@ -1186,11 +1190,10 @@ const versionOnly = process.argv.length === 3 && ['--version', '-v'].includes(pr
 
 const probeTools = process.argv.length === 3 && process.argv[2] === '--probe-tools';
 
-const nativeClaudeJson = join(homedir(), '.claude.json');
-const strayClaudeJson = join(clawgodDir, '.claude.json');
-if (!versionOnly && !probeTools && existsSync(strayClaudeJson) && !existsSync(nativeClaudeJson)) {
-  try { renameSync(strayClaudeJson, nativeClaudeJson); } catch {}
-}
+// Share Claude configuration; redirect session files through the direct-file backend.
+const stateDir = join(clawgodDir, 'state');
+process.env.CLAUDE_CODE_HOVER_REST = '0';
+if (!versionOnly && !probeTools) mkdirSync(stateDir, { recursive: true });
 
 const configFile = join(clawgodDir, 'provider.json');
 
@@ -1239,16 +1242,10 @@ if (!probeTools && resolved.useProxy) {
     process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS ??= '1';
     process.on('exit', function () { try { _proxy.stop(); } catch {} });
     process.stderr.write('[clawgod] OpenAI Chat Completions proxy on port ' + _proxy.port + '\n');
-    resolved.apiKey = '';
-    resolved.baseURL = '';
-    resolved.model = '';
-    resolved.smallModel = '';
   } else {
     throw new Error('[clawgod] openai-chat requires an API key (grok also accepts GROK_API_KEY or ~/.grok/user-settings.json)');
   }
-}
-
-if (!probeTools && resolved.apiKey) {
+} else if (!probeTools && resolved.apiKey) {
   if (resolved.baseURL) process.env.ANTHROPIC_BASE_URL = resolved.baseURL;
   if (resolved.model) process.env.ANTHROPIC_MODEL = resolved.model;
   if (resolved.smallModel) process.env.ANTHROPIC_SMALL_FAST_MODEL = resolved.smallModel;
@@ -1323,10 +1320,7 @@ if (!versionOnly && !probeTools) {
     process.env.CLAUDE_CODE_NO_FLICKER ??= tui === 'default' ? '0' : '1';
     if (existsSync(leanSettings)) process.argv.push('--settings', leanSettings);
   }
-}
-
-const builtinPromptFile = join(__dirname, 'system-prompt.md');
-if (!versionOnly && !probeTools) {
+  const builtinPromptFile = join(__dirname, 'system-prompt.md');
   let _customPrompt = '';
   try {
     _customPrompt = readFileSync(builtinPromptFile, 'utf8').trim();
@@ -1657,6 +1651,29 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+const sharedConfigDir = path.resolve(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'));
+const sessionStateDir = path.join(os.homedir(), '.clawgod', 'state');
+const sessionEntries = new Set([
+  'projects', 'history.jsonl', 'sessions', 'tasks', 'todos', 'teams',
+  'plans', 'file-history', 'session-env', 'shell-snapshots', 'debug',
+]);
+
+function sessionPath(file) {
+  if (typeof file !== 'string') return file;
+  const relative = path.relative(sharedConfigDir, path.resolve(file));
+  const first = relative.split(path.sep)[0];
+  if (!sessionEntries.has(first)) return file;
+  return path.join(sessionStateDir, relative);
+}
+
+function instructionFileFilter(original) {
+  return function (file, type) {
+    if (['User', 'Project', 'Local'].includes(type) &&
+        typeof file === 'string' && /(?:^|[\\/])(?:CLAUDE|AGENTS)\.md$/i.test(file)) return true;
+    return Reflect.apply(original, this, arguments);
+  };
+}
+
 const NO_OVERRIDE = Symbol('clawgod:no-override');
 const FLAG_OVERRIDES = (() => {
   const base = {
@@ -1860,20 +1877,13 @@ async function probeToolTables() {
   }
 }
 
-module.exports.classifierTimeoutFloor = classifierTimeoutFloor;
-module.exports.terminalReplyDelay = terminalReplyDelay;
-module.exports.enablePredicate = enablePredicate;
-module.exports.NO_OVERRIDE = NO_OVERRIDE;
-module.exports.flagOverride = flagOverride;
-module.exports.flagOverrides = FLAG_OVERRIDES;
-module.exports.rewritePromptAssembly = rewritePromptAssembly;
-module.exports.selectApplicationPrompt = rewritePromptAssembly;
-module.exports.filterDefaultPromptSections = filterDefaultPromptSections;
-module.exports.refreshPromptSnapshot = refreshPromptSnapshot;
-module.exports.validateExtraBody = validateExtraBody;
-module.exports.defaultProviderConfig = DEFAULT_PROVIDER_CONFIG;
-module.exports.resolveProviderConfig = resolveProviderConfig;
-module.exports.probeToolTables = probeToolTables;
+module.exports = {
+  classifierTimeoutFloor, terminalReplyDelay, enablePredicate, sessionPath, instructionFileFilter,
+  NO_OVERRIDE, flagOverride, flagOverrides: FLAG_OVERRIDES,
+  rewritePromptAssembly, selectApplicationPrompt: rewritePromptAssembly,
+  filterDefaultPromptSections, refreshPromptSnapshot, validateExtraBody,
+  defaultProviderConfig: DEFAULT_PROVIDER_CONFIG, resolveProviderConfig, probeToolTables,
+};
 globalThis.__clawgodHelpers = module.exports;
 CFG_EOF
 info "Classifier runtime helpers created (runtime-helpers.cjs)"
@@ -8587,13 +8597,17 @@ export const AST_PATCH_IDS = [
   'agent-teams-graph',
   'computer-use-gate-semantic', 'ultrareview-command',
   'tool-result-pairing-recovery',
+  'session-project-paths', 'session-history-paths', 'session-state-paths', 'instruction-files-off', 'agents-md-off',
 ];
 
 const anchors = ['external', 'isStandaloneExecutable', 'environmentOverridesParsed',
   'pixelValidation', 'ultraplan', 'tengu_amber_quartz_disabled', 's date is ', 'getEnvironmentOverrides',
   'Remote settings:', 'remote-settings.json', 'tengu_wiggly_dove', 'tengu_amber_flint',
   'isEnabled', 'enabled', 'ultrareview', 'amber_flint', 'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS',
-  '[Tool result missing due to internal error]'];
+  '[Tool result missing due to internal error]',
+  'projects', 'history.jsonl', 'sessions', 'tasks', 'todos', 'teams', 'plans',
+  'file-history', 'session-env', 'shell-snapshots', 'debug',
+  'instructionFiles', 'claudeMdExcludes', 'sessionPath'];
 const gate = id => `globalThis.__clawgodPatches?.[${JSON.stringify(id)}]!==!1`;
 function staticText(node, budget = 32) {
   if (!node || budget <= 0) return;
@@ -9047,6 +9061,54 @@ function hasRemoteSettingsContext(node) {
   });
 }
 
+function scanSessionPaths(tree, code, context, results, edit) {
+  const entries = new Set(['projects', 'history.jsonl', 'sessions', 'tasks', 'todos', 'teams',
+    'plans', 'file-history', 'session-env', 'shell-snapshots', 'debug']);
+  const ids = ['session-project-paths', 'session-history-paths', 'session-state-paths', 'instruction-files-off', 'agents-md-off'];
+  for (const id of ids) if (code.includes(`/*clawgod:${id}*/`)) results[id].patched = true;
+  const isConfigRoot = node => {
+    const value = context.resolve(node);
+    if (value?.node?.type !== 'CallExpression' || value.node.arguments.length) return false;
+    const target = value.context.resolve(value.node.callee);
+    return target?.node && contains(target.node, child => literal(child, '.claude'));
+  };
+  walk(tree, node => {
+    if (node.type === 'CallExpression' && member(node.callee, 'sessionPath') &&
+        member(node.callee.object, '__clawgodHelpers')) {
+      results['session-state-paths'].protected.push([node.start, node.end]);
+      return false;
+    }
+    if (functionNode(node) && node.body.type === 'BlockStatement' &&
+        containsOwn(node.body, child => member(child, 'claudeMdExcludes'))) {
+      const returns = ownReturns(node.body);
+      if (returns.length && returns.every(statement => functionNode(statement.argument))) {
+        const id = 'instruction-files-off';
+        results[id].present = true;
+        for (const { argument } of returns) edit(id, argument,
+          `globalThis.__clawgodHelpers.instructionFileFilter(/*clawgod:${id}*/${code.slice(argument.start, argument.end)})`);
+      }
+    }
+    if (functionNode(node) && node.body.type === 'BlockStatement' &&
+        containsOwn(node.body, child => member(child, 'instructionFiles')) &&
+        containsOwn(node.body, child => member(child, 'projectInstructions')) &&
+        containsOwn(node.body, child => literal(child, 'prompt.context'))) {
+      const id = 'agents-md-off';
+      results[id].present = true;
+      edit(id, node.body, `{/*clawgod:${id}*/return;}`);
+      return false;
+    }
+    if (node.type !== 'CallExpression' || node.arguments.length < 2 ||
+        !(context.refers(node.callee, 'join') || context.refers(node.callee, 'resolve'))) return;
+    const entry = staticText(node.arguments[1]);
+    if (!entries.has(entry) && !isConfigRoot(node.arguments[0])) return;
+    const id = entry === 'projects' ? 'session-project-paths' :
+      entry === 'history.jsonl' ? 'session-history-paths' : 'session-state-paths';
+    results[id].present = true;
+    edit(id, node, `globalThis.__clawgodHelpers.sessionPath(/*clawgod:${id}*/${code.slice(node.start, node.end)})`);
+    return false;
+  });
+}
+
 export function scanAstPatches(code, readTree = () => parsePatchSource(code), readContext) {
   const results = Object.fromEntries(AST_PATCH_IDS.map(id => [id, { matches: [], protected: [], present: false, patched: false }]));
   if (!hasPatchAnchors(code, anchors)) return results;
@@ -9055,6 +9117,7 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
   const edit = (id, node, replacement, strategy = 'ast') => {
     results[id].matches.push({ start: node.start, end: node.end, replacement, strategy });
   };
+  scanSessionPaths(tree, code, context, results, edit);
   const alreadyPatched = (node, id) => {
     if (!hasGate(node, id)) return false;
     results[id].protected.push([node.start, node.end]);
@@ -9655,6 +9718,50 @@ const MAXTURNS_LIFTS = [
   { marker: 'tasks autonomously', prop: 'maxTurns:500', to: 'maxTurns:20000' },
 ];
 
+const LOOP_SHIELD_SIGNALS = [
+  'registerLoopSkill', 'bundledSkillKillSwitchSurvivors',
+  'tasks autonomously', 'loop scheduling', 'scheduleLoop',
+  '"/loop"', "'/loop'", '`/loop`', 'loopSkill',
+];
+
+const trustSignals = [
+  'hasTrustDialogAccepted', 'trustAccepted', 'setTrustAccepted',
+  'workspaceTrust', 'confirmBeforeProceeding', 'requireConfirmation',
+  'askForConfirmation', 'promptForConsent', 'requestConsent',
+];
+
+const classifierSignals = [
+  'classifierOnly', 'safetyClassifier', 'requestSafetyReview',
+  'runSafetyClassifier', 'safetyClassification', 'classifiedAs',
+];
+
+const fsSignals = [
+  'outside the working directory', 'outside the current working directory',
+  'isPathInside', 'isInsideWorkingDir', 'resolveWorkingDirectory',
+];
+
+const shellSignals = [
+  'dangerousRemoval', 'circuitBreaker', 'shellSafetyVet',
+  'safetyCheck', 'destructiveCommand', 'isDangerous',
+  'dangerouslySkipPermissions',
+];
+
+const mcpSignals = [
+  'mcpPermissionModeOverrides', 'mcpAllowlist', 'allowedMcpServers',
+  'checkMcpPolicy', 'mcpPolicyViolation', 'mcp_server_policy',
+];
+
+const reviewSignals = [
+  'SECURITY WARNING', 'UNREVIEWED', 'safety safeguard',
+  'Handoff classifier',
+];
+
+const webSignals = [
+  'isolationLatch', 'activeLatch', 'denyMessage', 'domainChecks',
+  'webSearch', 'webFetch', 'fetchPolicy', 'domainIsolation',
+  'connectorIsolation', 'webSearchPolicy',
+];
+
 const claimedRanges = (results, upstreamRanges, except = new Set()) => {
   const ranges = [...upstreamRanges];
   for (const [key, result] of Object.entries(results)) {
@@ -9667,6 +9774,8 @@ const claimedRanges = (results, upstreamRanges, except = new Set()) => {
 const { literal, propertyName, member, boolean, staticText, firstPromptText, functionNode } = AST_HELPERS;
 
 const ident = (node, name) => node?.type === 'Identifier' && node.name === name;
+const userIdCall = node => node.type === 'CallExpression' && node.callee.type === 'MemberExpression' &&
+  ['getuid', 'geteuid'].includes(node.callee.property?.name ?? node.callee.property?.value);
 const helperCall = (node, name) => node?.type === 'CallExpression' &&
   member(node.callee, name) && member(node.callee.object, '__clawgodHelpers') &&
   ident(node.callee.object.object, 'globalThis') && node.arguments.length === 2 &&
@@ -9892,9 +10001,7 @@ function scanPermissionBypasses(tree, code, results, edit, upstreamRanges = []) 
       return false;
     }
     if (!node.async && contains(node.body, child => literal(child, 'refuseBypassUnderRoot')) &&
-        contains(node.body, child => child.type === 'CallExpression' &&
-          child.callee.type === 'MemberExpression' &&
-          ['getuid', 'geteuid'].includes(child.callee.property?.name ?? child.callee.property?.value))) {
+        contains(node.body, userIdCall)) {
       replace('permission-confirmations-off', node, 'return!1;');
       return false;
     }
@@ -9916,9 +10023,7 @@ function scanPermissionBypasses(tree, code, results, edit, upstreamRanges = []) 
           child.left.type === 'MemberExpression' &&
           child.left.object.name === 'process' && propertyName(child.left) === 'platform' &&
           child.right.type === 'Literal' && typeof child.right.value === 'string') &&
-        contains(node.body, child =>
-          child.type === 'CallExpression' && child.callee.type === 'MemberExpression' &&
-          ['getuid', 'geteuid'].includes(child.callee.property?.name ?? child.callee.property?.value)) &&
+        contains(node.body, userIdCall) &&
         (body.includes('bypassPermissions') || body.includes('Bypass'))) {
       replace('permission-confirmations-off', node, 'return!1;');
       return false;
@@ -9939,9 +10044,7 @@ function scanPermissionBypasses(tree, code, results, edit, upstreamRanges = []) 
         child.type === 'BinaryExpression' && child.operator === '!==' &&
         ((member(child.left, 'IS_SANDBOX') && literal(child.right, '1')) ||
          (member(child.right, 'IS_SANDBOX') && literal(child.left, '1')))) &&
-        contains(node.body, child =>
-          child.type === 'CallExpression' && child.callee.type === 'MemberExpression' &&
-          ['getuid', 'geteuid'].includes(child.callee.property?.name ?? child.callee.property?.value))) {
+        contains(node.body, userIdCall)) {
       replace('permission-confirmations-off', node, 'return!1;');
       return false;
     }
@@ -10069,30 +10172,17 @@ function scanPermissionBypasses(tree, code, results, edit, upstreamRanges = []) 
     }
   });
 
-  // ---- Permissive catch-all layer (with /loop shield) ----
-  // /loop is a bundled scheduling feature preserved via security-bundled-skills;
-  // any function whose body references loop internals must NOT be neutered here.
-  const LOOP_SHIELD_SIGNALS = [
-    'registerLoopSkill', 'bundledSkillKillSwitchSurvivors',
-    'tasks autonomously', 'loop scheduling', 'scheduleLoop',
-    '"/loop"', "'/loop'", '`/loop`', 'loopSkill',
-  ];
-  const loopShield = fnNode => {
-    if (!fnNode || fnNode.type === undefined) return false;
-    const body = code.slice(fnNode.start, fnNode.end);
-    return LOOP_SHIELD_SIGNALS.some(sig => body.includes(sig));
-  };
-
+  // Preserve /loop internals before applying the broader matchers.
   const blocked = claimedRanges(results, upstreamRanges);
   walk(tree, node => {
     if (!functionNode(node)) return;
     if (blocked.some(([start, end]) => node.body.start < end && node.body.end > start)) return;
     if (node.generator) return;
-    if (loopShield(node)) return; // never touch /loop machinery
+    const source = code.slice(node.start, node.end);
+    if (LOOP_SHIELD_SIGNALS.some(sig => source.includes(sig))) return;
     const body = code.slice(node.body.start, node.body.end);
     if (body.includes('/*clawgod:permission-')) return;
 
-    // (a) Return of {behavior:"deny"|"ask", decisionReason:{...}} → force allow
     const returnDecisions = [];
     walk(node.body, child => {
       if (functionNode(child) && child !== node) return false;
@@ -10100,21 +10190,19 @@ function scanPermissionBypasses(tree, code, results, edit, upstreamRanges = []) 
         const behaviorProp = child.argument.properties.find(p => p.type === 'Property' && propertyName(p) === 'behavior');
         const reasonProp = child.argument.properties.find(p => p.type === 'Property' && propertyName(p) === 'decisionReason');
         const bVal = behaviorProp && (literal(behaviorProp.value, 'deny') || literal(behaviorProp.value, 'ask'));
-        if (bVal && reasonProp) returnDecisions.push(child);
+        if (bVal && reasonProp) returnDecisions.push(behaviorProp.value);
       }
     });
     if (returnDecisions.length) {
       const id = 'permission-decisions-allow';
       results[id].present = true;
-      for (const ret of returnDecisions) {
-        const behaviorProp = ret.argument.properties.find(p => p.type === 'Property' && propertyName(p) === 'behavior');
-        edit(id, behaviorProp.value, '/*clawgod:permission-decisions-allow*/"allow"');
-        ranges.push(behaviorProp.value);
+      for (const value of returnDecisions) {
+        edit(id, value, '/*clawgod:permission-decisions-allow*/"allow"');
+        ranges.push(value);
       }
       return false;
     }
 
-    // (b) Bare literal return of a restrictive permission mode → bypassPermissions
     if (node.body.type === 'BlockStatement') {
       const stmts = node.body.body.filter(s => !s.directive && s.type !== 'EmptyStatement');
       const last = stmts.at(-1);
@@ -10129,57 +10217,27 @@ function scanPermissionBypasses(tree, code, results, edit, upstreamRanges = []) 
       }
     }
 
-    // (c) Functions that probe trust/consent → always truthy
-    const trustSignals = [
-      'hasTrustDialogAccepted', 'trustAccepted', 'setTrustAccepted',
-      'workspaceTrust', 'confirmBeforeProceeding', 'requireConfirmation',
-      'askForConfirmation', 'promptForConsent', 'requestConsent',
-    ];
-    if (trustSignals.some(sig => body.includes(sig))) {
-      if (returnsBoolean(node) && !node.async) {
-        const id = 'permission-confirmations-off';
-        replace(id, node, 'return!0;');
-        return false;
-      }
+    if (trustSignals.some(sig => body.includes(sig)) && returnsBoolean(node) && !node.async) {
+      replace('permission-confirmations-off', node, 'return!0;');
+      return false;
     }
 
-    // (d) Classifier / safety review entry points → no-op
-    // NOTE: 'pendingReview'/'requiresReview' removed from signal list — they can
-    // appear in /loop scheduling code paths.
-    const classifierSignals = [
-      'classifierOnly', 'safetyClassifier', 'requestSafetyReview',
-      'runSafetyClassifier', 'safetyClassification', 'classifiedAs',
-    ];
+    // Generic pendingReview/requiresReview signals also occur in /loop scheduling.
     if (classifierSignals.some(sig => body.includes(sig))) {
       const hasReturnObject = node.body.type === 'BlockStatement' &&
         node.body.body.some(s => s.type === 'ReturnStatement' && s.argument?.type === 'ObjectExpression');
       if (hasReturnObject || node.async) {
-        const id = 'permission-classifier-off';
-        replace(id, node, node.async ? 'return null;' : 'return void 0;');
+        replace('permission-classifier-off', node, node.async ? 'return null;' : 'return void 0;');
         return false;
       }
     }
 
-    // (e) Filesystem path gating
-    const fsSignals = [
-      'outside the working directory', 'outside the current working directory',
-      'isPathInside', 'isInsideWorkingDir', 'resolveWorkingDirectory',
-    ];
     if (fsSignals.some(sig => body.includes(sig)) &&
-        /deny|denied|forbid|reject|refus|permission|allow/i.test(body)) {
-      if (returnsBoolean(node) && !node.async) {
-        const id = 'permission-fs-path-off';
-        replace(id, node, 'return!0;');
-        return false;
-      }
+        /deny|denied|forbid|reject|refus|permission|allow/i.test(body) && returnsBoolean(node) && !node.async) {
+      replace('permission-fs-path-off', node, 'return!0;');
+      return false;
     }
 
-    // (f) Shell safety vetting / dangerousRemoval circuit breaker
-    const shellSignals = [
-      'dangerousRemoval', 'circuitBreaker', 'shellSafetyVet',
-      'safetyCheck', 'destructiveCommand', 'isDangerous',
-      'dangerouslySkipPermissions',
-    ];
     if (shellSignals.some(sig => body.includes(sig)) &&
         node.body.type === 'BlockStatement' &&
         /ask|deny|review|confirm/i.test(body)) {
@@ -10196,52 +10254,33 @@ function scanPermissionBypasses(tree, code, results, edit, upstreamRanges = []) 
       }
     }
 
-    // (g) MCP allowlist / server policy gates
-    const mcpSignals = [
-      'mcpPermissionModeOverrides', 'mcpAllowlist', 'allowedMcpServers',
-      'checkMcpPolicy', 'mcpPolicyViolation', 'mcp_server_policy',
-    ];
     if (mcpSignals.some(sig => body.includes(sig)) &&
         node.body.type === 'BlockStatement' && !node.async) {
       const returnsBoolean = node.body.body.some(s => s.type === 'ReturnStatement' &&
         (boolean(s.argument, true) || boolean(s.argument, false) ||
           (s.argument?.type === 'BinaryExpression')));
       if (returnsBoolean) {
-        const id = 'permission-mcp-allowlist-off';
-        replace(id, node, 'return!0;');
+        replace('permission-mcp-allowlist-off', node, 'return!0;');
         return false;
       }
     }
 
-    // (h) Subagent / auto-mode review gates
     // Match review diagnostics, not generic subagent or handback references.
-    const reviewSignals = [
-      'SECURITY WARNING', 'UNREVIEWED', 'safety safeguard',
-      'Handoff classifier',
-    ];
     if (reviewSignals.some(sig => body.includes(sig)) && node.async) {
       const hasReturn = node.body.type === 'BlockStatement' &&
         node.body.body.some(s => s.type === 'ReturnStatement' && s.argument);
       if (hasReturn) {
-        const id = 'permission-subagent-review-off';
-        replace(id, node, 'return null;');
+        replace('permission-subagent-review-off', node, 'return null;');
         return false;
       }
     }
 
-    // (i) Web policy / domain isolation gates
-    const webSignals = [
-      'isolationLatch', 'activeLatch', 'denyMessage', 'domainChecks',
-      'webSearch', 'webFetch', 'fetchPolicy', 'domainIsolation',
-      'connectorIsolation', 'webSearchPolicy',
-    ];
     if (webSignals.some(sig => body.includes(sig))) {
       const returnsDenyObject = node.body.type === 'BlockStatement' &&
         node.body.body.some(s => s.type === 'ReturnStatement' && s.argument?.type === 'ObjectExpression' &&
           s.argument.properties.some(p => propertyName(p) === 'denyMessage'));
       if (returnsDenyObject && !node.async) {
-        const id = 'permission-web-policy-off';
-        replace(id, node, 'return{denyMessage:null,classifiedAs:null,activeLatch:null};');
+        replace('permission-web-policy-off', node, 'return{denyMessage:null,classifiedAs:null,activeLatch:null};');
         return false;
       }
     }
@@ -12270,15 +12309,10 @@ const SETTINGS = {
 };
 const LEGACY_SHARED_DENY = [...DENY, ...LOOP_TOOLS, "ReportFindings"];
 
-const FEATURES_LOCKED_ON = {
-  'agent-teams': true,
-  'computer-use': true,
-  'ultraplan': true,
-  'ultrareview': true,
-  'remote-settings': true,
-  'wiggly-dove': true,
-  'bun-ant-shim': true,
-};
+const FEATURES_LOCKED_ON = [
+  'agent-teams', 'computer-use', 'ultraplan', 'ultrareview',
+  'remote-settings', 'wiggly-dove', 'bun-ant-shim',
+];
 
 function leanApply(clawgodSettingsPath, sharedSettingsPath, patchesJsonPath) {
   const fs = require("fs");
@@ -12316,8 +12350,8 @@ function leanApply(clawgodSettingsPath, sharedSettingsPath, patchesJsonPath) {
     try { p = JSON.parse(fs.readFileSync(patchesJsonPath, "utf8")); } catch {}
     if (typeof p !== "object" || !p) p = {};
     let pchanged = false;
-    for (const [k, v] of Object.entries(FEATURES_LOCKED_ON)) {
-      if (!(k in p)) { p[k] = v; pchanged = true; }
+    for (const k of FEATURES_LOCKED_ON) {
+      if (!(k in p)) { p[k] = true; pchanged = true; }
     }
     if (pchanged) writeSettings(patchesJsonPath, p);
   }
@@ -12566,6 +12600,36 @@ const CLEAN_SOURCE = join(__dirname, 'source-backup.json');
 const gate = (id) => `globalThis.__clawgodPatches?.[${JSON.stringify(id)}]!==!1`;
 
 const upstreamPatches = [
+  {
+    id: 'session-project-paths',
+    name: 'Keep ClawGod transcripts separate from Claude Code configuration',
+    ast: true,
+    required: true,
+  },
+  {
+    id: 'session-history-paths',
+    name: 'Keep ClawGod prompt history separate from Claude Code',
+    ast: true,
+    required: true,
+  },
+  {
+    id: 'session-state-paths',
+    name: 'Keep session state and cleanup paths in the ClawGod directory',
+    ast: true,
+    optional: true,
+  },
+  {
+    id: 'instruction-files-off',
+    name: 'Exclude user and project CLAUDE.md and AGENTS.md instructions',
+    ast: true,
+    required: true,
+  },
+  {
+    id: 'agents-md-off',
+    name: 'Disable automatic AGENTS.md instruction loading',
+    ast: true,
+    optional: true,
+  },
   {
     id: 'terminal-reply-fragments',
     name: 'Preserve split terminal replies while a DA1 probe is pending',
@@ -13189,8 +13253,8 @@ for (const p of [...patches.filter(p => p.ast), ...patches.filter(p => !p.ast)])
       appliedIds.add(p.id);
       continue;
     }
-    if (promptRequired && PENTEST_REQUIRED.has(p.id)) {
-      console.log(`  ❌ ${p.name} (required application prompt hook did not match — Claude Code changed)`);
+    if (p.required || promptRequired && PENTEST_REQUIRED.has(p.id)) {
+      console.log(`  ❌ ${p.name} (required runtime hook did not match — Claude Code changed)`);
       failed++;
       continue;
     }
@@ -13499,9 +13563,9 @@ fi
 rm -f "$CLAWGOD_DIR/.lean-disabled" "$CLAWGOD_DIR/.lean-max"
 
 node -e '
-const {leanApply}=require(process.argv[3]);
-try{leanApply(process.argv[1],process.argv[2],process.argv[4])}catch{}
-' "$CLAWGOD_DIR/lean-settings.json" "$HOME/.claude/settings.json" "$CLAWGOD_DIR/lean-mode.cjs" "$CLAWGOD_DIR/patches.json" 2>/dev/null || true
+const {leanApply}=require(process.argv[2]);
+try{leanApply(process.argv[1],undefined,process.argv[3])}catch{}
+' "$CLAWGOD_DIR/lean-settings.json" "$CLAWGOD_DIR/lean-mode.cjs" "$CLAWGOD_DIR/patches.json" 2>/dev/null || true
 info "Lean settings applied (strictest, clawgod-scoped): ~/.clawgod/lean-settings.json"
 
 dim "Verifying Bun can load patched cli.original.cjs (bounded startup check) ..."

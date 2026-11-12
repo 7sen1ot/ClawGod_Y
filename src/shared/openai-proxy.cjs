@@ -133,6 +133,10 @@ function usageOf(usage) {
   return { input_tokens: (usage && usage.prompt_tokens) || 0, output_tokens: (usage && usage.completion_tokens) || 0 };
 }
 
+function messageOf(response, model, content, stopReason, usage) {
+  return { id: response.id || ('msg_' + Date.now()), type: 'message', role: 'assistant', content, model: model || response.model, stop_reason: stopReason, stop_sequence: null, usage };
+}
+
 function translateResponse(response, model) {
   if (response.error) throw new Error(response.error.message || 'Upstream API error');
   var choice = response.choices && response.choices[0];
@@ -144,7 +148,7 @@ function translateResponse(response, model) {
     if (!tc.id || !tc.function || !tc.function.name) throw new Error('Incomplete upstream tool call');
     content.push({ type: 'tool_use', id: tc.id, name: tc.function.name, input: toolInput(tc.function.arguments) });
   }
-  return { id: response.id || ('msg_' + Date.now()), type: 'message', role: 'assistant', content: content, model: model || response.model, stop_reason: mapFinishReason(choice.finish_reason, content.some(function (b) { return b.type === 'tool_use'; })), stop_sequence: null, usage: usageOf(response.usage) };
+  return messageOf(response, model, content, mapFinishReason(choice.finish_reason, content.some(function (b) { return b.type === 'tool_use'; })), usageOf(response.usage));
 }
 
 function sse(event, data) { return 'event: ' + event + '\ndata: ' + JSON.stringify(data) + '\n\n'; }
@@ -173,7 +177,7 @@ function createStreamTranslator(model) {
     if (finished) throw new Error('Completion data after finish_reason');
     if (!started) {
       started = true;
-      emit('message_start', { message: { id: chunk.id || ('msg_' + Date.now()), type: 'message', role: 'assistant', content: [], model: model || chunk.model, stop_reason: null, stop_sequence: null, usage: usage } });
+      emit('message_start', { message: messageOf(chunk, model, [], null, usage) });
     }
     var delta = choice.delta || {};
     var text = delta.content || delta.refusal;

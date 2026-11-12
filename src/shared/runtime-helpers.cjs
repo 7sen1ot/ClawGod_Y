@@ -31,6 +31,29 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+const sharedConfigDir = path.resolve(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'));
+const sessionStateDir = path.join(os.homedir(), '.clawgod', 'state');
+const sessionEntries = new Set([
+  'projects', 'history.jsonl', 'sessions', 'tasks', 'todos', 'teams',
+  'plans', 'file-history', 'session-env', 'shell-snapshots', 'debug',
+]);
+
+function sessionPath(file) {
+  if (typeof file !== 'string') return file;
+  const relative = path.relative(sharedConfigDir, path.resolve(file));
+  const first = relative.split(path.sep)[0];
+  if (!sessionEntries.has(first)) return file;
+  return path.join(sessionStateDir, relative);
+}
+
+function instructionFileFilter(original) {
+  return function (file, type) {
+    if (['User', 'Project', 'Local'].includes(type) &&
+        typeof file === 'string' && /(?:^|[\\/])(?:CLAUDE|AGENTS)\.md$/i.test(file)) return true;
+    return Reflect.apply(original, this, arguments);
+  };
+}
+
 const NO_OVERRIDE = Symbol('clawgod:no-override');
 const FLAG_OVERRIDES = (() => {
   const base = {
@@ -234,18 +257,11 @@ async function probeToolTables() {
   }
 }
 
-module.exports.classifierTimeoutFloor = classifierTimeoutFloor;
-module.exports.terminalReplyDelay = terminalReplyDelay;
-module.exports.enablePredicate = enablePredicate;
-module.exports.NO_OVERRIDE = NO_OVERRIDE;
-module.exports.flagOverride = flagOverride;
-module.exports.flagOverrides = FLAG_OVERRIDES;
-module.exports.rewritePromptAssembly = rewritePromptAssembly;
-module.exports.selectApplicationPrompt = rewritePromptAssembly;
-module.exports.filterDefaultPromptSections = filterDefaultPromptSections;
-module.exports.refreshPromptSnapshot = refreshPromptSnapshot;
-module.exports.validateExtraBody = validateExtraBody;
-module.exports.defaultProviderConfig = DEFAULT_PROVIDER_CONFIG;
-module.exports.resolveProviderConfig = resolveProviderConfig;
-module.exports.probeToolTables = probeToolTables;
+module.exports = {
+  classifierTimeoutFloor, terminalReplyDelay, enablePredicate, sessionPath, instructionFileFilter,
+  NO_OVERRIDE, flagOverride, flagOverrides: FLAG_OVERRIDES,
+  rewritePromptAssembly, selectApplicationPrompt: rewritePromptAssembly,
+  filterDefaultPromptSections, refreshPromptSnapshot, validateExtraBody,
+  defaultProviderConfig: DEFAULT_PROVIDER_CONFIG, resolveProviderConfig, probeToolTables,
+};
 globalThis.__clawgodHelpers = module.exports;

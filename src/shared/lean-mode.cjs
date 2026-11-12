@@ -20,15 +20,10 @@ const SETTINGS = {
 };
 const LEGACY_SHARED_DENY = [...DENY, ...LOOP_TOOLS, "ReportFindings"];
 
-const FEATURES_LOCKED_ON = {
-  'agent-teams': true,
-  'computer-use': true,
-  'ultraplan': true,
-  'ultrareview': true,
-  'remote-settings': true,
-  'wiggly-dove': true,
-  'bun-ant-shim': true,
-};
+const FEATURES_LOCKED_ON = [
+  'agent-teams', 'computer-use', 'ultraplan', 'ultrareview',
+  'remote-settings', 'wiggly-dove', 'bun-ant-shim',
+];
 
 function leanApply(clawgodSettingsPath, sharedSettingsPath, patchesJsonPath) {
   const fs = require("fs");
@@ -66,8 +61,8 @@ function leanApply(clawgodSettingsPath, sharedSettingsPath, patchesJsonPath) {
     try { p = JSON.parse(fs.readFileSync(patchesJsonPath, "utf8")); } catch {}
     if (typeof p !== "object" || !p) p = {};
     let pchanged = false;
-    for (const [k, v] of Object.entries(FEATURES_LOCKED_ON)) {
-      if (!(k in p)) { p[k] = v; pchanged = true; }
+    for (const k of FEATURES_LOCKED_ON) {
+      if (!(k in p)) { p[k] = true; pchanged = true; }
     }
     if (pchanged) writeSettings(patchesJsonPath, p);
   }
