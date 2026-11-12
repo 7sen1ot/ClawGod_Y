@@ -506,7 +506,7 @@ if (revert) {
 const originalFiles = { ...files };
 
 console.log(`\n${'═'.repeat(55)}`);
-console.log(`  ClawGod (universal)`);
+console.log(`  ClawGod_Y (universal)`);
 console.log(`  Target: cli.original.cjs (v${version}) ${isGraph ? `[graph: ${Object.keys(files).length} files]` : ''}`);
 console.log(`  Mode: ${dryRun ? 'DRY RUN' : verify ? 'VERIFY' : 'APPLY'} (best-effort features, required bundled prompt)`);
 console.log(`${'═'.repeat(55)}\n`);
@@ -590,8 +590,8 @@ try {
     const fallbackMatches = pentest['pentest-prompt-assembly'].fallbackMatches;
     if (fallbackMatches.length) promptFallbacks.push({ file, content, matches: fallbackMatches });
   }
-  if (!astMatches.get('pentest-prompt-assembly').length && !astPatched.has('pentest-prompt-assembly') && promptFallbacks.length) {
-    astMatches.set('pentest-prompt-assembly', promptFallbacks);
+  if (promptFallbacks.length) {
+    astMatches.get('pentest-prompt-assembly').push(...promptFallbacks);
     astPresent.add('pentest-prompt-assembly');
   }
 } catch (error) {
@@ -642,7 +642,7 @@ for (const p of [...patches.filter(p => p.ast), ...patches.filter(p => !p.ast)])
       continue;
     }
     if (promptRequired && PENTEST_REQUIRED.has(p.id)) {
-      console.log(`  ❌ ${p.name} (required prompt injection hook did not match — Claude Code changed)`);
+      console.log(`  ❌ ${p.name} (required application prompt hook did not match — Claude Code changed)`);
       failed++;
       continue;
     }
@@ -770,10 +770,15 @@ if (!dryRun && !verify && applied > 0) {
 }
 
 if (promptRequired && !dryRun && !verify) {
-  const hasHook = Object.values(files).some(content => content.includes('rewritePromptAssembly') &&
-    scanPentestPatches(content)['pentest-prompt-assembly'].patched);
-  if (!hasHook) {
-    console.error('Required system-prompt.md injection hook is missing after rewriting; source files were not changed.');
+  const hooks = new Set();
+  for (const content of Object.values(files)) {
+    const scanned = scanPentestPatches(content);
+    for (const id of PENTEST_REQUIRED) if (scanned[id].patched) hooks.add(id);
+    if (hooks.size === PENTEST_REQUIRED.size) break;
+  }
+  const missing = [...PENTEST_REQUIRED].filter(id => !hooks.has(id));
+  if (missing.length) {
+    console.error(`Required application prompt hooks are missing after rewriting: ${missing.join(', ')}; source files were not changed.`);
     process.exit(1);
   }
 }

@@ -1,5 +1,7 @@
 'use strict';
 
+const encoder = new TextEncoder();
+
 function textParts(content, context) {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) throw new Error(context + ' must be text or content blocks');
@@ -98,7 +100,7 @@ function translateRequest(body, configuredEffort) {
 function estimateTokens(request) {
   var bytes = 0, mediaTokens = 0;
   function visit(value) {
-    if (typeof value === 'string') bytes += new TextEncoder().encode(value).length;
+    if (typeof value === 'string') bytes += encoder.encode(value).length;
     else if (Array.isArray(value)) value.forEach(visit);
     else if (value && typeof value === 'object') {
       if (value.type === 'image_url' && value.image_url) { mediaTokens += 1600; return; }
@@ -298,7 +300,6 @@ function startProxy(config) {
       }
 
       var reader = upstream.body.getReader(), iterator = translateStream(reader, request.model), cancelled = false;
-      var encoder = new TextEncoder();
       async function closeReader() { try { await reader.cancel(); } catch {} cleanup(); }
       var readable = new ReadableStream({
         async pull(controller) {

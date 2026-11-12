@@ -35,7 +35,7 @@ err()   { echo -e "  ${RED}✗${NC} $1" >&2; }
 dim()   { echo -e "  ${DIM}$1${NC}"; }
 
 echo ""
-echo -e "${BOLD}  ClawGod Installer${NC}"
+echo -e "${BOLD}  ClawGod_Y Installer${NC}"
 echo ""
 
 if [ "$UNINSTALL" = "1" ]; then
@@ -44,14 +44,14 @@ if [ "$UNINSTALL" = "1" ]; then
     [ -z "$DIR" ] && continue
     if [ -f "$DIR/clawgod" ] && grep -q "clawgod" "$DIR/clawgod" 2>/dev/null; then
       rm -f "$DIR/clawgod"
-      info "Removed ClawGod launcher ($DIR/clawgod)"
+      info "Removed ClawGod_Y launcher ($DIR/clawgod)"
     fi
   done
   rm -rf "$CLAWGOD_DIR/node_modules" "$CLAWGOD_DIR/vendor" "$CLAWGOD_DIR/bun-runtime" "$CLAWGOD_DIR/cli.original.js" "$CLAWGOD_DIR/cli.original.js.bak" "$CLAWGOD_DIR/cli.original.cjs" "$CLAWGOD_DIR/cli.original.cjs.bak" "$CLAWGOD_DIR/source-backup.json" "$CLAWGOD_DIR/cli.js" "$CLAWGOD_DIR/cli.cjs" "$CLAWGOD_DIR/patch.mjs" "$CLAWGOD_DIR/ast-patches.mjs" "$CLAWGOD_DIR/pentest-patches.mjs" "$CLAWGOD_DIR/pentest-scanners.mjs" "$CLAWGOD_DIR/pentest-trimming.mjs" "$CLAWGOD_DIR/pentest-policy-text.mjs" "$CLAWGOD_DIR/pentest-pruner.mjs" "$CLAWGOD_DIR/lean-mode.cjs" "$CLAWGOD_DIR/lean-settings.json" "$CLAWGOD_DIR/.lean-disabled" "$CLAWGOD_DIR/.lean-max" "$CLAWGOD_DIR/acorn.mjs" "$CLAWGOD_DIR/acorn.LICENSE" "$CLAWGOD_DIR/patch.js" "$CLAWGOD_DIR/extract-natives.mjs" "$CLAWGOD_DIR/post-process.mjs" "$CLAWGOD_DIR/repatch.mjs" "$CLAWGOD_DIR/startup-check.cjs" "$CLAWGOD_DIR/startup-check.log" "$CLAWGOD_DIR/openai-proxy.cjs" "$CLAWGOD_DIR/feature-gates.cjs" "$CLAWGOD_DIR/runtime-helpers.cjs" "$CLAWGOD_DIR/bun-ant-shim.cjs" "$CLAWGOD_DIR/clawgod-import" "$CLAWGOD_DIR/claude.staged" "$CLAWGOD_DIR/claude.fallback" "$CLAWGOD_DIR/.source-version"
   rm -rf "$CLAWGOD_DIR/bunfs" "$CLAWGOD_DIR/pathmap.json"
   rm -f "$CLAWGOD_DIR/patch-registry.mjs" "$CLAWGOD_DIR/system-prompt.md" "$CLAWGOD_DIR/probe-tools.log" "$CLAWGOD_DIR/.clawgod-version" "$CLAWGOD_DIR/compile-runtime.mjs" "$CLAWGOD_DIR/.compiled-runtime" "$CLAWGOD_DIR/.compiled-runtime-cache.json" "$CLAWGOD_DIR"/cli.compiled-*
   hash -r 2>/dev/null
-  info "ClawGod uninstalled"
+  info "ClawGod_Y uninstalled"
   echo ""
   warn "  Restart your terminal or run: hash -r"
   echo ""
@@ -83,11 +83,9 @@ else
     exit 1
   fi
 fi
-info "Bun: $($BUN_BIN --version)"
-
-
 MIN_BUN_VERSION="1.3.14"
 BUN_VERSION_RAW=$($BUN_BIN --version 2>/dev/null | head -1)
+info "Bun: $BUN_VERSION_RAW"
 BUN_VERSION_NUM=$(echo "$BUN_VERSION_RAW" | sed 's/-.*//')
 if [ -z "$BUN_VERSION_NUM" ] \
    || [ "$(printf '%s\n%s\n' "$BUN_VERSION_NUM" "$MIN_BUN_VERSION" | sort -V | head -1)" != "$MIN_BUN_VERSION" ]; then
@@ -111,7 +109,7 @@ fi
 
 if ! command -v rg &>/dev/null; then
   warn "ripgrep (rg) is required but not found in PATH."
-  warn "  Claude Code's Grep tool will not function without it."
+  warn "  ClawGod_Y's Grep tool will not function without it."
   warn ""
   case "$(uname -s)" in
     Darwin) warn "  Install: brew install ripgrep" ;;
@@ -347,7 +345,7 @@ if [ "$patch_status" -ne 0 ]; then
     warn "No previous working installation found to roll back."
   fi
   warn ""
-  warn "The selected Claude Code build (${NATIVE_BIN_LABEL:-unknown}) is not supported by this ClawGod release."
+  warn "The selected Claude Code build (${NATIVE_BIN_LABEL:-unknown}) is not supported by this ClawGod_Y release."
   warn "Optional unmatched patches are already skipped; required prompt injection and source errors cannot be skipped."
   warn "Rerun the installer with a compatible Claude Code version."
   exit "$patch_status"
@@ -542,14 +540,14 @@ rm -f "$BIN_DIR/claude.orig" || true
 hash -r 2>/dev/null
 
 echo ""
-echo -e "  ${BOLD}${GREEN}ClawGod installed!${NC}"
+echo -e "  ${BOLD}${GREEN}ClawGod_Y installed!${NC}"
 echo ""
-dim "  clawgod           — Start patched Claude Code (pentest build)"
+dim "  clawgod           — Start ClawGod_Y"
 dim "  claude            — Original unpatched Claude Code (untouched)"
 echo ""
-dim "  Claude Code version: $NATIVE_BIN_LABEL"
-dim "  clawgod --version   — Query the Claude Code version"
-dim "  clawgod --uninstall — Uninstall ClawGod"
+dim "  ClawGod_Y runtime version: $NATIVE_BIN_LABEL"
+dim "  clawgod --version   — Query the ClawGod_Y runtime version"
+dim "  clawgod --uninstall — Uninstall ClawGod_Y"
 dim "  Vanilla 'claude update' keeps working and updates only the original."
 echo ""
 dim "  If 'clawgod' is not found, restart your terminal or run: hash -r"

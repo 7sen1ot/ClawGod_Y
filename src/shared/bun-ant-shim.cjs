@@ -181,14 +181,14 @@ class CellSegmenter {
     const pairs = [];
     for (const entry of this._style.values()) pairs.push(entry.code + '\u0000' + entry.close);
     pairs.sort();
-    const codes = pairs.map((pair) => pair.slice(0, pair.indexOf('\u0000')));
-    const closes = pairs.map((pair) => pair.slice(pair.indexOf('\u0000') + 1));
-    const key = codes.length + '|' + codes.join('\u0000') + '|' + closes.join('\u0000');
+    const codes = pairs.map((pair) => pair.slice(0, pair.indexOf('\u0000'))).join('\u0000');
+    const closes = pairs.map((pair) => pair.slice(pair.indexOf('\u0000') + 1)).join('\u0000');
+    const key = pairs.length + '|' + codes + '|' + closes;
     let id = this._styleIndex.get(key);
     if (id === undefined) {
       id = this.sgrKeys.length;
-      this.sgrKeys.push(codes.join('\u0000'));
-      this.sgrCloseKeys.push(closes.join('\u0000'));
+      this.sgrKeys.push(codes);
+      this.sgrCloseKeys.push(closes);
       this._styleIndex.set(key, id);
     }
     return id;
@@ -207,7 +207,7 @@ class CellSegmenter {
   segment(text, cells, runs  ) {
     const source = typeof text === 'string' ? text : text == null ? '' : String(text);
     const items = [];
-    let link = 0;
+    let link = 0, style;
     const styleSnapshot = new Map(this._style);
 
     const push = (grapheme) => {
@@ -216,7 +216,7 @@ class CellSegmenter {
         graphemeIndex: this._graphemeId(grapheme),
         tab: isTab,
         width: isTab ? 0 : graphemeWidth(grapheme, this.ambiguousIsNarrow),
-        style: this._styleId(),
+        style,
         link,
       });
     };
@@ -231,6 +231,7 @@ class CellSegmenter {
         link = chunk.value ? this._uriIndexFor(chunk.value) : 0;
         continue;
       }
+      style = this._styleId();
       if (segmenter) {
         for (const entry of segmenter.segment(chunk.value)) push(entry.segment);
       } else {

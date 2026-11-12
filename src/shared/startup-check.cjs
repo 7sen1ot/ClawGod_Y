@@ -13,7 +13,7 @@ if (!bun || !cli || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs >
   const logPath = join(dirname(cli), probeTools ? 'probe-tools.log' : 'startup-check.log');
   const limit = 1024 * 1024;
   let output = Buffer.alloc(0), truncated = false, finished = false;
-  const versionPattern = /^\d+\.\d+\.\d+[^\r\n]*\(Claude Code\)\s*$/;
+  const versionPattern = /^\d+\.\d+\.\d+[^\r\n]*\(ClawGod_Y\)\s*$/;
   let stdoutLine = '', sawVersion = false;
   const args = probeTools ? ['--probe-tools'] : ['--version'];
   let compiled;
@@ -74,14 +74,14 @@ if (!bun || !cli || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs >
 
   child.on('error', error => finish(1, 'Could not start ' + (compiled ? 'compiled runtime' : 'Bun') + ': ' + error.message));
   child.on('close', (code, signal) => {
-    if (code !== 0) finish(code || 1, 'Patched Claude startup failed' + (signal ? ' (' + signal + ')' : ' (exit ' + code + ')') + '.');
+    if (code !== 0) finish(code || 1, 'ClawGod_Y startup failed' + (signal ? ' (' + signal + ')' : ' (exit ' + code + ')') + '.');
     else if (probeTools) {
       const receipt = /^\[clawgod\] probe-tools ok: [1-9]\d* tools, [1-9]\d* commands\r?$/m;
       if (!receipt.test(output.toString('utf8'))) finish(1, 'Tool/command verification did not produce a success receipt.');
       else finish(0);
     }
     else if (!sawVersion && !versionPattern.test(stdoutLine))
-      finish(1, 'Bun exited successfully but did not print a Claude Code version.');
+      finish(1, 'Bun exited successfully but did not print a ClawGod_Y runtime version.');
     else finish(0);
   });
 }

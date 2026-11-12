@@ -18,7 +18,7 @@ function Write-Warn($msg) { Write-Host "  ! $msg" -ForegroundColor Yellow }
 function Write-Dim($msg)  { Write-Host "  $msg" -ForegroundColor DarkGray }
 
 Write-Host ""
-Write-Host "  ClawGod Installer" -ForegroundColor White -NoNewline
+Write-Host "  ClawGod_Y Installer" -ForegroundColor White -NoNewline
 Write-Host " (Windows)" -ForegroundColor DarkGray
 Write-Host ""
 
@@ -26,7 +26,7 @@ if ($Uninstall) {
     $clawgodCmd = Join-Path $BinDir "clawgod.cmd"
     if (Test-Path $clawgodCmd) {
         Remove-Item -Force $clawgodCmd
-        Write-OK "Removed clawgod launcher"
+        Write-OK "Removed ClawGod_Y launcher"
     }
     foreach ($leftover in @("claude.orig.cmd", "claude.orig.exe")) {
         $p = Join-Path $BinDir $leftover
@@ -43,7 +43,7 @@ if ($Uninstall) {
         ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
     Get-ChildItem -LiteralPath $ClawDir -Filter "claude.fallback.*.exe" -File -ErrorAction SilentlyContinue |
         ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
-    Write-OK "ClawGod uninstalled"
+    Write-OK "ClawGod_Y uninstalled"
     Write-Host ""
     Write-Dim "Restart your terminal for changes to take effect."
     Write-Host ""
@@ -84,22 +84,14 @@ if ($BunBin -match '\.ps1$') {
     $resolved = $null
     $bunDir = Split-Path $BunBin
 
-    $cand = Join-Path $bunDir "node_modules\bun\bin\bun.exe"
-    if (Test-Path $cand) { $resolved = $cand }
-
-    if (-not $resolved) {
-        $cand = Join-Path $env:USERPROFILE ".bun\bin\bun.exe"
-        if (Test-Path $cand) { $resolved = $cand }
-    }
-
-    if (-not $resolved) {
-        $cand = Join-Path $env:USERPROFILE "scoop\shims\bun.exe"
-        if (Test-Path $cand) { $resolved = $cand }
-    }
-
-    if (-not $resolved) {
-        $chocoBin = Join-Path $env:ProgramData "chocolatey\bin\bun.exe"
-        if (Test-Path $chocoBin) { $resolved = $chocoBin }
+    foreach ($location in @(
+        @($bunDir, "node_modules\bun\bin\bun.exe"),
+        @($env:USERPROFILE, ".bun\bin\bun.exe"),
+        @($env:USERPROFILE, "scoop\shims\bun.exe"),
+        @($env:ProgramData, "chocolatey\bin\bun.exe")
+    )) {
+        $cand = Join-Path $location[0] $location[1]
+        if (Test-Path $cand) { $resolved = $cand; break }
     }
     if ($resolved) {
         Write-Dim "Resolved bun.ps1 -> $resolved"
@@ -109,15 +101,13 @@ if ($BunBin -match '\.ps1$') {
         Write-Warn "Consider installing Bun via bun.sh/install.ps1 for a native bun.exe."
     }
 }
-Write-OK "Bun: $(& $BunBin --version)"
-
-
 $MinBunVersion = '1.3.14'
 $BunVersionRaw = ''
 try {
     $bunOut = & $BunBin --version 2>$null | Select-Object -First 1
     if ($bunOut) { $BunVersionRaw = "$bunOut".Trim() }
 } catch {}
+Write-OK "Bun: $BunVersionRaw"
 $BunVersionNum = ($BunVersionRaw -split '-')[0]
 $BunVersionOk = $false
 try {
@@ -153,7 +143,7 @@ try {
 }
 catch {
     Write-Err "ripgrep (rg) is required but not found in PATH."
-    Write-Err "  Claude Code's Grep tool will not function without it."
+    Write-Err "  ClawGod_Y's Grep tool will not function without it."
     Write-Err ""
     Write-Err "  Install: winget install BurntSushi.ripgrep.MSVC"
     Write-Err "       or: scoop install ripgrep"
@@ -442,7 +432,7 @@ if ($patchExitCode -ne 0) {
         Write-Err "No previous working installation found to roll back."
     }
     Write-Err ""
-    Write-Err "The selected Claude Code build ($NativeBinLabel) is not supported by this ClawGod release."
+    Write-Err "The selected Claude Code build ($NativeBinLabel) is not supported by this ClawGod_Y release."
     Write-Err "Optional unmatched patches are already skipped; required prompt injection and source errors cannot be skipped."
     Write-Err "Rerun the installer with a compatible Claude Code version."
     exit $exitCode
@@ -703,14 +693,14 @@ Get-ChildItem -LiteralPath $ClawDir -Filter "claude.fallback.*.exe" -File -Error
     ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
 
 Write-Host ""
-Write-Host "  ClawGod installed!" -ForegroundColor Green
+Write-Host "  ClawGod_Y installed!" -ForegroundColor Green
 Write-Host ""
-Write-Dim "  clawgod           -- Start patched Claude Code (pentest build)"
+Write-Dim "  clawgod           -- Start ClawGod_Y"
 Write-Dim "  claude            -- Original unpatched Claude Code (untouched)"
 Write-Host ""
-Write-Dim "  Claude Code version: $NativeBinLabel"
-Write-Dim "  clawgod --version   -- Query the Claude Code version"
-Write-Dim "  clawgod --uninstall -- Uninstall ClawGod"
+Write-Dim "  ClawGod_Y runtime version: $NativeBinLabel"
+Write-Dim "  clawgod --version   -- Query the ClawGod_Y runtime version"
+Write-Dim "  clawgod --uninstall -- Uninstall ClawGod_Y"
 Write-Dim "  Vanilla 'claude update' keeps working and updates only the original."
 Write-Host ""
 Write-Dim "  If 'clawgod' is not found, restart your terminal."

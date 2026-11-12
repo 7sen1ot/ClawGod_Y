@@ -91,7 +91,7 @@ function sourceRecord(code) {
 
 export function hasPatchAnchors(code, anchors) {
   const matches = source => anchors.some(group =>
-    (Array.isArray(group) ? group : [group]).every(token => source.includes(token)));
+    Array.isArray(group) ? group.every(token => source.includes(token)) : source.includes(group));
   if (matches(code)) return true;
   // Normalize only the prefilter; edits still use original AST ranges.
   const record = sourceRecord(code);
@@ -149,6 +149,24 @@ export function walk(root, visit) {
       }
     }
   }
+}
+
+export function contains(root, predicate) {
+  let found = false;
+  walk(root, node => {
+    if (found) return false;
+    if (predicate(node)) { found = true; return false; }
+  });
+  return found;
+}
+
+export function containsOwn(root, predicate) {
+  let found = false;
+  walk(root, node => {
+    if (found || node !== root && functionNode(node)) return false;
+    if (predicate(node)) { found = true; return false; }
+  });
+  return found;
 }
 
 function walkScope(root, visit) {
@@ -424,26 +442,21 @@ export function createPatchContext(tree, code, loadImport = noImports) {
 }
 
 function hasGate(node, id) {
-  let found = false;
-  walk(node, child => {
-    if (member(child, id) && member(child.object, '__clawgodPatches') &&
-        child.object.object.name === 'globalThis') found = true;
-    if (child.type === 'CallExpression' && member(child.callee, 'enablePredicate') &&
-        member(child.callee.object, '__clawgodHelpers') &&
-        child.callee.object.object.name === 'globalThis' && literal(child.arguments[1], id)) found = true;
-  });
-  return found;
+  return contains(node, child =>
+    member(child, id) && member(child.object, '__clawgodPatches') &&
+      child.object.object.name === 'globalThis' ||
+    child.type === 'CallExpression' && member(child.callee, 'enablePredicate') &&
+      member(child.callee.object, '__clawgodHelpers') &&
+      child.callee.object.object.name === 'globalThis' && literal(child.arguments[1], id));
 }
 
 function hasRemoteSettingsContext(node) {
-  let found = false;
-  walk(node, child => {
+  return contains(node, child => {
     const text = staticText(child);
     const strings = text !== undefined ? [text]
       : child.type === 'TemplateLiteral' ? child.quasis.map(quasi => quasi.value.cooked ?? '') : [];
-    if (strings.some(value => value.includes('Remote settings:') || value.includes('remote-settings.json'))) found = true;
+    return strings.some(value => value.includes('Remote settings:') || value.includes('remote-settings.json'));
   });
-  return found;
 }
 
 export function scanAstPatches(code, readTree = () => parsePatchSource(code), readContext) {
