@@ -9228,7 +9228,7 @@ function scanSessionPaths(tree, code, context, results, edit) {
         const id = 'instruction-files-off';
         results[id].present = true;
         for (const { argument } of returns) edit(id, argument,
-          `globalThis.__clawgodHelpers.instructionFileFilter(/*clawgod:${id}*/${code.slice(argument.start, argument.end)})`);
+          `(globalThis.__clawgodHelpers.instructionFileFilter(/*clawgod:${id}*/${code.slice(argument.start, argument.end)}))`);
       }
     }
     if (functionNode(node) && node.body.type === 'BlockStatement' &&

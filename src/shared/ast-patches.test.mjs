@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { runInNewContext } from 'node:vm';
 import { AST_PATCH_IDS, scanAstPatches, applyAstEdits, parsePatchSource } from './ast-patches.mjs';
 import { requiredRuntime } from './required-runtime.fixture.mjs';
+import { instructionFileFilter } from './runtime-helpers.cjs';
 
 const source = `
 function projects(){return paths.join(root,'projects')}
@@ -46,6 +47,13 @@ assert.ok(patched.includes("const decoy='function userType(){return\"external\"}
 assert.ok(patched.includes('// function userType(){return"external"} name:"ultraplan"'));
 assert.ok(patched.includes("const neighbor={name:'other',isEnabled:()=>false};"));
 assert.ok(patched.includes('return this.environmentOverridesParsed=true,this.environmentOverrides;}};'));
+
+const instructionFilter = runInNewContext(`${patched};instructions({claudeMdExcludes:['excluded.md']})`, {
+  __clawgodHelpers: { instructionFileFilter },
+});
+assert.equal(instructionFilter('/workspace/CLAUDE.md', 'Project'), true);
+assert.equal(instructionFilter('/workspace/.claude/rules/style.md', 'Project'), false);
+assert.equal(instructionFilter('excluded.md', 'Managed'), true);
 
 for (const toggle of [undefined, true, false]) {
   let calls = 0;
