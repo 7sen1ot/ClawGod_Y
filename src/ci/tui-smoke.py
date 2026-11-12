@@ -189,7 +189,7 @@ def run_case(args, name, command, shim, expect_error=False):
                 private = "?" if query.group(1) else ""
                 terminal.write(f"\x1b[{private}{screen.cursor.y + 1};{screen.cursor.x + 1}R")
             seen_cursor_queries = len(cursor_queries)
-            header_seen |= "Claude Code" in visible and args.version in visible
+            header_seen |= ("Claude Code" if name == "native" else "ClawGod_Y") in visible and args.version in visible
             if not expect_error and header_seen and "❯" in visible and typed_at is None:
                 terminal.write(PROMPT)
                 typed_at = now

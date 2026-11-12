@@ -21,11 +21,11 @@ function check(code, options = {}) {
   fs.writeFileSync(cli, code);
   return spawnSync(process.execPath, [checker, process.execPath, cli], { encoding: 'utf8', timeout: 15000, maxBuffer: 2 * 1024 * 1024, env, ...options });
 }
-const version = '2.1.285 (Claude Code)';
+const version = '2.1.285 (ClawGod_Y)';
 try {
   let r = check(`if(process.argv[2]!=='--version')process.exit(9); console.log(${JSON.stringify(version)});`);
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /2\.1\.285 \(Claude Code\)/);
+  assert.match(r.stdout, /2\.1\.285 \(ClawGod_Y\)/);
   assert.equal(fs.readFileSync(log, 'utf8'), version + '\n');
   r = check(`if(require('fs').readFileSync(0,'utf8')!=='')process.exit(8); console.log(${JSON.stringify(version)});`);
   assert.equal(r.status, 0, r.stderr);
@@ -36,10 +36,10 @@ try {
   r = check('console.error("Expected CommonJS module to have a function wrapper"); process.exit(1);');
   assert.equal(r.status, 1);
   assert.match(r.stdout, /Expected CommonJS module to have a function wrapper/);
-  for (const output of ['', 'console.log("unrelated 2.1.285 output");']) {
+  for (const output of ['', 'console.log("unrelated 2.1.285 output");', 'console.log("2.1.285 (Claude Code)");']) {
     r = check(output);
     assert.equal(r.status, 1);
-    assert.match(r.stderr, /did not print a Claude Code version/);
+    assert.match(r.stderr, /did not print a ClawGod_Y runtime version/);
   }
   r = check(`console.error(${JSON.stringify(version)});`);
   assert.equal(r.status, 1, 'A version quoted only in stderr is not successful --version output');
@@ -53,7 +53,7 @@ try {
     assert.equal(r.status, expected, r.stdout + r.stderr);
     if (expected) assert.match(r.stderr, /did not produce a success receipt/);
   }
-  r = check(`process.stdout.write('2.1.'); setTimeout(()=>{console.error('interleaved warning');process.stdout.write('285 (Claude Code)');},20);`);
+  r = check(`process.stdout.write('2.1.'); setTimeout(()=>{console.error('interleaved warning');process.stdout.write('285 (ClawGod_Y)');},20);`);
   assert.equal(r.status, 0, 'stderr must not split stdout version detection');
   r = check(`console.log(${JSON.stringify(version)}); process.stderr.write('x'.repeat(1200000));`);
   assert.equal(r.status, 0, 'bounded diagnostic logs must not discard a valid earlier version');

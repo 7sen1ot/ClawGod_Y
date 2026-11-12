@@ -27,12 +27,12 @@ Write-Host 'launcher-step-reached'
 '@
     Set-Content $scriptPath ($prefix + "`r`n" + $section + "`r`n" + $suffix) -Encoding ASCII
     $cases = @(
-        @{ Code = 'console.log(process.argv[2]==="--probe-tools"?"[clawgod] probe-tools ok: 1 tools, 1 commands":"2.1.285 (Claude Code)");'; Exit = 0; Expected = 'Bun loads cli.original.cjs' },
-        @{ Code = 'console.error("fixture stderr"); console.log(process.argv[2]==="--probe-tools"?"[clawgod] probe-tools ok: 1 tools, 1 commands":"2.1.285 (Claude Code)");'; Exit = 0; Expected = 'Bun loads cli.original.cjs' },
+        @{ Code = 'console.log(process.argv[2]==="--probe-tools"?"[clawgod] probe-tools ok: 1 tools, 1 commands":"2.1.285 (ClawGod_Y)");'; Exit = 0; Expected = 'Bun loads cli.original.cjs' },
+        @{ Code = 'console.error("fixture stderr"); console.log(process.argv[2]==="--probe-tools"?"[clawgod] probe-tools ok: 1 tools, 1 commands":"2.1.285 (ClawGod_Y)");'; Exit = 0; Expected = 'Bun loads cli.original.cjs' },
         @{ Code = 'console.error("fixture startup failed"); process.exit(7);'; Exit = 7; Expected = 'fixture startup failed' },
-        @{ Code = 'console.log("2.1.285 (Claude Code)"); setInterval(()=>{},1000);'; Exit = 124; Expected = 'timed out after 1200 ms' },
+        @{ Code = 'console.log("2.1.285 (ClawGod_Y)"); setInterval(()=>{},1000);'; Exit = 124; Expected = 'timed out after 1200 ms' },
         @{ Code = 'console.error("Expected CommonJS module to have a function wrapper"); process.exit(1);'; Exit = 1; Expected = 'bun upgrade --canary' },
-        @{ Code = ''; Exit = 1; Expected = 'did not print a Claude Code version' }
+        @{ Code = ''; Exit = 1; Expected = 'did not print a ClawGod_Y runtime version' }
     )
     foreach ($case in $cases) {
         Set-Content (Join-Path $root 'cli.cjs') $case.Code -Encoding ASCII

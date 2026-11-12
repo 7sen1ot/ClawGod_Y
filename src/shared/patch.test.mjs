@@ -1,5 +1,5 @@
 
-import { classifierTimeoutFloor as floor } from './runtime-helpers.cjs';
+import { classifierTimeoutFloor as floor, selectApplicationPrompt, filterDefaultPromptSections } from './runtime-helpers.cjs';
 import assert from 'node:assert/strict';
 import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -229,6 +229,15 @@ try {
     'return[...defaultSystemPrompt.slice(0,index),...split(appendSystemPrompt),...defaultSystemPrompt.slice(index+1)]}';
   const legacy = 'function legacy({customSystemPrompt,appendSystemPrompt,defaultSystemPrompt}){' +
     'return{prompt:defaultSystemPrompt,servesDefault:true}}';
+  const authority = {
+    base: 'function select(custom,fallback){return typeof custom==="string"?split(custom):Array.isArray(custom)?custom:fallback}',
+    defaults: 'function defaults(sections,excluded){return sections.filter(section=>' +
+      '(section.scope==="shared"||section.scope==="session")&&section.text!==excluded)}',
+    sections: 'function sections(lean){return lean?[["lean_body","Combined."]]:' +
+      '[["intro","Host identity."],["doing_tasks","Host workflow."],["tools","Tool protocol."],["tone","Host style."]]}',
+    context: 'function context({customSystemPrompt,tools,mainLoopModel}){' +
+      'return{defaultSystemPrompt:customSystemPrompt?[]:["Runtime."],userContext:{cwd:"/fixture"},systemContext:{model:mainLoopModel}}}',
+  };
   const run = () => spawnSync(process.execPath, [join(promptDir, 'patch.mjs')], {
     encoding: 'utf8', timeout: 30000,
   });
@@ -239,10 +248,13 @@ try {
     const fallback = graph ? join(promptDir, 'bunfs/legacy.js') : entry;
     const paths = graph ? [entry, target, fallback] : [entry];
     const readSources = () => Object.fromEntries(paths.map(path => [path, readFileSync(path, 'utf8')]));
-    for (const scenario of ['primary', 'fallback', 'missing']) {
-      const primarySource = scenario === 'primary' ? central :
-        scenario === 'missing' ? 'function userType(){return"external"}' : '';
-      const fallbackSource = scenario === 'missing' ? '' : legacy;
+    for (const scenario of ['primary', 'fallback', 'missing', ...Object.keys(authority).map(id => `missing:${id}`)]) {
+      const requiredSource = Object.entries(authority).filter(([id]) => scenario !== `missing:${id}`)
+        .map(([, source]) => source).join('\n');
+      const primarySource = scenario === 'missing' ? 'function userType(){return"external"}' :
+        scenario === 'fallback' ? '' : central + '\n' + requiredSource;
+      const fallbackSource = scenario === 'missing' ? '' : legacy +
+        (scenario === 'fallback' ? '\n' + requiredSource : '');
       if (graph) {
         writeFileSync(entry, '');
         writeFileSync(target, primarySource);
@@ -252,9 +264,9 @@ try {
       const result = run();
       const label = `${graph ? 'graph' : 'bundle'}: ${scenario}`;
       assert.ok(Number.isInteger(result.status), result.error?.message || label);
-      if (scenario === 'missing') {
+      if (scenario.startsWith('missing')) {
         assert.notEqual(result.status, 0, label);
-        assert.match(result.stdout, /required prompt injection hook did not match/);
+        assert.match(result.stdout, /required application prompt hook did not match/);
         assert.deepEqual(readSources(), before,
           `${label}: a required hook failure must not partially write other patches`);
         continue;
@@ -263,23 +275,37 @@ try {
       const patched = readSources();
       let injections = 0;
       const functions = runInNewContext(`${patched[target]}\n${graph ? patched[fallback] : ''}\n` +
-        '({combine:typeof combine==="function"?combine:undefined,legacy})', {
+        '({combine:typeof combine==="function"?combine:undefined,legacy,select,defaults,sections,context})', {
         split: value => value ? [value] : [],
-        __clawgodAssembly: {},
-        __clawgodHelpers: { rewritePromptAssembly: sections => {
+        __clawgodAssembly: { customPrompt: 'Fixture rules.', requireCustomPrompt: true },
+        __clawgodHelpers: { selectApplicationPrompt, filterDefaultPromptSections, rewritePromptAssembly: sections => {
           injections++;
           return ['Fixture injected.', ...sections];
         } },
       });
       if (scenario === 'primary') {
-        assert.ok(patched[fallback].includes(legacy), `${label}: primary matching must suppress legacy fallback`);
+        assert.match(patched[fallback], /rewritePromptAssembly/, `${label}: legacy entry points must also be covered`);
         assert.deepEqual(Array.from(functions.combine(['Header.'], 'Append.')), ['Fixture injected.', 'Header.', 'Append.']);
-        assert.deepEqual(Array.from(functions.legacy({ defaultSystemPrompt: ['Header.'] }).prompt), ['Header.']);
+        assert.deepEqual(Array.from(functions.legacy({ defaultSystemPrompt: ['Header.'] }).prompt), ['Fixture injected.', 'Header.']);
       } else {
         assert.deepEqual(Array.from(functions.legacy({ defaultSystemPrompt: ['Header.'] }).prompt), ['Fixture injected.', 'Header.']);
         assert.match(result.stdout, /1 legacy-assembly/);
       }
-      assert.equal(injections, 1, `${label}: inject exactly once at the selected assembly boundary`);
+      assert.equal(injections, scenario === 'primary' ? 2 : 1, `${label}: each assembly entry point injects once`);
+      const selected = functions.select('Custom override.', ['Tool protocol.']);
+      assert.match(selected[0], /# Application rules\nFixture rules\./);
+      assert.deepEqual(selected.slice(1), ['Tool protocol.']);
+      const kept = functions.defaults([
+        { id: 'intro', scope: 'shared', text: 'Host identity.' },
+        { id: 'tools', scope: 'shared', text: 'Tool protocol.' },
+        { id: 'runtime', scope: 'session', text: 'Runtime.' },
+      ], 'Excluded.');
+      assert.deepEqual(Array.from(kept, section => section.id), ['tools', 'runtime']);
+      assert.deepEqual(Array.from(functions.sections(true), section => section[0]), ['intro', 'doing_tasks', 'tools', 'tone']);
+      const context = functions.context({ customSystemPrompt: 'Custom override.', tools: [], mainLoopModel: 'fixture-model' });
+      assert.deepEqual(Array.from(context.defaultSystemPrompt), ['Runtime.']);
+      assert.equal(context.userContext.cwd, '/fixture');
+      assert.equal(context.systemContext.model, 'fixture-model');
       const repeated = run();
       assert.equal(repeated.status, 0, repeated.stderr);
       assert.deepEqual(readSources(), patched, `${label}: repatching is idempotent`);

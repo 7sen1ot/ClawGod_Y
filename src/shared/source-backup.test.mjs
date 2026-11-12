@@ -91,7 +91,7 @@ try {
     for (const args of [[], ['--dry-run']]) {
       const failed = run(...args);
       assert.equal(failed.status, 1);
-      assert.match(failed.stdout, /required prompt injection hook did not match/);
+      assert.match(failed.stdout, /required application prompt hook did not match/);
       assert.equal(readFileSync(target, 'utf8'), before);
       assert.equal(existsSync(entry + '.bak'), false);
       if (graph) assert.equal(readFileSync(join(dir, 'bunfs/colors.mjs'), 'utf8'), colors);

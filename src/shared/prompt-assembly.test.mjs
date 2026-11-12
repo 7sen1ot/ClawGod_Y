@@ -1,59 +1,60 @@
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { rewritePromptAssembly } from './runtime-helpers.cjs';
+import { rewritePromptAssembly, selectApplicationPrompt, filterDefaultPromptSections } from './runtime-helpers.cjs';
 
 const MARK = '<!-- clawgod:custom-prompt -->';
 const opts = prompt => ({ customPrompt: prompt, stripMemory: true });
 
 {
-  const prompt = 'ROLE: senior operator.\n\nNever mention the host.';
+  const prompt = 'Custom application rules.';
   const sections = [
-    'Header.\n' + prompt + '\nPrefer editing existing files to creating new ones.',
+    { id: 'intro', text: 'You are Claude Code, an interactive CLI tool.' },
+    { id: 'tone:shared', text: 'Host style.' },
+    { id: 'doing_tasks', text: 'Host workflow.' },
+    { id: 'tools', text: 'Tool protocol.' },
+    { id: 'runtime', text: 'Your working directory is /x.' },
+    { id: 'specialist', text: 'Review the specified changes.' },
+    { id: 'memory', text: 'Session memory.' },
+    { id: 'memory_static:shared', text: 'Static memory.' },
   ];
-  const out = rewritePromptAssembly(sections, opts(prompt));
-  assert.equal(out.length, 2);
-  assert.ok(out[0].startsWith(MARK));
-  assert.ok(!out[1].includes('ROLE: senior operator.'));
-  assert.ok(!out[1].includes('Never mention the host.'));
-  assert.ok(out[1].includes('Header.'));
-  assert.ok(out[1].includes('Prefer editing existing files to creating new ones.'));
-  assert.equal(out[1], 'Header.\n\nPrefer editing existing files to creating new ones.');
+  const kept = filterDefaultPromptSections(sections, opts(prompt));
+  assert.deepEqual(kept, sections.slice(3, 6));
+  const out = selectApplicationPrompt(kept.map(section => section.text), opts(prompt));
+  assert.ok(out[0].startsWith(MARK + '\n# Application identity\n'));
+  assert.match(out[0], /The application name is ClawGod_Y\./);
+  assert.ok(out[0].includes('# Application rules\n' + prompt));
+  assert.match(out[0], /# Supporting runtime and task context/);
+  assert.deepEqual(out.slice(1), kept.map(section => section.text));
+  assert.deepEqual(filterDefaultPromptSections(sections, { ...opts(prompt), stripMemory: false }), sections.slice(3));
 }
 {
   const prompt = 'ALPHA block one.\n\nBRAVO block two.';
-  const out = rewritePromptAssembly([prompt], opts(prompt));
+  const out = rewritePromptAssembly([prompt, MARK + '\nOutdated rules.'], opts(prompt));
   assert.equal(out.length, 1);
   assert.ok(out[0].startsWith(MARK));
+  assert.ok(out[0].includes('# Application rules\n' + prompt));
+  assert.ok(!out[0].includes('Outdated rules.'));
 }
 {
   const prompt = 'Line one of the role.\nSecond line of the role.';
   const variant = 'Line one   of the role.\n   Second line of the role.';
-  const out = rewritePromptAssembly(['Prefix.\n' + variant], opts(prompt));
-  assert.ok(!out[1].includes('of the role.'));
-  assert.ok(out[1].includes('Prefix.'));
+  const context = 'Quoted task context.\n' + variant;
+  const out = rewritePromptAssembly([context], opts(prompt));
+  assert.equal(out[1], context, 'Unmarked task context must not be scrubbed by text similarity');
 }
 
 {
-  const prompt = 'Custom role.';
-  const out = rewritePromptAssembly(
-    ['You are Claude Code, an interactive CLI tool.\nYour working directory is /x.'],
-    opts(prompt));
-  assert.equal(out.length, 1);
-  assert.ok(out[0].startsWith(MARK));
-}
-{
-  const prompt = 'Custom role.';
-  const out = rewritePromptAssembly(
-    ['You are Claude Code. Prefer editing existing files to creating new ones.'],
-    opts(prompt));
-  assert.equal(out.length, 1);
+  const options = opts('Custom role.');
+  assert.throws(() => filterDefaultPromptSections('not-an-array', options), /Unsupported default prompt sections/);
+  assert.throws(() => filterDefaultPromptSections([{ text: 'Missing source.' }], options), /missing its source ID/);
+  assert.throws(() => filterDefaultPromptSections([{ id: 'lean_body', text: 'Combined.' }], options), /not separated/);
 }
 
 {
   const prompt = 'Custom role.';
   const once = rewritePromptAssembly(
-    ['You are Claude Code. Prefer editing existing files to creating new ones.'],
+    ['Runtime context.'],
     opts(prompt));
   const twice = rewritePromptAssembly(once, opts(prompt));
   assert.deepEqual(twice, once);
@@ -63,10 +64,13 @@ const opts = prompt => ({ customPrompt: prompt, stripMemory: true });
   const sections = ['Keep this section.', 'And this one.'];
   const out = rewritePromptAssembly(sections, opts(''));
   assert.equal(out, sections);
+  assert.equal(filterDefaultPromptSections(sections, opts('')), sections);
 }
 {
   assert.equal(rewritePromptAssembly('not-an-array', opts('x')), 'not-an-array');
   assert.equal(rewritePromptAssembly(undefined, opts('x')), undefined);
+  assert.throws(() => rewritePromptAssembly(undefined, { ...opts('x'), requireCustomPrompt: true }), /unsupported assembly result/);
+  assert.throws(() => rewritePromptAssembly([], { ...opts('  '), requireCustomPrompt: true }), /application rules are empty/);
 }
 
 {
@@ -79,21 +83,21 @@ const opts = prompt => ({ customPrompt: prompt, stripMemory: true });
   assert.equal(out[1], duty);
   const embedded = rewritePromptAssembly(['Lead in.\n\n' + real + '\n\nTail out.'], opts(real));
   assert.equal(embedded.length, 2);
-  assert.ok(embedded[1].includes('Lead in.'));
-  assert.ok(embedded[1].includes('Tail out.'));
+  assert.equal(embedded[1], 'Lead in.\n\n' + real + '\n\nTail out.');
 }
 
 {
   const prompt = 'Custom role.';
-  const line = 'You are DeepSeek Harness, an AI coding assistant.\n\nPrefer editing existing files.';
-  const defaultOut = rewritePromptAssembly([line], opts(prompt));
-  assert.ok(!defaultOut[1].includes('DeepSeek Harness'));
-  const customOut = rewritePromptAssembly([line], {
+  const sections = [
+    { id: 'external_identity', text: '**You are DeepSeek Harness**, an AI coding assistant.' },
+    { id: 'specialist', text: 'Prefer editing existing files.' },
+  ];
+  assert.deepEqual(filterDefaultPromptSections(sections, opts(prompt)), sections);
+  const customOut = filterDefaultPromptSections(sections, {
     customPrompt: prompt, stripMemory: true,
-    identityMarkers: ['you are deepseek harness'],
+    identityMarkers: ['ＹＯＵ ARE DEEPSEEK HARNESS', 'you are deepseek harness', '', null],
   });
-  assert.ok(!customOut[1].includes('DeepSeek Harness'));
-  assert.ok(customOut[1].includes('Prefer editing existing files.'));
+  assert.deepEqual(customOut, [sections[1]]);
 }
 
-console.log('[prompt-assembly.test] duplicate scrub, residue drop, idempotence, custom markers ok');
+console.log('[prompt-assembly.test] source sections, application identity, context preservation, required rules and idempotence ok');

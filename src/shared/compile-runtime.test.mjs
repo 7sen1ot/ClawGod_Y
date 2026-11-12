@@ -27,7 +27,7 @@ try {
   writeFileSync(join(dir, 'bun-ant-shim.cjs'), '');
   writeFileSync(join(dir, 'system-prompt.md'), 'Fixture prompt.\n');
   const original = `// clawgod:probe-modules ["bunfs/probe.cjs"]
-if(['--version','-v'].includes(process.argv[2]))console.log('2.1.316 (Claude Code)');
+if(['--version','-v'].includes(process.argv[2]))console.log('2.1.316 (ClawGod_Y)');
 else console.log(JSON.stringify({args:process.argv.slice(2),text:require('fs').readFileSync(${JSON.stringify(join(dir, 'asset.txt'))},'utf8')}));`;
   writeFileSync(join(dir, 'cli.original.cjs'), original);
   writeFileSync(join(dir, 'asset.txt'), 'external text asset');

@@ -10430,6 +10430,7 @@ function scanCombinerWrap(tree, code, results, edit) {
         results[id].fallbackMatches.push({ start: target.start, end: target.end,
           replacement: `${property.shorthand ? key + ':' : ''}/*clawgod:pentest-prompt-assembly*/globalThis.__clawgodHelpers.rewritePromptAssembly(${original},globalThis.__clawgodAssembly)`,
           strategy: 'legacy-assembly' });
+        results[id].present = true;
       }
     }
     if (node.body.type === 'BlockStatement' && params.length >= 3 &&

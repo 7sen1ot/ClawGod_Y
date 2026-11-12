@@ -37,7 +37,7 @@ const payloads = {
     writeFileSync(new URL('./cli.original.cjs',import.meta.url),${JSON.stringify(`// clawgod:probe-modules ["cli.original.cjs"]
 if(process.env.CLAWGOD_FAIL_STAGE==='startup')throw new Error('fixture startup failure');
 if(process.argv[2]==='--probe-tools')globalThis.__clawgodTables={tools:[()=>[{name:'fixture'}]],commands:[()=>[{name:'fixture'}]]};
-else console.log(require('fs').readFileSync(require('path').join(__dirname,'.source-version'),'utf8').trim()+' (Claude Code)');`)});`,
+else console.log(require('fs').readFileSync(require('path').join(__dirname,'.source-version'),'utf8').trim()+' (ClawGod_Y)');`)});`,
   'patch.mjs': `import{writeFileSync}from'node:fs';if(process.env.CLAWGOD_FAIL_STAGE==='patch'&&!process.argv.includes('--capture-clean-source'))throw new Error('fixture patch failure');if(process.argv.includes('--capture-clean-source')||process.argv.includes('--capture-and-apply'))writeFileSync(new URL('./source-backup.json',import.meta.url),'{}');`,
   'compile-runtime.mjs': `import{rmSync}from'node:fs';rmSync(new URL('./.compiled-runtime',import.meta.url),{force:true});`,
   'npm-fetch.mjs': `import{mkdirSync,copyFileSync,writeFileSync}from'node:fs';import{join}from'node:path';
@@ -121,7 +121,7 @@ exec /bin/mv "$@"\n`);
     const result = run(args);
     succeeds(result);
     assert.equal(readFileSync(join(dir, '.source-version'), 'utf8').trim(), version);
-    assert.match(result.stdout, new RegExp('Claude Code version: ' + version.replaceAll('.', '\\.')));
+    assert.match(result.stdout, new RegExp('ClawGod_Y runtime version: ' + version.replaceAll('.', '\\.')));
     assert.ok(existsSync(cache), 'Successful install must save a local uninstaller');
     assert.ok(existsSync(join(dir, native)), 'Selected native binary must be retained even with an official claude on PATH');
     assert.ok(readFileSync(launcher, 'utf8').includes(windows ? 'CLAUDE_CODE_EXECPATH=%USERPROFILE%\\.clawgod\\claude.fallback.exe' : `CLAUDE_CODE_EXECPATH="${join(dir, native)}"`));
@@ -156,14 +156,14 @@ exec /bin/mv "$@"\n`);
     const result = run(['latest'], extra, true);
     assert.ok(Number.isInteger(result.status), result.error?.message || 'Installer did not exit normally');
     assert.notEqual(result.status, 0, `Installation must fail for ${JSON.stringify(extra)}:\n${result.stdout}${result.stderr}`);
-    assert.doesNotMatch(result.stdout, /ClawGod installed!/);
+    assert.doesNotMatch(result.stdout, /ClawGod_Y installed!/);
     for (const [name, content] of Object.entries(old)) assert.deepEqual(readFileSync(join(dir, name)), content, `Rollback failed for ${name}`);
     assert.deepEqual(readFileSync(launcher), oldLauncher, 'Failed publication must preserve the previous launcher');
     assert.equal(readFileSync(join(dir, 'cli.compiled-old'), 'utf8'), 'old compiled runtime');
     assert.equal(existsSync(join(dir, windows ? 'claude.staged.exe' : 'claude.staged')), false);
     const restored = spawnSync('bun', [join(dir, 'cli.cjs'), '--version'], { env, encoding: 'utf8', timeout: 15000 });
     succeeds(restored);
-    assert.equal(restored.stdout.trim(), readFileSync(join(dir, '.source-version'), 'utf8').trim() + ' (Claude Code)');
+    assert.equal(restored.stdout.trim(), readFileSync(join(dir, '.source-version'), 'utf8').trim() + ' (ClawGod_Y)');
     rmSync(join(dir, '.compiled-runtime'));
   }
   for (const name of retained) writeFileSync(join(dir, name), JSON.stringify({ fixture: name }));
@@ -185,7 +185,7 @@ exec /bin/mv "$@"\n`);
     assert.ok(Number.isInteger(failed.status), failed.error?.message || 'Fresh installer did not exit normally');
     assert.notEqual(failed.status, 0, `Fresh ${stage} failure must abort`);
     assert.equal(existsSync(launcher), false, 'Failed fresh installation must not publish a launcher');
-    assert.doesNotMatch(failed.stdout, /ClawGod installed!/);
+    assert.doesNotMatch(failed.stdout, /ClawGod_Y installed!/);
     for (const name of retained) assert.equal(JSON.parse(readFileSync(join(dir, name), 'utf8')).fixture, name);
   }
   console.log('[installer-lifecycle.test] version selection, native isolation, finalization rollback, offline cache failure, and uninstall passed');
