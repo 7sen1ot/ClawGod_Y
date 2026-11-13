@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { applyAstEdits, parsePatchSource, releasePatchSource, walk } from './ast-patches.mjs';
+import { tokenizer } from './acorn.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const entry = join(here, 'cli.cjs');
@@ -21,8 +22,7 @@ async function fileDigest(path) {
 
 async function buildInputs() {
   const paths = new Set();
-  // These files are read at runtime, not bundled. onLoad below rejects reuse if
-  // a customized source imports one of them (or any other untracked input).
+  // Runtime-only files; onLoad disables cache reuse if a source imports them.
   const runtimeFiles = new Set(['source-backup.json', 'provider.json', 'features.json',
     'patches.json', 'assembly.json', 'flags.json', 'lean-settings.json', '.compiled-runtime-cache.json']);
   const customConfig = /^(?:tsconfig\.json|jsconfig\.json|\.?bunfig\.toml)$/;
@@ -38,8 +38,7 @@ async function buildInputs() {
     }
   }
   collect(here);
-  // Bun may resolve package/config metadata from ancestors or the working
-  // directory. Custom tsconfig/bunfig chains are left to a fresh build.
+  // Include ancestor package metadata; custom tsconfig/bunfig chains require a fresh build.
   const visited = new Set();
   for (const start of [here, resolve(process.cwd())]) {
     for (let dir = start; ; dir = dirname(dir)) {
@@ -56,9 +55,70 @@ async function buildInputs() {
   const hash = createHash('sha256');
   hash.update(JSON.stringify([1, Bun.version, Bun.revision, process.platform, process.arch,
     realpathSync(here), process.execPath, process.cwd(), process.env.NODE_ENV ?? '', process.env.BUN_ENV ?? '']));
-  const files = new Set([...paths].sort());
-  for (const path of files) hash.update(JSON.stringify([path, await fileDigest(path)]));
+  const sorted = [...paths].sort(), digests = new Array(sorted.length);
+  let next = 0;
+  const workers = await Promise.allSettled(Array.from({ length: Math.min(4, sorted.length) }, async () => {
+    while (next < sorted.length) {
+      const index = next++;
+      digests[index] = await fileDigest(sorted[index]);
+    }
+  }));
+  const rejected = workers.find(result => result.status === 'rejected');
+  if (rejected) throw rejected.reason;
+  const files = new Set(sorted);
+  for (const [index, path] of sorted.entries()) hash.update(JSON.stringify([path, digests[index]]));
   return { key: hash.digest('hex'), files };
+}
+
+function rewriteLocalRequires(contents, path) {
+  const isLocal = value => {
+    if (typeof value !== 'string' || !/\.[cm]?js$/.test(value)) return false;
+    const target = resolve(dirname(path), value), local = relative(here, target);
+    return local !== '..' && !local.startsWith('../') && !local.startsWith('..\\') &&
+      !isAbsolute(local) && existsSync(target);
+  };
+  const directEdits = () => {
+    const tokens = tokenizer(contents, { ecmaVersion: 'latest', sourceType: 'module', allowHashBang: true });
+    const recent = [], edits = [];
+    for (;;) {
+      const token = tokens.getToken();
+      if (token.type.label === 'eof') return edits;
+      recent.push(token);
+      if (recent.length > 4) recent.shift();
+      if (recent.length < 3) continue;
+      const [start, dot, meta] = recent.slice(-3);
+      if (start?.type.label !== 'import' || dot.type.label !== '.' || meta.value !== 'meta' ||
+          meta.type.label !== 'name' || recent.length === 4 && ['.', '?.'].includes(recent[0].type.label)) continue;
+      if (recent.length === 4 && recent[0].type.label === 'new') return null;
+      const access = tokens.getToken(), property = tokens.getToken();
+      if (access.type.label !== '.' || property.type.label !== 'name') return null;
+      recent.splice(0, recent.length, access, property);
+      if (property.value !== 'require') continue;
+      const open = tokens.getToken(), argument = tokens.getToken(), close = tokens.getToken();
+      // Parenthesized, optional, computed or multi-argument calls use the AST path.
+      if (open.type.label !== '(' || argument.type.label !== 'string' || close.type.label !== ')') return null;
+      if (isLocal(argument.value)) edits.push({ start: start.start, end: property.end, replacement: 'require' });
+      recent.splice(0, recent.length, close);
+    }
+  };
+  let edits;
+  try { edits = directEdits(); } catch { /* The parser handles unusual lexical contexts. */ }
+  if (edits == null) {
+    edits = [];
+    try {
+      walk(parsePatchSource(contents), node => {
+        const callee = node.callee;
+        if (node.type !== 'CallExpression' || node.arguments.length !== 1 ||
+            callee.type !== 'MemberExpression' || callee.computed || callee.property.name !== 'require' ||
+            callee.object.type !== 'MetaProperty' || callee.object.meta.name !== 'import') return;
+        const argument = node.arguments[0];
+        if (argument.type === 'Literal' && isLocal(argument.value)) {
+          edits.push({ start: callee.start, end: callee.end, replacement: 'require' });
+        }
+      });
+    } finally { releasePatchSource(contents); }
+  }
+  return applyAstEdits(contents, edits);
 }
 
 function activate(filename) {
@@ -114,21 +174,7 @@ async function compile() {
               contents = contents.replace(/\b__dirname\b/g, () => JSON.stringify(here));
             }
             if (contents.includes('import.meta.require')) {
-              const edits = [];
-              walk(parsePatchSource(contents), node => {
-                const callee = node.callee;
-                if (node.type !== 'CallExpression' || node.arguments.length !== 1 ||
-                    callee.type !== 'MemberExpression' || callee.computed || callee.property.name !== 'require' ||
-                    callee.object.type !== 'MetaProperty' || callee.object.meta.name !== 'import') return;
-                const argument = node.arguments[0];
-                if (argument.type !== 'Literal' || typeof argument.value !== 'string' || !/\.[cm]?js$/.test(argument.value)) return;
-                const target = resolve(dirname(path), argument.value);
-                const local = relative(here, target);
-                if (local === '..' || local.startsWith('../') || local.startsWith('..\\') || isAbsolute(local) || !existsSync(target)) return;
-                edits.push({ start: callee.start, end: callee.end, replacement: 'require' });
-              });
-              releasePatchSource(contents);
-              contents = applyAstEdits(contents, edits);
+              contents = rewriteLocalRequires(contents, path);
             }
             return { contents, loader: 'js' };
           });

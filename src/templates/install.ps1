@@ -248,16 +248,33 @@ $RollbackFiles = @("cli.original.cjs","cli.original.cjs.bak","cli.original.js","
 $origCjs = Join-Path $ClawDir "cli.original.cjs"
 $sourceVerFile = Join-Path $ClawDir ".source-version"
 if ((Test-Path $origCjs) -and (Test-Path $sourceVerFile)) {
-    $RollbackDir = Join-Path ([System.IO.Path]::GetTempPath()) ("clawgod-rollback-" + [System.Guid]::NewGuid().ToString("N"))
+    $RollbackDir = Join-Path (Split-Path -Parent $ClawDir) (".clawgod-rollback-" + [System.Guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Path $RollbackDir -Force | Out-Null
+    $movedRollbackFiles = @()
     try {
         foreach ($f in $RollbackFiles) {
             $path = Join-Path $ClawDir $f
-            if (Test-Path $path) { Copy-Item -LiteralPath $path -Destination $RollbackDir -Recurse -Force -ErrorAction Stop }
+            if (-not (Test-Path -LiteralPath $path)) { continue }
+            if ($f -in @("bunfs", "vendor", "source-backup.json")) {
+                try {
+                    Move-Item -LiteralPath $path -Destination (Join-Path $RollbackDir $f) -ErrorAction Stop
+                    $movedRollbackFiles += $f
+                    continue
+                } catch { }
+            }
+            Copy-Item -LiteralPath $path -Destination $RollbackDir -Recurse -Force -ErrorAction Stop
         }
     } catch {
+        $snapshotError = $_
+        $restoreFailed = $false
+        foreach ($f in $movedRollbackFiles) {
+            try {
+                Move-Item -LiteralPath (Join-Path $RollbackDir $f) -Destination (Join-Path $ClawDir $f) -ErrorAction Stop
+            } catch { $restoreFailed = $true }
+        }
+        if ($restoreFailed) { throw "Could not snapshot existing installation; recovery backup kept at $RollbackDir : $snapshotError" }
         Remove-Item -LiteralPath $RollbackDir -Recurse -Force -ErrorAction SilentlyContinue
-        throw "Could not snapshot existing installation; installation was not changed: $_"
+        throw "Could not snapshot existing installation; previous files restored: $snapshotError"
     }
 }
 
@@ -273,7 +290,7 @@ function Restore-Install {
             $path = Join-Path $ClawDir $f
             if (Test-Path $path) { Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop }
         }
-        Get-ChildItem -LiteralPath $RollbackDir -Force | Copy-Item -Destination $ClawDir -Recurse -Force -ErrorAction Stop
+        Get-ChildItem -LiteralPath $RollbackDir -Force | Move-Item -Destination $ClawDir -Force -ErrorAction Stop
         Write-OK "Restored previous working installation ($((Get-Content $sourceVerFile -Raw).Trim()))."
         Remove-Item -LiteralPath $RollbackDir -Recurse -Force -ErrorAction SilentlyContinue
     } catch {

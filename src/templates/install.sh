@@ -186,12 +186,29 @@ ROLLBACK_FILES=(cli.original.cjs cli.original.cjs.bak cli.original.js .source-ve
   patch.mjs patch-registry.mjs ast-patches.mjs pentest-patches.mjs pentest-scanners.mjs
   pentest-trimming.mjs pentest-policy-text.mjs pentest-pruner.mjs lean-mode.cjs acorn.mjs acorn.LICENSE)
 if [ -f "$CLAWGOD_DIR/cli.original.cjs" ] && [ -f "$CLAWGOD_DIR/.source-version" ]; then
-  PREV_BACKUP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/clawgod-rollback-XXXXXX")
+  PREV_BACKUP_DIR=$(mktemp -d "${CLAWGOD_DIR}-rollback-XXXXXX")
+  MOVED_ROLLBACK_FILES=()
   for f in "${ROLLBACK_FILES[@]}"; do
     if [ -e "$CLAWGOD_DIR/$f" ]; then
+      case "$f" in
+        bunfs|vendor|source-backup.json)
+          if mv "$CLAWGOD_DIR/$f" "$PREV_BACKUP_DIR/$f" 2>/dev/null; then
+            MOVED_ROLLBACK_FILES+=("$f")
+            continue
+          fi
+          ;;
+      esac
       cp -a "$CLAWGOD_DIR/$f" "$PREV_BACKUP_DIR/" || {
-        warn "Could not snapshot $f; installation was not changed."
-        rm -rf "$PREV_BACKUP_DIR"
+        warn "Could not snapshot $f; restoring previous files."
+        restore_failed=0
+        for moved in "${MOVED_ROLLBACK_FILES[@]}"; do
+          mv "$PREV_BACKUP_DIR/$moved" "$CLAWGOD_DIR/$moved" || restore_failed=1
+        done
+        if [ "$restore_failed" -eq 0 ]; then
+          rm -rf "$PREV_BACKUP_DIR"
+        else
+          warn "Rollback failed; backup kept at $PREV_BACKUP_DIR"
+        fi
         exit 1
       }
     fi
@@ -207,12 +224,15 @@ rollback_install() {
     if [ -n "$PREV_BACKUP_DIR" ]; then
       dim "Rolling back to previous working installation ..."
       for f in "${ROLLBACK_FILES[@]}"; do rm -rf "$CLAWGOD_DIR/$f"; done
-      if cp -a "$PREV_BACKUP_DIR"/. "$CLAWGOD_DIR/"; then
-        info "Restored previous working installation ($(cat "$CLAWGOD_DIR/.source-version"))."
-      else
-        warn "Rollback failed; backup kept at $PREV_BACKUP_DIR"
-        return
-      fi
+      for f in "${ROLLBACK_FILES[@]}"; do
+        if [ -e "$PREV_BACKUP_DIR/$f" ]; then
+          mv "$PREV_BACKUP_DIR/$f" "$CLAWGOD_DIR/$f" || {
+            warn "Rollback failed; backup kept at $PREV_BACKUP_DIR"
+            return
+          }
+        fi
+      done
+      info "Restored previous working installation ($(cat "$CLAWGOD_DIR/.source-version"))."
     fi
   fi
   [ -z "$PREV_BACKUP_DIR" ] || rm -rf "$PREV_BACKUP_DIR" || warn "Could not remove rollback snapshot at $PREV_BACKUP_DIR"

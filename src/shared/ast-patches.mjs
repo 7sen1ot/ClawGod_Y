@@ -93,10 +93,11 @@ function sourceRecord(code) {
   return record;
 }
 
+const includesAnchors = (source, anchors) => anchors.some(group =>
+  Array.isArray(group) ? group.every(token => source.includes(token)) : source.includes(group));
+
 export function hasPatchAnchors(code, anchors) {
-  const matches = source => anchors.some(group =>
-    Array.isArray(group) ? group.every(token => source.includes(token)) : source.includes(group));
-  if (matches(code)) return true;
+  if (includesAnchors(code, anchors)) return true;
   // Normalize only the prefilter; edits still use original AST ranges.
   const record = sourceRecord(code);
   const normalized = record.normalized ??= code.replace(/\\(?:u\{([\da-f]+)\}|u([\da-f]{4})|x([\da-f]{2}))/gi,
@@ -104,7 +105,43 @@ export function hasPatchAnchors(code, anchors) {
       const value = parseInt(point ?? unit ?? byte, 16);
       return value <= 0x10ffff ? String.fromCodePoint(value) : match;
     }).replace(/(["'`])\s*\+\s*(["'`])/g, '');
-  return matches(normalized);
+  return includesAnchors(normalized, anchors);
+}
+
+// One lazy summary per scan; no source or AST is retained beyond its caller.
+export function createPatchCandidateFilter(tree, code, readContext = () => createPatchContext(tree, code)) {
+  let text, constructed, resolvedText, unresolved = false;
+  return (anchors, resolveAliases = false) => {
+    if (hasPatchAnchors(code, anchors)) return true;
+    if (text === undefined) {
+      const parts = new Set();
+      constructed = [];
+      walk(tree, node => {
+        if (node.type === 'Identifier') parts.add(node.name);
+        if (node.type === 'Literal' && typeof node.value === 'string') parts.add(node.value);
+        if (node.type !== 'TemplateLiteral' && !(node.type === 'BinaryExpression' && node.operator === '+')) return;
+        const value = staticText(node);
+        if (value !== undefined) parts.add(value);
+        else constructed.push(node);
+        if (node.type === 'TemplateLiteral') for (const quasi of node.quasis) {
+          if (typeof quasi.value.cooked === 'string') parts.add(quasi.value.cooked);
+        }
+      });
+      text = [...parts].join('\n');
+    }
+    if (includesAnchors(text, anchors)) return true;
+    if (!resolveAliases || !constructed.length) return false;
+    if (resolvedText === undefined) {
+      const parts = [], context = readContext();
+      for (const node of constructed) {
+        const value = context.text(node);
+        if (value === undefined) unresolved = true;
+        else parts.push(value);
+      }
+      resolvedText = parts.join('\n');
+    }
+    return unresolved || includesAnchors(resolvedText, anchors);
+  };
 }
 
 // Cached trees are read-only; rewriting source selects a fresh cache record.
@@ -524,6 +561,9 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
   if (!hasPatchAnchors(code, anchors)) return results;
   const tree = readTree();
   const context = readContext ? readContext() : createPatchContext(tree, code);
+  const isCandidate = createPatchCandidateFilter(tree, code, () => context);
+  const teamCandidate = isCandidate(['CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS', 'agent-teams-graph']);
+  const computerCandidate = isCandidate(['enabled', 'computer-use-gate-semantic']);
   const edit = (id, node, replacement, strategy = 'ast') => {
     results[id].matches.push({ start: node.start, end: node.end, replacement, strategy });
   };
@@ -612,7 +652,7 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
       }
     }
     if (literal(node, 'tengu_wiggly_dove') && !literal(parent, 'tengu_wiggly_dove')) wigglyLiterals.add(node.start);
-    if (functionNode(node) && node.params.length === 0) {
+    if (teamCandidate && functionNode(node) && node.params.length === 0) {
       const flagArguments = [];
       let teamEnv = false;
       walk(node.body, child => {
@@ -702,7 +742,7 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
       }
     }
 
-    if (functionNode(node) && !node.params.length && !node.async && !node.generator) {
+    if (computerCandidate && functionNode(node) && !node.params.length && !node.async && !node.generator) {
       const id = 'computer-use-gate-semantic';
       let computerConfig = false, inlineConfig = false, candidate = false;
       const enabledResult = expression => {
@@ -828,8 +868,10 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
         declaration.init.callee.type === 'Identifier' &&
         declaration.id.properties.some(property => property.type === 'Property' &&
           propertyName(property) === 'eligible'));
-      const helper = eligibility && context.resolve(eligibility.init.callee)?.node;
-      if (functionNode(helper) && hasRemoteSettingsContext(helper)) {
+      // Newer builds pass the eligibility reader through a credential-scope wrapper.
+      const helpers = eligibility && [eligibility.init.callee, ...eligibility.init.arguments]
+        .map(value => context.resolve(value)?.node);
+      if (helpers?.some(helper => functionNode(helper) && hasRemoteSettingsContext(helper))) {
         const id = 'remote-settings-off';
         if (!cachedReturn) results[id].present = true;
         else {

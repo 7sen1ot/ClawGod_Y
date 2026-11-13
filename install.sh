@@ -186,12 +186,29 @@ ROLLBACK_FILES=(cli.original.cjs cli.original.cjs.bak cli.original.js .source-ve
   patch.mjs patch-registry.mjs ast-patches.mjs pentest-patches.mjs pentest-scanners.mjs
   pentest-trimming.mjs pentest-policy-text.mjs pentest-pruner.mjs lean-mode.cjs acorn.mjs acorn.LICENSE)
 if [ -f "$CLAWGOD_DIR/cli.original.cjs" ] && [ -f "$CLAWGOD_DIR/.source-version" ]; then
-  PREV_BACKUP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/clawgod-rollback-XXXXXX")
+  PREV_BACKUP_DIR=$(mktemp -d "${CLAWGOD_DIR}-rollback-XXXXXX")
+  MOVED_ROLLBACK_FILES=()
   for f in "${ROLLBACK_FILES[@]}"; do
     if [ -e "$CLAWGOD_DIR/$f" ]; then
+      case "$f" in
+        bunfs|vendor|source-backup.json)
+          if mv "$CLAWGOD_DIR/$f" "$PREV_BACKUP_DIR/$f" 2>/dev/null; then
+            MOVED_ROLLBACK_FILES+=("$f")
+            continue
+          fi
+          ;;
+      esac
       cp -a "$CLAWGOD_DIR/$f" "$PREV_BACKUP_DIR/" || {
-        warn "Could not snapshot $f; installation was not changed."
-        rm -rf "$PREV_BACKUP_DIR"
+        warn "Could not snapshot $f; restoring previous files."
+        restore_failed=0
+        for moved in "${MOVED_ROLLBACK_FILES[@]}"; do
+          mv "$PREV_BACKUP_DIR/$moved" "$CLAWGOD_DIR/$moved" || restore_failed=1
+        done
+        if [ "$restore_failed" -eq 0 ]; then
+          rm -rf "$PREV_BACKUP_DIR"
+        else
+          warn "Rollback failed; backup kept at $PREV_BACKUP_DIR"
+        fi
         exit 1
       }
     fi
@@ -207,12 +224,15 @@ rollback_install() {
     if [ -n "$PREV_BACKUP_DIR" ]; then
       dim "Rolling back to previous working installation ..."
       for f in "${ROLLBACK_FILES[@]}"; do rm -rf "$CLAWGOD_DIR/$f"; done
-      if cp -a "$PREV_BACKUP_DIR"/. "$CLAWGOD_DIR/"; then
-        info "Restored previous working installation ($(cat "$CLAWGOD_DIR/.source-version"))."
-      else
-        warn "Rollback failed; backup kept at $PREV_BACKUP_DIR"
-        return
-      fi
+      for f in "${ROLLBACK_FILES[@]}"; do
+        if [ -e "$PREV_BACKUP_DIR/$f" ]; then
+          mv "$PREV_BACKUP_DIR/$f" "$CLAWGOD_DIR/$f" || {
+            warn "Rollback failed; backup kept at $PREV_BACKUP_DIR"
+            return
+          }
+        fi
+      done
+      info "Restored previous working installation ($(cat "$CLAWGOD_DIR/.source-version"))."
     fi
   fi
   [ -z "$PREV_BACKUP_DIR" ] || rm -rf "$PREV_BACKUP_DIR" || warn "Could not remove rollback snapshot at $PREV_BACKUP_DIR"
@@ -1460,6 +1480,7 @@ import { createHash } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { applyAstEdits, parsePatchSource, releasePatchSource, walk } from './ast-patches.mjs';
+import { tokenizer } from './acorn.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const entry = join(here, 'cli.cjs');
@@ -1478,8 +1499,7 @@ async function fileDigest(path) {
 
 async function buildInputs() {
   const paths = new Set();
-  // These files are read at runtime, not bundled. onLoad below rejects reuse if
-  // a customized source imports one of them (or any other untracked input).
+  // Runtime-only files; onLoad disables cache reuse if a source imports them.
   const runtimeFiles = new Set(['source-backup.json', 'provider.json', 'features.json',
     'patches.json', 'assembly.json', 'flags.json', 'lean-settings.json', '.compiled-runtime-cache.json']);
   const customConfig = /^(?:tsconfig\.json|jsconfig\.json|\.?bunfig\.toml)$/;
@@ -1495,8 +1515,7 @@ async function buildInputs() {
     }
   }
   collect(here);
-  // Bun may resolve package/config metadata from ancestors or the working
-  // directory. Custom tsconfig/bunfig chains are left to a fresh build.
+  // Include ancestor package metadata; custom tsconfig/bunfig chains require a fresh build.
   const visited = new Set();
   for (const start of [here, resolve(process.cwd())]) {
     for (let dir = start; ; dir = dirname(dir)) {
@@ -1513,9 +1532,70 @@ async function buildInputs() {
   const hash = createHash('sha256');
   hash.update(JSON.stringify([1, Bun.version, Bun.revision, process.platform, process.arch,
     realpathSync(here), process.execPath, process.cwd(), process.env.NODE_ENV ?? '', process.env.BUN_ENV ?? '']));
-  const files = new Set([...paths].sort());
-  for (const path of files) hash.update(JSON.stringify([path, await fileDigest(path)]));
+  const sorted = [...paths].sort(), digests = new Array(sorted.length);
+  let next = 0;
+  const workers = await Promise.allSettled(Array.from({ length: Math.min(4, sorted.length) }, async () => {
+    while (next < sorted.length) {
+      const index = next++;
+      digests[index] = await fileDigest(sorted[index]);
+    }
+  }));
+  const rejected = workers.find(result => result.status === 'rejected');
+  if (rejected) throw rejected.reason;
+  const files = new Set(sorted);
+  for (const [index, path] of sorted.entries()) hash.update(JSON.stringify([path, digests[index]]));
   return { key: hash.digest('hex'), files };
+}
+
+function rewriteLocalRequires(contents, path) {
+  const isLocal = value => {
+    if (typeof value !== 'string' || !/\.[cm]?js$/.test(value)) return false;
+    const target = resolve(dirname(path), value), local = relative(here, target);
+    return local !== '..' && !local.startsWith('../') && !local.startsWith('..\\') &&
+      !isAbsolute(local) && existsSync(target);
+  };
+  const directEdits = () => {
+    const tokens = tokenizer(contents, { ecmaVersion: 'latest', sourceType: 'module', allowHashBang: true });
+    const recent = [], edits = [];
+    for (;;) {
+      const token = tokens.getToken();
+      if (token.type.label === 'eof') return edits;
+      recent.push(token);
+      if (recent.length > 4) recent.shift();
+      if (recent.length < 3) continue;
+      const [start, dot, meta] = recent.slice(-3);
+      if (start?.type.label !== 'import' || dot.type.label !== '.' || meta.value !== 'meta' ||
+          meta.type.label !== 'name' || recent.length === 4 && ['.', '?.'].includes(recent[0].type.label)) continue;
+      if (recent.length === 4 && recent[0].type.label === 'new') return null;
+      const access = tokens.getToken(), property = tokens.getToken();
+      if (access.type.label !== '.' || property.type.label !== 'name') return null;
+      recent.splice(0, recent.length, access, property);
+      if (property.value !== 'require') continue;
+      const open = tokens.getToken(), argument = tokens.getToken(), close = tokens.getToken();
+      // Parenthesized, optional, computed or multi-argument calls use the AST path.
+      if (open.type.label !== '(' || argument.type.label !== 'string' || close.type.label !== ')') return null;
+      if (isLocal(argument.value)) edits.push({ start: start.start, end: property.end, replacement: 'require' });
+      recent.splice(0, recent.length, close);
+    }
+  };
+  let edits;
+  try { edits = directEdits(); } catch { /* The parser handles unusual lexical contexts. */ }
+  if (edits == null) {
+    edits = [];
+    try {
+      walk(parsePatchSource(contents), node => {
+        const callee = node.callee;
+        if (node.type !== 'CallExpression' || node.arguments.length !== 1 ||
+            callee.type !== 'MemberExpression' || callee.computed || callee.property.name !== 'require' ||
+            callee.object.type !== 'MetaProperty' || callee.object.meta.name !== 'import') return;
+        const argument = node.arguments[0];
+        if (argument.type === 'Literal' && isLocal(argument.value)) {
+          edits.push({ start: callee.start, end: callee.end, replacement: 'require' });
+        }
+      });
+    } finally { releasePatchSource(contents); }
+  }
+  return applyAstEdits(contents, edits);
 }
 
 function activate(filename) {
@@ -1571,21 +1651,7 @@ async function compile() {
               contents = contents.replace(/\b__dirname\b/g, () => JSON.stringify(here));
             }
             if (contents.includes('import.meta.require')) {
-              const edits = [];
-              walk(parsePatchSource(contents), node => {
-                const callee = node.callee;
-                if (node.type !== 'CallExpression' || node.arguments.length !== 1 ||
-                    callee.type !== 'MemberExpression' || callee.computed || callee.property.name !== 'require' ||
-                    callee.object.type !== 'MetaProperty' || callee.object.meta.name !== 'import') return;
-                const argument = node.arguments[0];
-                if (argument.type !== 'Literal' || typeof argument.value !== 'string' || !/\.[cm]?js$/.test(argument.value)) return;
-                const target = resolve(dirname(path), argument.value);
-                const local = relative(here, target);
-                if (local === '..' || local.startsWith('../') || local.startsWith('..\\') || isAbsolute(local) || !existsSync(target)) return;
-                edits.push({ start: callee.start, end: callee.end, replacement: 'require' });
-              });
-              releasePatchSource(contents);
-              contents = applyAstEdits(contents, edits);
+              contents = rewriteLocalRequires(contents, path);
             }
             return { contents, loader: 'js' };
           });
@@ -1992,6 +2058,16 @@ function scanChunks(text) {
   return chunks;
 }
 
+function indexFor(value, values, index) {
+  let id = index.get(value);
+  if (id === undefined) {
+    id = values.length;
+    values.push(value);
+    index.set(value, id);
+  }
+  return id;
+}
+
 class CellSegmenter {
   constructor(options) {
     const opts = options || {};
@@ -2018,13 +2094,7 @@ class CellSegmenter {
   }
 
   _uriIndexFor(uri) {
-    let id = this._uriIndex.get(uri);
-    if (id === undefined) {
-      id = this.uris.length;
-      this.uris.push(uri);
-      this._uriIndex.set(uri, id);
-    }
-    return id;
+    return indexFor(uri, this.uris, this._uriIndex);
   }
 
   _applySgr(params) {
@@ -2086,13 +2156,7 @@ class CellSegmenter {
   }
 
   _graphemeId(grapheme) {
-    let id = this._graphemeIndex.get(grapheme);
-    if (id === undefined) {
-      id = this.graphemes.length;
-      this.graphemes.push(grapheme);
-      this._graphemeIndex.set(grapheme, id);
-    }
-    return id;
+    return indexFor(grapheme, this.graphemes, this._graphemeIndex);
   }
 
   segment(text, cells, runs  ) {
@@ -8683,10 +8747,11 @@ function sourceRecord(code) {
   return record;
 }
 
+const includesAnchors = (source, anchors) => anchors.some(group =>
+  Array.isArray(group) ? group.every(token => source.includes(token)) : source.includes(group));
+
 export function hasPatchAnchors(code, anchors) {
-  const matches = source => anchors.some(group =>
-    Array.isArray(group) ? group.every(token => source.includes(token)) : source.includes(group));
-  if (matches(code)) return true;
+  if (includesAnchors(code, anchors)) return true;
   // Normalize only the prefilter; edits still use original AST ranges.
   const record = sourceRecord(code);
   const normalized = record.normalized ??= code.replace(/\\(?:u\{([\da-f]+)\}|u([\da-f]{4})|x([\da-f]{2}))/gi,
@@ -8694,7 +8759,43 @@ export function hasPatchAnchors(code, anchors) {
       const value = parseInt(point ?? unit ?? byte, 16);
       return value <= 0x10ffff ? String.fromCodePoint(value) : match;
     }).replace(/(["'`])\s*\+\s*(["'`])/g, '');
-  return matches(normalized);
+  return includesAnchors(normalized, anchors);
+}
+
+// One lazy summary per scan; no source or AST is retained beyond its caller.
+export function createPatchCandidateFilter(tree, code, readContext = () => createPatchContext(tree, code)) {
+  let text, constructed, resolvedText, unresolved = false;
+  return (anchors, resolveAliases = false) => {
+    if (hasPatchAnchors(code, anchors)) return true;
+    if (text === undefined) {
+      const parts = new Set();
+      constructed = [];
+      walk(tree, node => {
+        if (node.type === 'Identifier') parts.add(node.name);
+        if (node.type === 'Literal' && typeof node.value === 'string') parts.add(node.value);
+        if (node.type !== 'TemplateLiteral' && !(node.type === 'BinaryExpression' && node.operator === '+')) return;
+        const value = staticText(node);
+        if (value !== undefined) parts.add(value);
+        else constructed.push(node);
+        if (node.type === 'TemplateLiteral') for (const quasi of node.quasis) {
+          if (typeof quasi.value.cooked === 'string') parts.add(quasi.value.cooked);
+        }
+      });
+      text = [...parts].join('\n');
+    }
+    if (includesAnchors(text, anchors)) return true;
+    if (!resolveAliases || !constructed.length) return false;
+    if (resolvedText === undefined) {
+      const parts = [], context = readContext();
+      for (const node of constructed) {
+        const value = context.text(node);
+        if (value === undefined) unresolved = true;
+        else parts.push(value);
+      }
+      resolvedText = parts.join('\n');
+    }
+    return unresolved || includesAnchors(resolvedText, anchors);
+  };
 }
 
 // Cached trees are read-only; rewriting source selects a fresh cache record.
@@ -9114,6 +9215,9 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
   if (!hasPatchAnchors(code, anchors)) return results;
   const tree = readTree();
   const context = readContext ? readContext() : createPatchContext(tree, code);
+  const isCandidate = createPatchCandidateFilter(tree, code, () => context);
+  const teamCandidate = isCandidate(['CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS', 'agent-teams-graph']);
+  const computerCandidate = isCandidate(['enabled', 'computer-use-gate-semantic']);
   const edit = (id, node, replacement, strategy = 'ast') => {
     results[id].matches.push({ start: node.start, end: node.end, replacement, strategy });
   };
@@ -9202,7 +9306,7 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
       }
     }
     if (literal(node, 'tengu_wiggly_dove') && !literal(parent, 'tengu_wiggly_dove')) wigglyLiterals.add(node.start);
-    if (functionNode(node) && node.params.length === 0) {
+    if (teamCandidate && functionNode(node) && node.params.length === 0) {
       const flagArguments = [];
       let teamEnv = false;
       walk(node.body, child => {
@@ -9292,7 +9396,7 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
       }
     }
 
-    if (functionNode(node) && !node.params.length && !node.async && !node.generator) {
+    if (computerCandidate && functionNode(node) && !node.params.length && !node.async && !node.generator) {
       const id = 'computer-use-gate-semantic';
       let computerConfig = false, inlineConfig = false, candidate = false;
       const enabledResult = expression => {
@@ -9418,8 +9522,10 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
         declaration.init.callee.type === 'Identifier' &&
         declaration.id.properties.some(property => property.type === 'Property' &&
           propertyName(property) === 'eligible'));
-      const helper = eligibility && context.resolve(eligibility.init.callee)?.node;
-      if (functionNode(helper) && hasRemoteSettingsContext(helper)) {
+      // Newer builds pass the eligibility reader through a credential-scope wrapper.
+      const helpers = eligibility && [eligibility.init.callee, ...eligibility.init.arguments]
+        .map(value => context.resolve(value)?.node);
+      if (helpers?.some(helper => functionNode(helper) && hasRemoteSettingsContext(helper))) {
         const id = 'remote-settings-off';
         if (!cachedReturn) results[id].present = true;
         else {
@@ -9567,7 +9673,7 @@ import {
   scanWarningSuppression, scanRuntimeGates, scanPromptSnapshot,
 } from './pentest-scanners.mjs';
 import { REMOVE_COMMANDS, REMOVE_CLOUD_COMMANDS, scanRuntimeTrimming } from './pentest-trimming.mjs';
-import { hasPatchAnchors, parsePatchSource } from './ast-patches.mjs';
+import { createPatchCandidateFilter, createPatchContext, hasPatchAnchors, parsePatchSource } from './ast-patches.mjs';
 import {
   removedPromptPrefixes, denialGuidancePrefixes, injectionWarning,
   removalGuidance, unavailableReviewWarning, reportWarningReference,
@@ -9585,58 +9691,63 @@ export const PENTEST_REQUIRED = new Set([
   'pentest-prompt-extra-body',
   'pentest-prompt-snapshot',
 ]);
+
+const appliedPromptAnchors = [
+  'rewritePromptAssembly', 'selectApplicationPrompt', 'filterDefaultPromptSections',
+  'validateExtraBody', 'refreshPromptSnapshot', ...[...PENTEST_REQUIRED].map(id => `clawgod:${id}`),
+];
+
+export function findAppliedPromptHooks(code, readTree = () => parsePatchSource(code)) {
+  const hooks = new Set();
+  if (!hasPatchAnchors(code, appliedPromptAnchors)) return hooks;
+  const results = Object.fromEntries([...PENTEST_REQUIRED].map(id =>
+    [id, { matches: [], fallbackMatches: [], present: false, patched: false }]));
+  const tree = readTree();
+  const ignoreEdit = () => {};
+  const isCandidate = createPatchCandidateFilter(tree, code);
+  scanCombinerWrap(tree, code, results, ignoreEdit, isCandidate);
+  scanPromptAuthority(tree, code, results, ignoreEdit, isCandidate);
+  scanPromptSnapshot(tree, code, results, ignoreEdit, isCandidate);
+  for (const id of PENTEST_REQUIRED) if (results[id].patched) hooks.add(id);
+  return hooks;
+}
+
 export const PENTEST_ANCHORS = [
-  ['classifierOnly'],
-  ['denied before call'],
-  ['clawgod:permission-'],
-  ['tengu_mcp_server_policy_bypass_exempt'],
-  ['tengu_settings_bypass_unconsented_noninteractive_ignored'],
-  ['skipDangerousModePermissionPrompt'],
+  'classifierOnly', 'denied before call', 'clawgod:permission-',
+  'tengu_mcp_server_policy_bypass_exempt',
+  'tengu_settings_bypass_unconsented_noninteractive_ignored',
+  'skipDangerousModePermissionPrompt',
   ['Bypass permissions mode', 'disabled by settings'],
-  ['refuseBypassUnderRoot'],
-  ['getuid'], ['geteuid'], ['IS_SANDBOX'],
-  ['managed-settings.json'], ['disallowedTools'],
-  ['mcpPermissionModeOverrides'],
-  ['unknownModelWindowWarning'],
-  ['isn\'t recognized'],
-  ['"acceptEdits"'],
+  'refuseBypassUnderRoot', 'getuid', 'geteuid', 'IS_SANDBOX',
+  'managed-settings.json', 'disallowedTools', 'mcpPermissionModeOverrides',
+  'unknownModelWindowWarning', 'isn\'t recognized', '"acceptEdits"',
   ['Handoff classifier request refused', 'safety safeguard'],
-  ['isBypassPermissionsModeAvailable'],
-  ['trustAccepted'], ['hasTrustDialogAccepted'],
+  'isBypassPermissionsModeAvailable', 'trustAccepted', 'hasTrustDialogAccepted',
   ['api.anthropic.com', 'web/domain_info'],
-  ['isolationLatch'], ['activeLatch'],
-  ['dangerousRemoval'],
+  'isolationLatch', 'activeLatch', 'dangerousRemoval',
   ['denied by a built-in', 'safety check'],
   ['web-reading specialist', 'Claude Code'],
-  ['bundledSkillsInitialized'], ['builtinPluginsInitialized'],
-  ['getAllBaseTools'], ['assembleToolPool'],
-  ['clawgod:runtime-table-probe'],
-  ['inputSchema'],
-  ['disableRemoteControl'], ['remote_control_at_startup'], ['voice_init_gate'],
-  ['allow_voice_mode'], ['clawgod:security-'],
-  ['remote-control'],
-  ['Toggle voice mode'], ['Toggle brief-only mode'],
-  ['tengu_kairos_brief'], ['pewter_owl_brief'], ['pewter_owl_tool'], ['briefStandalone'],
-  ['useCoworkPlugins'], ['cowork_plugins'], ['cowork_settings.json'],
-  ['isCoworkCloud'], ['coworkFrameArtifacts'],
-  ['DISABLE_AUTOUPDATER'], ['DISABLE_UPDATES'], ['checkForUpdates'],
-  ['/api/claude_code/version'], ['update-check'],
-  ['DISABLE_TELEMETRY'], ['DISABLE_ERROR_REPORTING'],
-  ['telemetry.anthropic.com'], ['analytics.anthropic.com'], ['/api/telemetry'],
-  ['trackEvent'], ['sendAnalytics'], ['1p_event_logging_start'],
-  ['fileCheckpointingEnabled'], ['CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING'],
-  ['createCheckpoint'], ['restoreCheckpoint'],
-  ['# Tone and style'],
-  ['rewritePromptAssembly'], ['customSystemPrompt'], ['defaultSystemPrompt'],
-  ['selectApplicationPrompt'], ['filterDefaultPromptSections'],
-  ['CLAUDE_CODE_EXTRA_BODY'],
-  ['from_snapshot', 'snapshotHash'], ['refreshPromptSnapshot'],
+  'bundledSkillsInitialized', 'builtinPluginsInitialized',
+  'getAllBaseTools', 'assembleToolPool', 'clawgod:runtime-table-probe', 'inputSchema',
+  'disableRemoteControl', 'remote_control_at_startup', 'voice_init_gate',
+  'allow_voice_mode', 'clawgod:security-', 'remote-control',
+  'Toggle voice mode', 'Toggle brief-only mode',
+  'tengu_kairos_brief', 'pewter_owl_brief', 'pewter_owl_tool', 'briefStandalone',
+  'useCoworkPlugins', 'cowork_plugins', 'cowork_settings.json', 'isCoworkCloud', 'coworkFrameArtifacts',
+  'DISABLE_AUTOUPDATER', 'DISABLE_UPDATES', 'checkForUpdates', '/api/claude_code/version', 'update-check',
+  'DISABLE_TELEMETRY', 'DISABLE_ERROR_REPORTING',
+  'telemetry.anthropic.com', 'analytics.anthropic.com', '/api/telemetry',
+  'trackEvent', 'sendAnalytics', '1p_event_logging_start',
+  'fileCheckpointingEnabled', 'CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING', 'createCheckpoint', 'restoreCheckpoint',
+  '# Tone and style', 'rewritePromptAssembly', 'customSystemPrompt', 'defaultSystemPrompt',
+  'selectApplicationPrompt', 'filterDefaultPromptSections', 'CLAUDE_CODE_EXTRA_BODY',
+  ['from_snapshot', 'snapshotHash'], 'refreshPromptSnapshot',
   ['Array.isArray', 'indexOf', 'shared', 'session'],
   ['scope', 'shared', 'session', 'text'],
   ['intro', 'doing_tasks', 'tone', 'tools'],
-  ['Tools are executed in a user-selected permission mode'],
+  'Tools are executed in a user-selected permission mode',
   ['Be careful not to introduce', 'security vulnerabilities'],
-  ['For exploratory questions'],
+  'For exploratory questions',
   ['highly capable', 'allow users to complete ambitious tasks'],
   ['Prefer editing existing files', 'creating new ones'],
   ['backwards-compatibility hacks', 'renaming unused'],
@@ -9646,26 +9757,19 @@ export const PENTEST_ANCHORS = [
   ['switch to plan mode', 'design an approach'],
   ['plan mode', 'present plan for approval'],
   ['session\'s attached', 'claude.ai project'],
-  ['# Explanatory Style Active'],
-  // --- permissive catch-all anchors (loop-safe: no auto/loop/schedule terms) ---
-  ['safetyClassifier'], ['requestSafetyReview'], ['runSafetyClassifier'],
-  ['safetyClassification'],
-  ['workspaceTrust'], ['confirmBeforeProceeding'], ['requireConfirmation'],
-  ['askForConfirmation'], ['promptForConsent'], ['requestConsent'],
-  ['isPathInside'], ['isInsideWorkingDir'], ['resolveWorkingDirectory'],
-  ['shellSafetyVet'], ['destructiveCommand'], ['isDangerous'],
-  ['dangerouslySkipPermissions'],
-  ['mcpAllowlist'], ['allowedMcpServers'], ['checkMcpPolicy'],
-  ['mcpPolicyViolation'], ['mcp_server_policy'],
-  ['UNREVIEWED'], ['handback'],
-  ['domainChecks'], ['webSearch'], ['webFetch'], ['fetchPolicy'],
-  ['domainIsolation'], ['connectorIsolation'], ['webSearchPolicy'],
-  ['denyMessage'],
-  ...[...REMOVE_COMMANDS, ...REMOVE_CLOUD_COMMANDS, 'output-style',
-    '--cloud', '--remote', '--teleport', '--watch-artifact'].map(name => [name]),
-  ...[...removedPromptPrefixes, ...denialGuidancePrefixes, injectionWarning,
-    removalGuidance, unavailableReviewWarning, reportWarningReference]
-    .map(text => [text]),
+  '# Explanatory Style Active',
+  'safetyClassifier', 'requestSafetyReview', 'runSafetyClassifier', 'safetyClassification',
+  'workspaceTrust', 'confirmBeforeProceeding', 'requireConfirmation',
+  'askForConfirmation', 'promptForConsent', 'requestConsent',
+  'isPathInside', 'isInsideWorkingDir', 'resolveWorkingDirectory',
+  'shellSafetyVet', 'destructiveCommand', 'isDangerous', 'dangerouslySkipPermissions',
+  'mcpAllowlist', 'allowedMcpServers', 'checkMcpPolicy', 'mcpPolicyViolation', 'mcp_server_policy',
+  'UNREVIEWED', 'handback', 'domainChecks', 'webSearch', 'webFetch', 'fetchPolicy',
+  'domainIsolation', 'connectorIsolation', 'webSearchPolicy', 'denyMessage',
+  ...REMOVE_COMMANDS, ...REMOVE_CLOUD_COMMANDS, 'output-style',
+  '--cloud', '--remote', '--teleport', '--watch-artifact',
+  ...removedPromptPrefixes, ...denialGuidancePrefixes, injectionWarning,
+  removalGuidance, unavailableReviewWarning, reportWarningReference,
 ];
 
 export function scanPentestPatches(code, upstreamRanges = [], readTree = () => parsePatchSource(code)) {
@@ -9674,9 +9778,12 @@ export function scanPentestPatches(code, upstreamRanges = [], readTree = () => p
   const brandingCandidate = hasPatchAnchors(code,
     ['Claude Code', 'ClawGod_Y', 'Claude Agent SDK', 'Your task is to create a detailed summary']);
   const trimCandidate = !anchored && hasPatchAnchors(code,
-    [['name', 'type'], ['addOption'], ['requiredOption'], ['createOption']]);
+    [['name', 'type'], 'addOption', 'requiredOption', 'createOption']);
   if (!anchored && !trimCandidate && !brandingCandidate && !hasPatchAnchors(code, ['tengu_'])) return results;
   const tree = readTree();
+  let context;
+  const readContext = () => context ??= createPatchContext(tree, code);
+  const isCandidate = createPatchCandidateFilter(tree, code, readContext);
   const edits = new Set();
   const edit = (id, node, replacement) => {
     const key = JSON.stringify([id, node.start, node.end, replacement]);
@@ -9684,23 +9791,23 @@ export function scanPentestPatches(code, upstreamRanges = [], readTree = () => p
     edits.add(key);
     results[id].matches.push({ start: node.start, end: node.end, replacement });
   };
-  const trimExcludes = anchored || trimCandidate ? scanRuntimeTrimming(tree, code, results, edit) : [];
+  const trimExcludes = anchored || trimCandidate ? scanRuntimeTrimming(tree, code, results, edit, readContext, isCandidate) : [];
   if (anchored) {
-    scanCombinerWrap(tree, code, results, edit);
-    scanPromptAuthority(tree, code, results, edit);
-    scanPromptSnapshot(tree, code, results, edit);
-    scanWarningSuppression(tree, code, results, edit);
-    const permissionBodies = scanPermissionBypasses(tree, code, results, edit, upstreamRanges);
-    scanPromptTextErase(tree, code, results, edit, permissionBodies, trimExcludes);
+    scanCombinerWrap(tree, code, results, edit, isCandidate);
+    scanPromptAuthority(tree, code, results, edit, isCandidate);
+    scanPromptSnapshot(tree, code, results, edit, isCandidate);
+    scanWarningSuppression(tree, code, results, edit, isCandidate);
+    const permissionBodies = scanPermissionBypasses(tree, code, results, edit, upstreamRanges, isCandidate);
+    scanPromptTextErase(tree, code, results, edit, permissionBodies, trimExcludes, readContext, isCandidate);
   }
   if (brandingCandidate) scanApplicationBranding(tree, code, results, edit, upstreamRanges);
-  scanRuntimeGates(tree, code, results, edit, upstreamRanges);
+  scanRuntimeGates(tree, code, results, edit, upstreamRanges, isCandidate);
   return results;
 }
 PENTEST_PATCHES_EOF
 
 cat > "$CLAWGOD_DIR/pentest-scanners.mjs" << 'PENTEST_SCANNERS_EOF'
-import { AST_HELPERS, contains, containsOwn, createPatchContext, ownReturns, walk } from './ast-patches.mjs';
+import { AST_HELPERS, contains, containsOwn, createPatchCandidateFilter, createPatchContext, ownReturns, walk } from './ast-patches.mjs';
 import {
   removedPromptPrefixes, denialGuidancePrefixes, removalGuidance,
   injectionWarning, unavailableReviewWarning, reportWarningReference,
@@ -9761,6 +9868,30 @@ const webSignals = [
   'webSearch', 'webFetch', 'fetchPolicy', 'domainIsolation',
   'connectorIsolation', 'webSearchPolicy',
 ];
+
+const permissionAnchors = [
+  ...trustSignals, ...classifierSignals, ...fsSignals, ...shellSignals,
+  ...mcpSignals, ...reviewSignals, ...webSignals,
+  'managed-settings.json', 'disallowedTools', 'failed schema validation',
+  'permissionBehavior', 'tengu_settings_bypass_unconsented_noninteractive_ignored',
+  'isBypassPermissionsModeAvailable', 'skipDangerousModePermissionPrompt',
+  'disableBypassPermissionsMode', 'dangerously-skip-permissions', 'getuid', 'geteuid',
+  'tengu_mcp_server_policy_bypass_exempt', 'toolDecisions', 'decisionReason',
+  'bypassPermissions', 'acceptEdits', 'default', 'plan', 'clawgod:permission-',
+];
+const assemblyAnchors = ['rewritePromptAssembly', 'customSystemPrompt', 'indexOf'];
+const authorityAnchors = [
+  'selectApplicationPrompt', 'filterDefaultPromptSections', 'CLAUDE_CODE_EXTRA_BODY',
+  'customSystemPrompt', 'intro', 'isArray', 'scope', 'clawgod:pentest-prompt-',
+];
+const snapshotAnchors = ['from_snapshot', 'refreshPromptSnapshot'];
+const textAnchors = [
+  ...removedPromptPrefixes, ...denialGuidancePrefixes, removalGuidance,
+  injectionWarning, unavailableReviewWarning, reportWarningReference,
+  'warning', 'web-reading specialist', 'bold',
+];
+const warningAnchors = ['unknownModelWindowWarning', 'securityWarnings', 'model-unrecognized', 'clawgod:security-warnings-off'];
+const runtimeGateAnchors = ['tengu_', 'maxTurns', 'flagOverride', 'clawgod:pentest-runtime-gates'];
 
 const claimedRanges = (results, upstreamRanges, except = new Set()) => {
   const ranges = [...upstreamRanges];
@@ -9848,8 +9979,10 @@ const returnsBoolean = node => node.body.type === 'BlockStatement' &&
       (s.argument?.type === 'BinaryExpression' && ['===', '!==', '==', '!='].includes(s.argument.operator)) ||
       s.argument?.type === 'LogicalExpression'));
 
-function scanPermissionBypasses(tree, code, results, edit, upstreamRanges = []) {
+function scanPermissionBypasses(tree, code, results, edit, upstreamRanges = [],
+    isCandidate = createPatchCandidateFilter(tree, code)) {
   const ranges = [];
+  if (!isCandidate(permissionAnchors)) return ranges;
   const replace = (id, fn, body) => {
     results[id].present = true;
     edit(id, fn.body, `{/*clawgod:${id}*/${body}}`);
@@ -9958,11 +10091,8 @@ function scanPermissionBypasses(tree, code, results, edit, upstreamRanges = []) 
       const edge = (from, to) => cases.some(entry => literal(entry.test, from) &&
         contains(entry.consequent, child =>
           child.type === 'ReturnStatement' && literal(child.argument, to)));
-      if (edge('acceptEdits', 'plan') && edge('plan', 'bypassPermissions')) {
-        replace('permission-mode-bypass', node, 'return"bypassPermissions";');
-        return false;
-      }
-      if (cases.some(entry => literal(entry.test, 'proactive') &&
+      if (edge('acceptEdits', 'plan') && edge('plan', 'bypassPermissions') ||
+          cases.some(entry => literal(entry.test, 'proactive') &&
           contains(entry.consequent, child => member(child, 'isBypassPermissionsModeAvailable')))) {
         replace('permission-mode-bypass', node, 'return"bypassPermissions";');
         return false;
@@ -10006,10 +10136,7 @@ function scanPermissionBypasses(tree, code, results, edit, upstreamRanges = []) 
       return false;
     }
     if (!node.async && params.length === 0 &&
-        contains(node.body, child =>
-          child.type === 'CallExpression' && child.callee.type === 'MemberExpression' &&
-          child.callee.object.type === 'Identifier' && child.callee.object.name === 'process' &&
-          ['getuid', 'geteuid'].includes(child.callee.property?.name ?? child.callee.property?.value)) &&
+        contains(node.body, child => userIdCall(child) && ident(child.callee.object, 'process')) &&
         contains(node.body, child =>
           child.type === 'BinaryExpression' && child.operator === '===' &&
           ((child.left.type === 'Literal' && child.left.value === 0) ||
@@ -10317,7 +10444,8 @@ function scanPermissionBypasses(tree, code, results, edit, upstreamRanges = []) 
 }
 
 
-function scanCombinerWrap(tree, code, results, edit) {
+function scanCombinerWrap(tree, code, results, edit, isCandidate = createPatchCandidateFilter(tree, code)) {
+  if (!isCandidate(assemblyAnchors)) return;
   const id = 'pentest-prompt-assembly';
   const assemblyCall = node => helperCall(node, 'rewritePromptAssembly');
   walk(tree, node => {
@@ -10353,27 +10481,23 @@ function scanCombinerWrap(tree, code, results, edit) {
         params.every(p => p.type === 'Identifier')) {
       const [pE, pN, pR] = params.map(p => p.name);
       const statements = node.body.body;
-      const retStatements = ownReturns(node.body).filter(ret => ret.argument);
-      const pendingReturns = retStatements.filter(ret => !contains(ret.argument, assemblyCall));
-      if (!pendingReturns.length) return;
-      const spreadSliceMerge = arg =>
-        arg?.type === 'ArrayExpression' &&
-        arg.elements.some(el => el.type === 'SpreadElement' &&
-          el.argument.type === 'Identifier' && el.argument.name === pE) &&
-        contains(arg, c => c.type === 'CallExpression' && member(c.callee, 'slice'));
-      const isCombiner =
-        statements.some(s => s.type === 'VariableDeclaration' &&
+      if (!statements.some(s => s.type === 'VariableDeclaration' &&
           s.declarations.some(d => d.init?.type === 'ConditionalExpression' &&
             d.init.test.type === 'Identifier' && d.init.test.name === pR &&
             contains(d.init.consequent, c => c.type === 'CallExpression' &&
               member(c.callee, 'indexOf') && c.callee.object.type === 'Identifier' &&
-              c.callee.object.name === pE))) &&
-        retStatements.some(s => spreadSliceMerge(s.argument) ||
-          (s.argument.type === 'ArrayExpression' &&
-            s.argument.elements.some(el => el.type === 'SpreadElement' &&
-              el.argument.type === 'Identifier' && el.argument.name === pE) &&
-            contains(s.argument, c => c.type === 'CallExpression' &&
-              c.callee.type === 'Identifier' && c.arguments.some(a => a.type === 'Identifier' && a.name === pN)))) &&
+              c.callee.object.name === pE)))) return;
+      const retStatements = ownReturns(node.body).filter(ret => ret.argument);
+      const pendingReturns = retStatements.filter(ret => !contains(ret.argument, assemblyCall));
+      if (!pendingReturns.length) return;
+      const spreadMerge = arg =>
+        arg?.type === 'ArrayExpression' &&
+        arg.elements.some(el => el.type === 'SpreadElement' &&
+          el.argument.type === 'Identifier' && el.argument.name === pE) &&
+        contains(arg, c => c.type === 'CallExpression' && (member(c.callee, 'slice') ||
+          c.callee.type === 'Identifier' && c.arguments.some(a => ident(a, pN))));
+      const isCombiner =
+        retStatements.some(s => spreadMerge(s.argument)) &&
         !contains(node.body, c => c.type === 'CallExpression' &&
           c.callee.type === 'Identifier' && c.callee.name === 'rewritePromptAssembly');
       if (isCombiner) {
@@ -10391,7 +10515,8 @@ function scanCombinerWrap(tree, code, results, edit) {
 }
 
 
-function scanPromptAuthority(tree, code, results, edit) {
+function scanPromptAuthority(tree, code, results, edit, isCandidate = createPatchCandidateFilter(tree, code)) {
+  if (!isCandidate(authorityAnchors)) return;
   const replace = (id, node, replacement) => {
     results[id].present = true;
     edit(id, node, `/*clawgod:${id}*/${replacement}`);
@@ -10506,7 +10631,8 @@ function scanPromptAuthority(tree, code, results, edit) {
   });
 }
 
-function scanPromptSnapshot(tree, code, results, edit) {
+function scanPromptSnapshot(tree, code, results, edit, isCandidate = createPatchCandidateFilter(tree, code)) {
+  if (!isCandidate(snapshotAnchors)) return;
   const id = 'pentest-prompt-snapshot';
   const field = (object, name) => {
     const properties = object?.type === 'ObjectExpression' ? object.properties.filter(property =>
@@ -10557,7 +10683,10 @@ function scanPromptSnapshot(tree, code, results, edit) {
   });
 }
 
-function scanPromptTextErase(tree, code, results, edit, permissionBodies, trimExcludes = []) {
+function scanPromptTextErase(tree, code, results, edit, permissionBodies, trimExcludes = [],
+    readContext = () => createPatchContext(tree, code),
+    isCandidate = createPatchCandidateFilter(tree, code, readContext)) {
+  if (!isCandidate(textAnchors, true)) return;
   const id = 'pentest-prompt-rewrite';
   let context;
   const returnPromptText = node => {
@@ -10565,7 +10694,7 @@ function scanPromptTextErase(tree, code, results, edit, permissionBodies, trimEx
       return returnPromptText(node.left) || returnPromptText(node.right);
     const text = firstPromptText(node);
     if (text || node?.type !== 'TemplateLiteral' || !node.expressions.length) return text;
-    const prefix = (context ??= createPatchContext(tree, code)).text(node.expressions[0]);
+    const prefix = (context ??= readContext()).text(node.expressions[0]);
     return prefix === undefined ? text : prefix + (node.quasis[1].value.cooked ?? '');
   };
   const erasePrompt = (target, replacement = '""') => {
@@ -10749,7 +10878,8 @@ function scanApplicationBranding(tree, code, results, edit, upstreamRanges = [])
   });
 }
 
-function scanWarningSuppression(tree, code, results, edit) {
+function scanWarningSuppression(tree, code, results, edit, isCandidate = createPatchCandidateFilter(tree, code)) {
+  if (!isCandidate(warningAnchors)) return;
   const id = 'security-warnings-off';
   const marker = `/*clawgod:${id}*/`;
   if (code.includes(marker)) { results[id].patched = true; return; }
@@ -10786,7 +10916,9 @@ function scanWarningSuppression(tree, code, results, edit) {
 }
 
 
-function scanRuntimeGates(tree, code, results, edit, upstreamRanges = []) {
+function scanRuntimeGates(tree, code, results, edit, upstreamRanges = [],
+    isCandidate = createPatchCandidateFilter(tree, code)) {
+  if (!isCandidate(runtimeGateAnchors)) return;
   const id = 'pentest-runtime-gates';
   const marker = `/*clawgod:${id}*/`;
   const genericId = 'pentest-flags-generic';
@@ -10860,7 +10992,7 @@ export {
 };
 PENTEST_SCANNERS_EOF
 cat > "$CLAWGOD_DIR/pentest-trimming.mjs" << 'PENTEST_TRIMMING_EOF'
-import { AST_HELPERS, contains, containsOwn, createPatchContext, walk } from './ast-patches.mjs';
+import { AST_HELPERS, contains, containsOwn, createPatchCandidateFilter, createPatchContext, walk } from './ast-patches.mjs';
 import { longContentReturn, PENTEST_AST_PATCH_IDS } from './pentest-scanners.mjs';
 
 const { literal, propertyName, member, boolean, staticText, functionNode } = AST_HELPERS;
@@ -10876,7 +11008,27 @@ export const REMOVE_CLOUD_COMMANDS = new Set(['web-setup', 'remote-env', 'telepo
   '__remote-workflow', 'design-login', 'design-consent', 'design-revoke',
   'design-sync', 'artifacts']);
 
-function scanRuntimeTrimming(tree, code, results, edit) {
+const trimmingAnchors = [
+  ['name', 'type'], 'inputSchema', 'getAllBaseTools', 'searchHint',
+  'option', 'addOption', 'requiredOption', 'createOption', 'remote-control',
+  'brief', 'voice', 'briefStandalone',
+  'Proactive', 'Concise', 'Explanatory', 'Learning', 'output-style',
+  'tengu_kairos_brief', 'pewter_owl_brief', 'pewter_owl_tool',
+  'coworkFrameArtifacts', 'useCoworkPlugins', 'isCoworkCloud', 'CLAUDE_CODE_USE_COWORK_PLUGINS',
+  'bundledSkillsInitialized', 'builtinPluginsInitialized',
+  'disableRemoteControl', 'remote_control_at_startup', 'allow_voice_mode', 'voice_init_gate',
+  'DISABLE_AUTOUPDATER', 'DISABLE_TELEMETRY', 'DISABLE_ERROR_REPORTING',
+  '1p_event_logging_start', 'CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING',
+  'checkForUpdates', '/api/claude_code/version', 'update-check',
+  'telemetry.anthropic.com', 'analytics.anthropic.com', '/api/telemetry', 'trackEvent', 'sendAnalytics',
+  'checkpoint', 'clawgod:security-', 'clawgod:runtime-table-probe',
+  // Command fields and names can be assembled through local aliases and spreads.
+  ...REMOVE_COMMANDS, ...REMOVE_CLOUD_COMMANDS, 'help', 'compact',
+];
+
+function scanRuntimeTrimming(tree, code, results, edit, readContext = () => createPatchContext(tree, code),
+    isCandidate = createPatchCandidateFilter(tree, code, readContext)) {
+  if (!isCandidate(trimmingAnchors, true)) return [];
   const statements = tree.body.map(node => node.type === 'ExportNamedDeclaration' ? node.declaration : node).filter(Boolean);
   const functions = new Map(statements.filter(node => node.type === 'FunctionDeclaration')
     .map(node => [node.id.name, node]));
@@ -10893,14 +11045,14 @@ function scanRuntimeTrimming(tree, code, results, edit) {
   const commandText = node => {
     if (!node) return;
     if (node.type === 'SequenceExpression') return commandText(node.expressions.at(-1));
-    return staticText(node) ?? (commandContext ??= createPatchContext(tree, code)).text(node);
+    return staticText(node) ?? (commandContext ??= readContext()).text(node);
   };
   const commandMember = (node, name) => node?.type === 'MemberExpression' &&
     (node.computed ? commandText(node.property) : node.property.name) === name;
   const commandFields = (node, seen = new Set()) => {
     if (!node) return;
     const object = node.type === 'ObjectExpression' ? node :
-      (commandContext ??= createPatchContext(tree, code)).resolve(node)?.node;
+      (commandContext ??= readContext()).resolve(node)?.node;
     if (object?.type !== 'ObjectExpression' || seen.has(object)) return;
     const ancestors = new Set(seen).add(object);
     const fields = new Map();
@@ -10936,6 +11088,9 @@ function scanRuntimeTrimming(tree, code, results, edit) {
   const requireCall = node => node?.type === 'CallExpression' &&
     (node.callee.type === 'Identifier' && node.callee.name === 'require' ||
      member(node.callee, 'require') && node.callee.object.type === 'MetaProperty');
+  const dynamicImport = body => contains(body, child => child.type === 'ImportExpression' ||
+    child.type === 'CallExpression' &&
+      (['Import', 'ImportExpression'].includes(child.callee.type) || requireCall(child)));
   const requiredExport = node => node?.type === 'MemberExpression' && requireCall(node.object)
     ? node.computed ? node.property.value : node.property.name : undefined;
   const replace = (id, node, value) => {
@@ -10945,6 +11100,15 @@ function scanRuntimeTrimming(tree, code, results, edit) {
   const replaceBody = (id, fn, body) => {
     results[id].present = true;
     edit(id, fn.body, `{${marker(id)}${body}}`);
+  };
+  const removeArrayEntries = (id, names) => {
+    if (!names.size) return;
+    walk(tree, node => {
+      if (node.type !== 'ArrayExpression') return;
+      for (const item of node.elements) {
+        if (item?.type === 'Identifier' && names.has(item.name)) edit(id, item, '...[]');
+      }
+    });
   };
   for (const id of PENTEST_AST_PATCH_IDS.filter(id => id.startsWith('security-'))) {
     if (code.includes(marker(id))) results[id].patched = true;
@@ -11062,16 +11226,7 @@ function scanRuntimeTrimming(tree, code, results, edit) {
     replace('security-remote-control-off', registration, 'void 0');
     trimExcludes.push(registration);
   });
-  if (commandStubs.size) {
-    walk(tree, node => {
-      if (node.type !== 'ArrayExpression') return;
-      for (const item of node.elements) {
-        if (item?.type === 'Identifier' && commandStubs.has(item.name)) {
-          edit('security-brief-off', item, '...[]');
-        }
-      }
-    });
-  }
+  removeArrayEntries('security-brief-off', commandStubs);
 
   walk(tree, (node, parent) => {
     if (trimExcludes.some(range => node.start >= range.start && node.end <= range.end)) return false;
@@ -11079,7 +11234,7 @@ function scanRuntimeTrimming(tree, code, results, edit) {
         .some(name => commandMember(node.callee, name))) {
       let option = node.arguments[0];
       if (commandMember(node.callee, 'addOption')) {
-        const context = commandContext ??= createPatchContext(tree, code);
+        const context = commandContext ??= readContext();
         option = context.resolve(option)?.node ?? option;
         while (option?.type === 'CallExpression' && option.callee.type === 'MemberExpression' &&
             !commandMember(option.callee, 'createOption')) {
@@ -11125,27 +11280,15 @@ function scanRuntimeTrimming(tree, code, results, edit) {
     if (style && !(parent?.type === 'ObjectExpression' &&
         parent.properties.some(entry => entry.type === 'Property' &&
           entry.value?.type === 'Literal' && entry.value.value === null))) return;
-    const dynamicImport = body => contains(body, child => child.type === 'ImportExpression' ||
-      child.type === 'CallExpression' &&
-        (['Import', 'ImportExpression'].includes(child.callee.type) || requireCall(child)));
     const commandId = REMOVE_CLOUD_COMMANDS.has(key) ? 'security-cloud-entrypoints-off' :
       REMOVE_COMMANDS.has(key) ? 'security-command-surface' : undefined;
     const loader = (commandId || key === 'output-style') &&
       (functionNode(node.value) ? node.value :
-        (commandContext ??= createPatchContext(tree, code)).resolve(node.value)?.node);
-    if (typeof key === 'string' && commandId &&
-        functionNode(loader) && dynamicImport(loader.body)) {
-      results[commandId].present = true;
-      edit(commandId, node, `${marker(commandId)}...[]`);
-      trimExcludes.push(node);
-      return false;
-    }
-    const command = key === 'output-style' &&
+        (commandContext ??= readContext()).resolve(node.value)?.node);
+    const command = (commandId || key === 'output-style') &&
       functionNode(loader) && dynamicImport(loader.body);
     if (!style && !command) return;
-    const id = 'security-output-styles-off';
-    results[id].present = true;
-    edit(id, node, '/*clawgod:security-output-styles-off*/...[]');
+    replace(commandId ?? 'security-output-styles-off', node, '...[]');
     trimExcludes.push(node);
     return false;
   });
@@ -11188,8 +11331,8 @@ function scanRuntimeTrimming(tree, code, results, edit) {
     const id = 'security-bundled-skills';
     results[id].present = true;
     const state = guard.test.object.name;
-    const declaration = fn.body.body.filter(node => node.type === 'VariableDeclaration')
-      .flatMap(node => node.declarations).find(node => node.id.name === state && node.init?.type === 'CallExpression');
+    const declarations = fn.body.body.filter(node => node.type === 'VariableDeclaration').flatMap(node => node.declarations);
+    const declaration = declarations.find(node => node.id.name === state && node.init?.type === 'CallExpression');
     const assigned = contains(fn.body, node => node.type === 'AssignmentExpression' &&
       member(node.left, 'bundledSkillsInitialized') && node.left.object.name === state && boolean(node.right, true));
     let localAgent;
@@ -11198,8 +11341,7 @@ function scanRuntimeTrimming(tree, code, results, edit) {
           member(node.left, 'CLAUDE_CODE_ENTRYPOINT') && literal(node.right, 'local-agent')) localAgent = node;
     });
     if (!declaration || !assigned || reviews.length !== 1 || !localAgent) continue;
-    const loop = fn.body.body.filter(node => node.type === 'VariableDeclaration')
-      .flatMap(node => node.declarations).find(node => node.id.type === 'ObjectPattern' &&
+    const loop = declarations.find(node => node.id.type === 'ObjectPattern' &&
         node.id.properties.some(property => propertyName(property) === 'registerLoopSkill') && requireCall(node.init));
     const registerLoop = loop ? `${source(loop.init)}.registerLoopSkill();` +
       `${state}.bundledSkillKillSwitchSurvivors.add(${state}.bundledSkills.find(skill=>skill.name==="loop"));` : '';
@@ -11238,9 +11380,7 @@ function scanRuntimeTrimming(tree, code, results, edit) {
   ];
   walk(tree, node => {
     if (node.type !== 'ObjectExpression') return;
-    const hint = node.properties
-      .filter(property => property.type === 'Property' && propertyName(property) === 'searchHint')
-      .map(property => staticText(property.value))[0];
+    const hint = staticText(field(node, 'searchHint'));
     if (!hint || !DISABLED_TOOLS.includes(hint)) return;
     const enabled = node.properties.find(property =>
       property.type === 'Property' && propertyName(property) === 'isEnabled');
@@ -11248,6 +11388,7 @@ function scanRuntimeTrimming(tree, code, results, edit) {
     replace('security-tool-startup', enabled, 'isEnabled:()=>!1');
     return false;
   });
+  const removedTools = new Set();
   for (const binding of bindings.values()) {
     const getterValue = field(binding.init, 'getAllBaseTools');
     if (!getterValue || !(field(binding.init, 'getTools') || field(binding.init, 'assembleToolPool'))) continue;
@@ -11258,9 +11399,10 @@ function scanRuntimeTrimming(tree, code, results, edit) {
       continue;
     }
     const id = 'security-tool-startup';
-    const removed = new Set();
+    const referenced = new Set();
+    walk(getter.body, node => { if (node.type === 'Identifier') referenced.add(node.name); });
     for (const entry of bindings.values()) {
-      if (!entry.init || !contains(getter.body, node => node.type === 'Identifier' && node.name === entry.id.name)) continue;
+      if (!entry.init || !referenced.has(entry.id.name)) continue;
       const exports = new Set();
       walk(entry.init, node => { const name = requiredExport(node); if (toolExports.has(name)) exports.add(name); });
       if (!exports.size) continue;
@@ -11280,15 +11422,10 @@ function scanRuntimeTrimming(tree, code, results, edit) {
       }
       if (value === undefined) continue;
       replace(id, entry.init, value);
-      removed.add(entry.id.name);
+      removedTools.add(entry.id.name);
     }
-    walk(tree, node => {
-      if (node.type !== 'ArrayExpression') return;
-      for (const item of node.elements) {
-        if (item?.type === 'Identifier' && removed.has(item.name)) edit(id, item, '...[]');
-      }
-    });
   }
+  removeArrayEntries('security-tool-startup', removedTools);
 
   for (const [position, entries] of registrations) {
     results[probeId].present = true;
@@ -11496,7 +11633,6 @@ const removedPromptPrefixes = [
   'I cannot support',
   'cannot be used to',
   'should not be used to',
-  'I must decline to',
   'I am unable to assist',
   'I am unable to help',
   'not something I can',
@@ -11550,7 +11686,6 @@ const removedPromptPrefixes = [
   'Would you like me to proceed',
   "I'll wait for your approval",
   'I will wait for your approval',
-  'Are you sure you want to proceed',
   'for safety reasons',
   'for legal reasons',
   'for ethical reasons',
@@ -11833,13 +11968,13 @@ export function pruneRuntimeGraph(files, originalFiles) {
     releasePatchSource(code);
     return { refs, dependencies };
   };
-  const inspect = (code, name) => {
+  const inspect = (code, name, detailed = false) => {
     const tree = readTree(code, name);
     const parents = new Map(), refs = new Map(), declarations = new Map();
     const scopes = new Map(), imports = new Map(), exports = new Map(), dependencies = new Set();
     const dynamicDependencies = new Set(), analysisDependencies = new Set();
     walk(tree, (node, parent) => {
-      parents.set(node, parent);
+      if (detailed) parents.set(node, parent);
       if (reference(node, parent)) refs.set(node.name, (refs.get(node.name) ?? 0) + 1);
       const target = dependency(node);
       if (target) {
@@ -11851,6 +11986,7 @@ export function pruneRuntimeGraph(files, originalFiles) {
         const target = resolve(staticText(node.arguments[0]));
         if (target) analysisDependencies.add(target);
       }
+      if (!detailed) return;
       if (node.type === 'BlockStatement' || node.type === 'CatchClause' ||
           ['ForStatement', 'ForInStatement', 'ForOfStatement'].includes(node.type)) {
         const bindings = new Map();
@@ -11891,6 +12027,15 @@ export function pruneRuntimeGraph(files, originalFiles) {
         exports.set(specifier.exported.name ?? specifier.exported.value, specifier.local.name);
       }
     }
+    // Retain only scalar summaries between files and fixpoint iterations.
+    for (const target of dependencies) analysisDependencies.add(target);
+    for (const entry of imports.values()) if (entry.file) analysisDependencies.add(entry.file);
+    if (!detailed) {
+      const constants = ownConstants({ code, declarations });
+      const compactImports = new Map([...imports].map(([binding, { file, name }]) => [binding, { file, name }]));
+      return { code, refs, imports: compactImports, exports, dependencies,
+        dynamicDependencies, analysisDependencies, constants };
+    }
     const getBinding = (node, name) => {
       for (let parent = parents.get(node); parent; parent = parents.get(parent)) {
         if (scopes.get(parent)?.has(name)) return scopes.get(parent).get(name);
@@ -11918,19 +12063,9 @@ export function pruneRuntimeGraph(files, originalFiles) {
       const binding = getBinding(node, node.name);
       if (binding) boundRefs.set(binding, (boundRefs.get(binding) ?? 0) + 1);
     });
-    // Extra resolved edges invalidate analyses without changing module-retention rules.
-    for (const target of dependencies) analysisDependencies.add(target);
-    for (const entry of imports.values()) if (entry.file) analysisDependencies.add(entry.file);
     return { code, tree, parents, refs, boundRefs, writes, getBinding, declarations, imports, exports,
       dependencies, dynamicDependencies, analysisDependencies };
   };
-  const current = new Map(Object.entries(output).map(([name, code]) =>
-    [name, inspect(code, name)]));
-  const before = new Map(Object.entries(originalFiles).map(([name, code]) => {
-    const info = current.get(name);
-    const { refs, dependencies } = info?.code === code ? info : summarize(code, name);
-    return [name, { refs, dependencies }];
-  }));
   const touched = new Set(Object.keys(output).filter(name => output[name] !== originalFiles[name] &&
     /\/\*clawgod:security-/.test(output[name])));
   const unknown = Symbol('unknown');
@@ -11968,6 +12103,13 @@ export function pruneRuntimeGraph(files, originalFiles) {
     }
     return info.constants = local;
   };
+  const current = new Map(Object.entries(output).map(([name, code]) =>
+    [name, inspect(code, name)]));
+  const before = new Map(Object.entries(originalFiles).map(([name, code]) => {
+    const info = current.get(name);
+    const { refs, dependencies } = info?.code === code ? info : summarize(code, name);
+    return [name, { refs, dependencies }];
+  }));
   const order = new Map([...current.keys()].map((name, index) => [name, index]));
   const ordered = names => [...names].sort((a, b) => order.get(a) - order.get(b));
   const dependents = new Map();
@@ -11984,6 +12126,10 @@ export function pruneRuntimeGraph(files, originalFiles) {
   const refresh = changed => {
     for (const name of changed) {
       const previous = current.get(name), next = inspect(output[name], name);
+      if (previous.exports.size === next.exports.size &&
+          [...next.exports].every(([name, binding]) => previous.exports.has(name) && previous.exports.get(name) === binding)) {
+        next.exports = previous.exports;
+      }
       for (const target of previous.analysisDependencies) {
         dependents.get(target).delete(name);
         sweep.add(target);
@@ -11999,10 +12145,17 @@ export function pruneRuntimeGraph(files, originalFiles) {
       for (const dependent of dependents.get(name) ?? []) dirty.add(dependent);
     }
   };
+  const sameConstants = (left, right) => left?.size === right.size && [...right].every(([name, value]) => {
+    const previous = left.get(name);
+    return previous && previous.call === value.call && previous.id === value.id &&
+      (Object.is(previous.value, value.value) || Array.isArray(previous.value) && Array.isArray(value.value) &&
+        previous.value.length === 0 && value.value.length === 0);
+  });
   let iterations = 0;
   for (;;) {
     if (++iterations > 50) throw new Error('pruneRuntimeGraph: fixpoint did not converge in 50 iterations');
     const pending = ordered(dirty);
+    const previousConstants = new Map(pending.map(name => [name, constants.get(name)]));
     for (const name of pending) constants.set(name, new Map(ownConstants(current.get(name))));
     for (const name of pending) for (const [binding, imported] of current.get(name).imports) {
       const target = current.get(imported.file);
@@ -12012,11 +12165,23 @@ export function pruneRuntimeGraph(files, originalFiles) {
       const constant = source.get(target.exports.get(imported.name));
       if (constant) constants.get(name).set(binding, constant);
     }
+    // Canonicalize only after propagation, preserving its single-pass ordering.
+    for (const name of pending) if (sameConstants(previousConstants.get(name), constants.get(name))) {
+      constants.set(name, previousConstants.get(name));
+    }
     const changed = new Set();
     for (const name of pending) {
-      const info = current.get(name);
+      const summary = current.get(name);
       const local = constants.get(name);
-      if (!touched.has(name) && !local.size && ![...info.dependencies].some(target => constants.get(target)?.size)) continue;
+      if (!touched.has(name) && !local.size && ![...summary.dependencies].some(target => constants.get(target)?.size)) continue;
+      const inputs = [local];
+      for (const target of summary.analysisDependencies) {
+        inputs.push(current.get(target)?.exports, constants.get(target));
+      }
+      if (summary.rewriteInputs?.length === inputs.length &&
+          inputs.every((value, index) => value === summary.rewriteInputs[index])) continue;
+      summary.rewriteInputs = inputs;
+      const info = inspect(summary.code, name, true);
       const edits = [], src = node => info.code.slice(node.start, node.end);
       const add = (node, replacement) => { edits.push({ start: node.start, end: node.end, replacement }); };
       const available = (node, binding) => {
@@ -12168,6 +12333,7 @@ export function pruneRuntimeGraph(files, originalFiles) {
         const code = applyAstEdits(info.code, outer);
         if (code !== info.code) { output[name] = code; touched.add(name); changed.add(name); }
       }
+      if (output[name] !== info.code) releasePatchSource(info.code);
     }
     if (changed.size) {
       refresh(changed);
@@ -12175,7 +12341,7 @@ export function pruneRuntimeGraph(files, originalFiles) {
     }
     for (const name of ordered(sweep)) {
       if (!touched.has(name)) continue;
-      const info = current.get(name), imported = new Set();
+      const info = inspect(output[name], name, true), imported = new Set();
       let dynamicallyUsed = false;
       for (const dependent of dependents.get(name) ?? []) {
         const owner = current.get(dependent);
@@ -12234,6 +12400,7 @@ export function pruneRuntimeGraph(files, originalFiles) {
         }
       }
       if (edits.length) { output[name] = applyAstEdits(info.code, edits); changed.add(name); }
+      if (output[name] !== info.code) releasePatchSource(info.code);
     }
     sweep.clear();
     if (!changed.size) break;
@@ -12589,7 +12756,7 @@ import { join, dirname, relative, resolve as resolvePath, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { AST_PATCH_IDS, scanAstPatches, applyAstEdits, parsePatchSource, hasPatchAnchors,
   getPatchNodeIndex, getCachedPatchContext, releasePatchContexts, releasePatchSource } from './ast-patches.mjs';
-import { PENTEST_AST_PATCH_IDS, PENTEST_AST_META, PENTEST_REQUIRED, scanPentestPatches, pruneRuntimeGraph } from './pentest-patches.mjs';
+import { PENTEST_AST_PATCH_IDS, PENTEST_AST_META, PENTEST_REQUIRED, scanPentestPatches, findAppliedPromptHooks, pruneRuntimeGraph } from './pentest-patches.mjs';
 import { FEATURES, featuresMeta } from './patch-registry.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -12780,9 +12947,10 @@ const upstreamPatches = [
     id: 'classifier-model',
     toggleable: true,
     name: 'Auto-mode classifier model override (CLAWGOD_CLASSIFIER_MODEL)',
-    pattern: /function ([\w$]+)\(\)\{(?:if\([\w$]+\.CLAUDE_CODE_USER_DELEGATED_SESSION_DIRECT_API\)return\{value:[\w$]+\(\)\?\?"",src:"default"\};)?let [\w$]+=[\w$]+\(\),[\w$]+=[\w$]+\(.*?\),[\w$]+=[\w$]+\([\w$]+\?\.modelByMainModel,\{vet:/g,
+    pattern: /function ([\w$]+)\(\)\{(?:if\((?:[\w$]+\.CLAUDE_CODE_USER_DELEGATED_SESSION_DIRECT_API|[\w$]+\(\))\)return\{value:[\w$]+\(\)\?\?"",src:"default"\};)?let [\w$]+=[\w$]+\(\),[\w$]+=[\w$]+\(.*?\),[\w$]+=[\w$]+\([\w$]+\?\.modelByMainModel,\{vet:/g,
     replacer: (m, fn) =>
       `function ${fn}(){let _cm=process.env.CLAWGOD_CLASSIFIER_MODEL?.trim();if(_cm&&${gate('classifier-model')})return{value:_cm,src:"default"};` + m.slice(m.indexOf('{') + 1),
+    sentinel: ['modelByMainModel'],
     unique: true,
     optional: true,
   },
@@ -12815,6 +12983,13 @@ const upstreamPatches = [
     pattern: /if\((?:([\w$]+)!=="firstParty"&&(?:\1!=="anthropicAws"|![\w$]+\(\1\))[^;]*|[\w$]+\(\)&&\([\w$]+==="claude-opus-4-6"\|\|[\w$]+==="claude-sonnet-4-6"\|\|[\w$]+\.includes\("haiku"\)[^;]*?\))\)return!1;/g,
     replacer: (m) => `if(globalThis.__clawgodPatches?.[${JSON.stringify('auto-mode-inline-gate')}]===!1&&` + m.slice(3, -10) + `)return!1;`,
     sentinel: ['!=="firstParty"', '&&'],
+    fallbacks: [{
+      // 2.1.323 splits the provider/model denial and the Haiku denial into separate returns.
+      pattern: /(function [\w$]+\(([\w$]+)\)\{let ([\w$]+)=[\w$]+\(\2\);if\([\w$]+\(\3\)\)return!1;let ([\w$]+)=[\w$]+\(\);)if\((\4&&\(\3==="claude-opus-4-6"\|\|\3==="claude-sonnet-4-6"\))\)return!1;(let ([\w$]+)=[\w$]+\(\)==="firstParty"&&[^;{}]+;)return(!\(\(\4\|\|\7\)&&\3\.includes\("haiku"\)&&\3!=="claude-haiku-5-5"\))\}/g,
+      nodeType: ['FunctionDeclaration', 'FunctionExpression'],
+      replacer: (m, prefix, arg, model, provider, denial, setup, firstParty, result) =>
+        `${prefix}if(!(${gate('auto-mode-inline-gate')})&&(${denial}))return!1;${setup}return ${gate('auto-mode-inline-gate')}||(${result})}`,
+    }],
   },
 
   {
@@ -12928,9 +13103,7 @@ const upstreamPatches = [
     name: 'Attachment filter bypass',
     pattern: /([\w$]+)\(\)!=="ant"(&&[\w$]+\.has\([\w$]+\.attachment\.type\)|\)\{if\([\w$]+\.attachment\.type==="hook_additional_context")/g,
     replacer: (m) => m.replace(/([\w$]+)\(\)!=="ant"(&&|\))/, (cm, f, sep) =>
-      sep === '&&'
-        ? `(${gate('attachment-filter-bypass')}?!1:${f}()!=="ant")&&`
-        : `(${gate('attachment-filter-bypass')}?!1:${f}()!=="ant"))`),
+      `(${gate('attachment-filter-bypass')}?!1:${f}()!=="ant")${sep}`),
     optional: true,
   },
   {
@@ -12980,12 +13153,8 @@ const upstreamPatches = [
   },
 ];
 
-const PENTEST_DROPPED_FEATURES = ['voice-mode'];
-const PENTEST_DROPPED_IDS = new Set(
-  Object.entries(FEATURES).filter(([fid]) => PENTEST_DROPPED_FEATURES.includes(fid))
-    .flatMap(([, def]) => def.patchIds),
-);
-for (const fid of PENTEST_DROPPED_FEATURES) delete FEATURES[fid];
+const PENTEST_DROPPED_IDS = new Set(FEATURES['voice-mode'].patchIds);
+delete FEATURES['voice-mode'];
 const patches = upstreamPatches
   .filter(p => !PENTEST_DROPPED_IDS.has(p.id))
   .concat(PENTEST_AST_PATCH_IDS.map(id => ({ id, name: PENTEST_AST_META[id], ast: true, optional: true })));
@@ -13385,8 +13554,7 @@ if (!dryRun && !verify && applied > 0) {
 if (promptRequired && !dryRun && !verify) {
   const hooks = new Set();
   for (const content of Object.values(files)) {
-    const scanned = scanPentestPatches(content);
-    for (const id of PENTEST_REQUIRED) if (scanned[id].patched) hooks.add(id);
+    for (const id of findAppliedPromptHooks(content)) hooks.add(id);
     if (hooks.size === PENTEST_REQUIRED.size) break;
   }
   const missing = [...PENTEST_REQUIRED].filter(id => !hooks.has(id));

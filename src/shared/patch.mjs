@@ -4,7 +4,7 @@ import { join, dirname, relative, resolve as resolvePath, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { AST_PATCH_IDS, scanAstPatches, applyAstEdits, parsePatchSource, hasPatchAnchors,
   getPatchNodeIndex, getCachedPatchContext, releasePatchContexts, releasePatchSource } from './ast-patches.mjs';
-import { PENTEST_AST_PATCH_IDS, PENTEST_AST_META, PENTEST_REQUIRED, scanPentestPatches, pruneRuntimeGraph } from './pentest-patches.mjs';
+import { PENTEST_AST_PATCH_IDS, PENTEST_AST_META, PENTEST_REQUIRED, scanPentestPatches, findAppliedPromptHooks, pruneRuntimeGraph } from './pentest-patches.mjs';
 import { FEATURES, featuresMeta } from './patch-registry.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -195,9 +195,10 @@ const upstreamPatches = [
     id: 'classifier-model',
     toggleable: true,
     name: 'Auto-mode classifier model override (CLAWGOD_CLASSIFIER_MODEL)',
-    pattern: /function ([\w$]+)\(\)\{(?:if\([\w$]+\.CLAUDE_CODE_USER_DELEGATED_SESSION_DIRECT_API\)return\{value:[\w$]+\(\)\?\?"",src:"default"\};)?let [\w$]+=[\w$]+\(\),[\w$]+=[\w$]+\(.*?\),[\w$]+=[\w$]+\([\w$]+\?\.modelByMainModel,\{vet:/g,
+    pattern: /function ([\w$]+)\(\)\{(?:if\((?:[\w$]+\.CLAUDE_CODE_USER_DELEGATED_SESSION_DIRECT_API|[\w$]+\(\))\)return\{value:[\w$]+\(\)\?\?"",src:"default"\};)?let [\w$]+=[\w$]+\(\),[\w$]+=[\w$]+\(.*?\),[\w$]+=[\w$]+\([\w$]+\?\.modelByMainModel,\{vet:/g,
     replacer: (m, fn) =>
       `function ${fn}(){let _cm=process.env.CLAWGOD_CLASSIFIER_MODEL?.trim();if(_cm&&${gate('classifier-model')})return{value:_cm,src:"default"};` + m.slice(m.indexOf('{') + 1),
+    sentinel: ['modelByMainModel'],
     unique: true,
     optional: true,
   },
@@ -230,6 +231,13 @@ const upstreamPatches = [
     pattern: /if\((?:([\w$]+)!=="firstParty"&&(?:\1!=="anthropicAws"|![\w$]+\(\1\))[^;]*|[\w$]+\(\)&&\([\w$]+==="claude-opus-4-6"\|\|[\w$]+==="claude-sonnet-4-6"\|\|[\w$]+\.includes\("haiku"\)[^;]*?\))\)return!1;/g,
     replacer: (m) => `if(globalThis.__clawgodPatches?.[${JSON.stringify('auto-mode-inline-gate')}]===!1&&` + m.slice(3, -10) + `)return!1;`,
     sentinel: ['!=="firstParty"', '&&'],
+    fallbacks: [{
+      // 2.1.323 splits the provider/model denial and the Haiku denial into separate returns.
+      pattern: /(function [\w$]+\(([\w$]+)\)\{let ([\w$]+)=[\w$]+\(\2\);if\([\w$]+\(\3\)\)return!1;let ([\w$]+)=[\w$]+\(\);)if\((\4&&\(\3==="claude-opus-4-6"\|\|\3==="claude-sonnet-4-6"\))\)return!1;(let ([\w$]+)=[\w$]+\(\)==="firstParty"&&[^;{}]+;)return(!\(\(\4\|\|\7\)&&\3\.includes\("haiku"\)&&\3!=="claude-haiku-5-5"\))\}/g,
+      nodeType: ['FunctionDeclaration', 'FunctionExpression'],
+      replacer: (m, prefix, arg, model, provider, denial, setup, firstParty, result) =>
+        `${prefix}if(!(${gate('auto-mode-inline-gate')})&&(${denial}))return!1;${setup}return ${gate('auto-mode-inline-gate')}||(${result})}`,
+    }],
   },
 
   {
@@ -343,9 +351,7 @@ const upstreamPatches = [
     name: 'Attachment filter bypass',
     pattern: /([\w$]+)\(\)!=="ant"(&&[\w$]+\.has\([\w$]+\.attachment\.type\)|\)\{if\([\w$]+\.attachment\.type==="hook_additional_context")/g,
     replacer: (m) => m.replace(/([\w$]+)\(\)!=="ant"(&&|\))/, (cm, f, sep) =>
-      sep === '&&'
-        ? `(${gate('attachment-filter-bypass')}?!1:${f}()!=="ant")&&`
-        : `(${gate('attachment-filter-bypass')}?!1:${f}()!=="ant"))`),
+      `(${gate('attachment-filter-bypass')}?!1:${f}()!=="ant")${sep}`),
     optional: true,
   },
   {
@@ -395,12 +401,8 @@ const upstreamPatches = [
   },
 ];
 
-const PENTEST_DROPPED_FEATURES = ['voice-mode'];
-const PENTEST_DROPPED_IDS = new Set(
-  Object.entries(FEATURES).filter(([fid]) => PENTEST_DROPPED_FEATURES.includes(fid))
-    .flatMap(([, def]) => def.patchIds),
-);
-for (const fid of PENTEST_DROPPED_FEATURES) delete FEATURES[fid];
+const PENTEST_DROPPED_IDS = new Set(FEATURES['voice-mode'].patchIds);
+delete FEATURES['voice-mode'];
 const patches = upstreamPatches
   .filter(p => !PENTEST_DROPPED_IDS.has(p.id))
   .concat(PENTEST_AST_PATCH_IDS.map(id => ({ id, name: PENTEST_AST_META[id], ast: true, optional: true })));
@@ -800,8 +802,7 @@ if (!dryRun && !verify && applied > 0) {
 if (promptRequired && !dryRun && !verify) {
   const hooks = new Set();
   for (const content of Object.values(files)) {
-    const scanned = scanPentestPatches(content);
-    for (const id of PENTEST_REQUIRED) if (scanned[id].patched) hooks.add(id);
+    for (const id of findAppliedPromptHooks(content)) hooks.add(id);
     if (hooks.size === PENTEST_REQUIRED.size) break;
   }
   const missing = [...PENTEST_REQUIRED].filter(id => !hooks.has(id));

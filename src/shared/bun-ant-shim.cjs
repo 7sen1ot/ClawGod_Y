@@ -101,6 +101,16 @@ function scanChunks(text) {
   return chunks;
 }
 
+function indexFor(value, values, index) {
+  let id = index.get(value);
+  if (id === undefined) {
+    id = values.length;
+    values.push(value);
+    index.set(value, id);
+  }
+  return id;
+}
+
 class CellSegmenter {
   constructor(options) {
     const opts = options || {};
@@ -127,13 +137,7 @@ class CellSegmenter {
   }
 
   _uriIndexFor(uri) {
-    let id = this._uriIndex.get(uri);
-    if (id === undefined) {
-      id = this.uris.length;
-      this.uris.push(uri);
-      this._uriIndex.set(uri, id);
-    }
-    return id;
+    return indexFor(uri, this.uris, this._uriIndex);
   }
 
   _applySgr(params) {
@@ -195,13 +199,7 @@ class CellSegmenter {
   }
 
   _graphemeId(grapheme) {
-    let id = this._graphemeIndex.get(grapheme);
-    if (id === undefined) {
-      id = this.graphemes.length;
-      this.graphemes.push(grapheme);
-      this._graphemeIndex.set(grapheme, id);
-    }
-    return id;
+    return indexFor(grapheme, this.graphemes, this._graphemeIndex);
   }
 
   segment(text, cells, runs  ) {
