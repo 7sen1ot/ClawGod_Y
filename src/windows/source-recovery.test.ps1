@@ -19,7 +19,9 @@ try {
     New-Item -ItemType Directory -Path (Join-Path $ClawDir 'bunfs') | Out-Null
     Set-Content (Join-Path $ClawDir 'bunfs\commands.js') '// old graph'
     . $snapshot
-    Remove-Item -Recurse -Force (Join-Path $ClawDir 'bunfs')
+    if (Test-Path (Join-Path $ClawDir 'bunfs')) {
+        Remove-Item -Recurse -Force (Join-Path $ClawDir 'bunfs')
+    }
     Set-Content (Join-Path $ClawDir 'cli.original.cjs') '// new source'
     Set-Content (Join-Path $ClawDir '.source-version') '2.1.299'
     Set-Content (Join-Path $ClawDir 'cli.cjs') '// new wrapper'
