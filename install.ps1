@@ -11947,7 +11947,7 @@ function scanRuntimeTrimming(tree, code, results, edit, readContext = () => crea
     'cc-plugin-tips', 'cc-plugin-telemetry', 'cc-plugin-responsive-mode',
     'cc-plugin-you-should-know', 'cc-plugin-easel', 'cc-plugin-claude-test']);
   for (const fn of functions.values()) {
-    if (!noArgs(fn) || !contains(fn.body, node => node.type === 'AssignmentExpression' &&
+    if (fn.async || fn.generator || !contains(fn.body, node => node.type === 'AssignmentExpression' &&
         member(node.left, 'builtinPluginsInitialized') && boolean(node.right, true))) continue;
     walk(fn.body, node => {
       if (node.type !== 'CallExpression' || node.arguments.length !== 2 ||
@@ -13714,6 +13714,7 @@ const upstreamPatches = [
     id: 'remove-cyber-risk',
     toggleable: true,
     name: 'Remove CYBER_RISK_INSTRUCTION (unconditional)',
+    coveredBy: ['pentest-prompt-rewrite'],
     pattern: /([\w$]+)="(IMPORTANT: Assist with authorized security testing[^"]*)"/g,
     replacer: (m, varName) => `${varName}=""`,
     sentinel: ['Assist with authorized security testing', 'IMPORTANT'],
@@ -14076,17 +14077,19 @@ for (const p of [...patches.filter(p => p.ast), ...patches.filter(p => !p.ast)])
       failed++;
       continue;
     }
-    const coveringRule = p.coveredBy?.find(id => appliedIds.has(id));
-    if (coveringRule) {
-      console.log(`  \u23ed  ${p.name} (covered by applied rule: ${coveringRule})`);
-      skipped++;
-      continue;
-    }
     const sentinels = p.ast ? [p.id] :
       (Array.isArray(p.sentinel) ? p.sentinel : [p.sentinel])
         .filter(s => typeof s === 'string' && s.length > 0);
     const anchorPresent = p.ast ? astPresent.has(p.id) :
       sentinels.length > 0 && Object.values(files).some(content => hasPatchAnchors(content, [sentinels]));
+    const coveringRule = p.coveredBy?.find(id => appliedIds.has(id));
+    // A text rule is covered only when its original anchor was removed.
+    if (coveringRule && (p.sentinel === undefined || !anchorPresent &&
+        sentinels.length > 0 && Object.values(originalFiles).some(content => hasPatchAnchors(content, [sentinels])))) {
+      console.log(`  \u23ed  ${p.name} (covered by applied rule: ${coveringRule})`);
+      skipped++;
+      continue;
+    }
     if (p.optional && !anchorPresent) {
       console.log(`  \u23ed  ${p.name} (not present in this version)`);
       skipped++;
