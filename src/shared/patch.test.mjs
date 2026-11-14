@@ -13,7 +13,7 @@ import { requiredRuntime } from './required-runtime.fixture.mjs';
 
 const patchFiles = [
   'patch.mjs', 'patch-registry.mjs', 'ast-patches.mjs', 'acorn.mjs', 'pentest-patches.mjs',
-  'pentest-scanners.mjs', 'pentest-trimming.mjs', 'pentest-policy-text.mjs', 'pentest-pruner.mjs',
+  'pentest-scanners.mjs', 'pentest-trimming.mjs', 'pentest-policy-text.mjs', 'pentest-pruner.mjs', 'runtime-helpers.cjs',
 ];
 
 {
@@ -250,7 +250,7 @@ try {
     context: 'function context({customSystemPrompt,tools,mainLoopModel}){' +
       'return{defaultSystemPrompt:customSystemPrompt?[]:["Runtime."],userContext:{cwd:"/fixture"},systemContext:{model:mainLoopModel}}}',
   };
-  const run = () => spawnSync(process.execPath, [join(promptDir, 'patch.mjs')], {
+  const run = (...args) => spawnSync(process.execPath, [join(promptDir, 'patch.mjs'), ...args], {
     encoding: 'utf8', timeout: 30000,
   });
   for (const graph of [false, true]) {
@@ -321,6 +321,15 @@ try {
       const repeated = run();
       assert.equal(repeated.status, 0, repeated.stderr);
       assert.deepEqual(readSources(), patched, `${label}: repatching is idempotent`);
+      if (scenario === 'primary') {
+        assert.equal(run('--verify').status, 0, `${label}: verify accepts fully patched source`);
+        writeFileSync(target, patched[target] + '\nconst addedDescription="Restart Claude Code after setup.";');
+        const unpatched = readSources();
+        const verification = run('--verify');
+        assert.notEqual(verification.status, 0, `${label}: verify must reject newly introduced branding sites`);
+        assert.match(verification.stderr, /Unpatched application prompt sites: cli-branding/);
+        assert.deepEqual(readSources(), unpatched, 'verification must not modify sources');
+      }
     }
   }
 } finally {

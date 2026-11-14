@@ -144,7 +144,7 @@ else
 fi
 
 if ! command -v npm &>/dev/null; then
-  warn "npm is required to download Claude Code from the registry."
+  warn "npm is required to download the ClawGod_Y upstream runtime from the registry."
   exit 1
 fi
 if [ -z "$os" ] || [ -z "$arch" ]; then
@@ -171,7 +171,7 @@ fi
 if [ -z "$NATIVE_BIN" ]; then
   rm -rf "$NATIVE_BIN_TMPDIR"
   warn "Failed to download $NPM_PKG@$VERSION from npm."
-  warn "  Install the official Claude Code binary manually:"
+  warn "  Install the upstream runtime binary manually:"
   warn "    curl -fsSL https://claude.ai/install.sh | bash"
   exit 1
 fi
@@ -365,9 +365,9 @@ if [ "$patch_status" -ne 0 ]; then
     warn "No previous working installation found to roll back."
   fi
   warn ""
-  warn "The selected Claude Code build (${NATIVE_BIN_LABEL:-unknown}) is not supported by this ClawGod_Y release."
+  warn "The selected upstream runtime build (${NATIVE_BIN_LABEL:-unknown}) is not supported by this ClawGod_Y release."
   warn "Optional unmatched patches are already skipped; required prompt injection and source errors cannot be skipped."
-  warn "Rerun the installer with a compatible Claude Code version."
+  warn "Rerun the installer with a compatible upstream runtime version."
   exit "$patch_status"
 fi
 
@@ -563,7 +563,7 @@ echo ""
 echo -e "  ${BOLD}${GREEN}ClawGod_Y installed!${NC}"
 echo ""
 dim "  clawgod           — Start ClawGod_Y"
-dim "  claude            — Original unpatched Claude Code (untouched)"
+dim "  claude            — Original upstream CLI (untouched)"
 echo ""
 dim "  ClawGod_Y runtime version: $NATIVE_BIN_LABEL"
 dim "  clawgod --version   — Query the ClawGod_Y runtime version"

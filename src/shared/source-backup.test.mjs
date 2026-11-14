@@ -12,7 +12,7 @@ try {
   for (const graph of [false, true]) {
     const dir = join(root, graph ? 'graph' : 'legacy');
     mkdirSync(dir);
-    for (const name of ['patch.mjs', 'patch-registry.mjs', 'ast-patches.mjs', 'acorn.mjs', 'pentest-patches.mjs', 'pentest-scanners.mjs', 'pentest-trimming.mjs', 'pentest-policy-text.mjs', 'pentest-pruner.mjs']) {
+    for (const name of ['patch.mjs', 'patch-registry.mjs', 'ast-patches.mjs', 'acorn.mjs', 'pentest-patches.mjs', 'pentest-scanners.mjs', 'pentest-trimming.mjs', 'pentest-policy-text.mjs', 'pentest-pruner.mjs', 'runtime-helpers.cjs']) {
       copyFileSync(new URL(`./${name}`, import.meta.url), join(dir, name));
     }
     const entry = join(dir, 'cli.original.cjs');
@@ -115,7 +115,7 @@ try {
     assert.equal(result.status, 7);
     assert.match(result.stdout, /Installation aborted/);
     assert.match(result.stdout, /No previous working installation found to roll back/);
-    assert.match(result.stdout, /Rerun the installer with a compatible Claude Code version/);
+    assert.match(result.stdout, /Rerun the installer with a compatible upstream runtime version/);
     assert.doesNotMatch(result.stdout, /UNEXPECTED_SUCCESS/);
     const rollbackDir = join(dir, 'rollback-test');
     mkdirSync(rollbackDir);
@@ -144,7 +144,7 @@ try {
     result = rollbackShell(snapshotInstall + broken + replaceAst + apply);
     assert.equal(result.status, 9, result.stderr + result.stdout);
     assert.match(result.stdout, /Restored previous working installation \(2.1.280\)/);
-    assert.match(result.stdout, /The selected Claude Code build \(2.1.299\) is not supported/);
+    assert.match(result.stdout, /The selected upstream runtime build \(2.1.299\) is not supported/);
     assert.equal(readFileSync(join(rollbackDir, '.source-version'), 'utf8').trim(), '2.1.280');
     assert.equal(readFileSync(join(rollbackDir, 'cli.original.cjs'), 'utf8'), '// Old working 2.1.280');
     assert.equal(readFileSync(join(graphDir, 'commands.js'), 'utf8'), '// old graph');

@@ -27,7 +27,7 @@ assert.equal(terminalReplyDelay(pending, reader('\x1b['), NaN), 0);
 
 const dir = mkdtempSync(join(tmpdir(), 'clawgod-terminal-reply-test-'));
 try {
-  for (const name of ['patch.mjs', 'patch-registry.mjs', 'ast-patches.mjs', 'acorn.mjs', 'pentest-patches.mjs', 'pentest-scanners.mjs', 'pentest-trimming.mjs', 'pentest-policy-text.mjs', 'pentest-pruner.mjs']) {
+  for (const name of ['patch.mjs', 'patch-registry.mjs', 'ast-patches.mjs', 'acorn.mjs', 'pentest-patches.mjs', 'pentest-scanners.mjs', 'pentest-trimming.mjs', 'pentest-policy-text.mjs', 'pentest-pruner.mjs', 'runtime-helpers.cjs']) {
     copyFileSync(new URL(`./${name}`, import.meta.url), join(dir, name));
   }
   for (const graph of [false, true]) {

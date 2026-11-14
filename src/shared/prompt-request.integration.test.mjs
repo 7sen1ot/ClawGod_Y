@@ -25,6 +25,10 @@ test('system instructions survive HTTP transport, tools, streaming and snapshot 
       assert.ok(system.includes(rules));
       assert.ok(!system.includes('The application name is ClawGod_Y'));
       assert.ok(!system.includes('The continuing application is ClawGod_Y'));
+      assert.ok(!system.includes('Claude Code'), 'late system additions must pass through the branding policy');
+      const definition = protocol === 'anthropic' ? body.tools[0] : body.tools[0].function;
+      assert.equal(definition.name, 'read_file');
+      assert.equal(definition.description, 'Read files for ClawGod_Y. Keep claude-code-guide and statusline-setup identifiers.');
       const messages = protocol === 'anthropic' ? body.messages : body.messages.slice(1);
       assert.ok(!JSON.stringify(messages).includes(options.customPrompt), 'instructions must not become conversation content');
       const afterTool = messages.some(message => message.role === 'tool' || Array.isArray(message.content) &&
@@ -57,7 +61,9 @@ test('system instructions survive HTTP transport, tools, streaming and snapshot 
         });
       } };
       const body = { model: 'fixture', max_tokens: 100, stream: protocol === 'openai-chat',
-        tools: [{ name: 'read_file', input_schema: { type: 'object', properties: { path: { type: 'string' } } } }],
+        system: 'Fast mode for Claude Code is toggled with /fast.',
+        tools: [{ name: 'read_file', description: 'Read files for Claude Code. Keep claude-code-guide and statusline-setup identifiers.',
+          input_schema: { type: 'object', properties: { path: { type: 'string' } } } }],
         messages: [{ role: 'user', content: 'Read the fixture.' }] };
       let response = await resource.create(body);
       assert.equal(response.status, 200);
@@ -74,6 +80,7 @@ test('system instructions survive HTTP transport, tools, streaming and snapshot 
       const snapshot = helpers.refreshPromptSnapshot({ systemPrompt: stale }, ['Tool protocol.'], options,
         JSON.stringify, systemPrompt => ({ systemPrompt }));
       body.system = snapshot.systemPrompt.map(text => ({ type: 'text', text }));
+      body.system[0].text += '\n\nClaude Code status line setting.';
       response = await resource.create(body);
       assert.equal(response.status, 200);
       assert.match(await response.text(), /done/);

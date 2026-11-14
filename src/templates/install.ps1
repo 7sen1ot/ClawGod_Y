@@ -449,9 +449,9 @@ if ($patchExitCode -ne 0) {
         Write-Err "No previous working installation found to roll back."
     }
     Write-Err ""
-    Write-Err "The selected Claude Code build ($NativeBinLabel) is not supported by this ClawGod_Y release."
+    Write-Err "The selected upstream runtime build ($NativeBinLabel) is not supported by this ClawGod_Y release."
     Write-Err "Optional unmatched patches are already skipped; required prompt injection and source errors cannot be skipped."
-    Write-Err "Rerun the installer with a compatible Claude Code version."
+    Write-Err "Rerun the installer with a compatible upstream runtime version."
     exit $exitCode
 }
 
@@ -701,7 +701,7 @@ Write-Host ""
 Write-Host "  ClawGod_Y installed!" -ForegroundColor Green
 Write-Host ""
 Write-Dim "  clawgod           -- Start ClawGod_Y"
-Write-Dim "  claude            -- Original unpatched Claude Code (untouched)"
+Write-Dim "  claude            -- Original upstream CLI (untouched)"
 Write-Host ""
 Write-Dim "  ClawGod_Y runtime version: $NativeBinLabel"
 Write-Dim "  clawgod --version   -- Query the ClawGod_Y runtime version"

@@ -4,7 +4,7 @@ import { join, dirname, relative, resolve as resolvePath, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { AST_PATCH_IDS, scanAstPatches, applyAstEdits, parsePatchSource, hasPatchAnchors,
   getPatchNodeIndex, getCachedPatchContext, releasePatchContexts, releasePatchSource } from './ast-patches.mjs';
-import { PENTEST_AST_PATCH_IDS, PENTEST_AST_META, PENTEST_REQUIRED, scanPentestPatches, findAppliedPromptHooks, pruneRuntimeGraph } from './pentest-patches.mjs';
+import { PENTEST_AST_PATCH_IDS, PENTEST_AST_META, PENTEST_REQUIRED, scanPentestPatches, scanFinalPolicyEdits, scanFinalBrandingEdits, findAppliedPromptHooks, pruneRuntimeGraph } from './pentest-patches.mjs';
 import { FEATURES, featuresMeta } from './patch-registry.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -17,19 +17,19 @@ const gate = (id) => `globalThis.__clawgodPatches?.[${JSON.stringify(id)}]!==!1`
 const upstreamPatches = [
   {
     id: 'session-project-paths',
-    name: 'Keep ClawGod transcripts separate from Claude Code configuration',
+    name: 'Keep ClawGod_Y transcripts separate from upstream configuration',
     ast: true,
     required: true,
   },
   {
     id: 'session-history-paths',
-    name: 'Keep ClawGod prompt history separate from Claude Code',
+    name: 'Keep ClawGod_Y prompt history separate from upstream history',
     ast: true,
     required: true,
   },
   {
     id: 'session-state-paths',
-    name: 'Keep session state and cleanup paths in the ClawGod directory',
+    name: 'Keep session state and cleanup paths in the ClawGod_Y directory',
     ast: true,
     optional: true,
   },
@@ -615,7 +615,7 @@ try {
     for (const scan of [result, pentest]) {
       for (const [id, found] of Object.entries(scan)) {
         const matches = found.fallbackMatches?.length ? [...found.matches, ...found.fallbackMatches] : found.matches;
-        if (PENTEST_REQUIRED.has(id) && (found.present || found.patched || matches.length || found.skipped)) {
+        if ((PENTEST_REQUIRED.has(id) || id === 'cli-branding' || id === 'pentest-prompt-rewrite') && (found.present || found.patched || matches.length || found.skipped)) {
           promptSourcePaths.add(file);
         }
         if (found.present || found.fallbackMatches?.length) astPresent.add(id);
@@ -670,7 +670,7 @@ for (const p of [...patches.filter(p => p.ast), ...patches.filter(p => !p.ast)])
       continue;
     }
     if (p.required || promptRequired && PENTEST_REQUIRED.has(p.id)) {
-      console.log(`  ❌ ${p.name} (required runtime hook did not match — Claude Code changed)`);
+      console.log(`  ❌ ${p.name} (required runtime hook did not match — upstream runtime changed)`);
       failed++;
       continue;
     }
@@ -799,8 +799,32 @@ if (!dryRun && !verify && applied > 0) {
   }
 }
 
-if (promptRequired && !dryRun && !verify) {
+if (promptRequired && !dryRun) {
   const hooks = new Set();
+  let finalized = false;
+  if (!verify) for (const [file, content] of Object.entries(files)) {
+    try {
+      let next = content;
+      // Structural edits and pruning can reintroduce host prose. Finish policy
+      // cleanup first so it cannot hide branding edits in the same template.
+      for (const scan of [scanFinalPolicyEdits, scanFinalBrandingEdits]) {
+        const edits = scan(next);
+        if (edits === null) continue;
+        promptSourcePaths.add(file);
+        if (!edits.length) continue;
+        const previous = next;
+        next = applyAstEdits(next, edits);
+        parsePatchSource(next);
+        releasePatchSource(previous);
+        finalized = true;
+      }
+      files[file] = next;
+    } catch (error) {
+      console.error(`Application prompt cleanup failed in ${relative(__dirname, file)}: ${error.message}; source files were not changed.`);
+      process.exit(1);
+    }
+  }
+  if (finalized) applied++;
   // Recheck every surviving prompt module, including modules without any applied marker.
   // Seeing all hook IDs once does not prove that other call sites were covered.
   for (const file of promptSourcePaths) {

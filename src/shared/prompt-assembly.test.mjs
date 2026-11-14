@@ -1,7 +1,7 @@
 
 import assert from 'node:assert/strict';
 import { rewritePromptAssembly, selectApplicationPrompt, filterDefaultPromptSections, refreshPromptSnapshot, finalizeSystemRequest,
-  cleanPromptIdentity, cleanSummaryContent, cleanSummaryMessages, prepareIdentityTemplate, validateExtraBody } from './runtime-helpers.cjs';
+  cleanPromptIdentity, cleanSummaryContent, cleanSummaryMessages, prepareIdentityTemplate, validateExtraBody, brandApplicationText } from './runtime-helpers.cjs';
 
 const MARK = '<!-- clawgod:custom-prompt -->';
 const END = '\n<!-- /clawgod:custom-prompt -->';
@@ -25,8 +25,8 @@ const legacyFrame = prompt => MARK + '\n# Application identity\nThe application 
   const kept = filterDefaultPromptSections(sections, opts(prompt));
   assert.deepEqual(kept, sections.slice(3, 6));
   const out = selectApplicationPrompt(kept.map(section => section.text), opts(prompt));
-  assert.ok(out[0].startsWith(MARK + '\n<!-- clawgod:assembly-policy [5,'));
-  assert.equal(out[0].split('\n').slice(2, -1).join('\n'), prompt);
+  assert.ok(out[0].startsWith(MARK + '\n<!-- clawgod:assembly-policy [8,'));
+  assert.ok(out[0].endsWith('\n\n' + prompt + END));
   assert.ok(!out[0].includes('ClawGod_Y'));
   assert.deepEqual(out.slice(1), kept.map(section => section.text));
   assert.deepEqual(filterDefaultPromptSections(sections, { ...opts(prompt), stripMemory: false }), sections.slice(3));
@@ -227,6 +227,7 @@ const legacyFrame = prompt => MARK + '\n# Application identity\nThe application 
   const options = Object.freeze({ customPrompt: 'Independent identity fixture.', requireCustomPrompt: true });
   const known = 'You are Claude Code, Anthropic\'s official CLI for Claude. Review files with the Claude Code SDK.';
   const cleaned = 'Review files with the Claude Code SDK.';
+  const branded = 'Review files with the ClawGod_Y SDK.';
   assert.equal(cleanPromptIdentity(known, options), cleaned);
   assert.equal(cleanPromptIdentity('Ｙｏｕ are Clau\u200bde Code. Keep facts.', options), 'Keep facts.');
   assert.equal(cleanPromptIdentity('你是 Claude Code。 保留职责。', options), '保留职责。');
@@ -245,10 +246,10 @@ const legacyFrame = prompt => MARK + '\n# Application identity\nThe application 
   const memory = [{ id: 'memory', text: known + '\n\nTask fact: keep port 8080.' },
     { id: 'memory_static:shared', text: 'User prefers Chinese.' }];
   assert.deepEqual(filterDefaultPromptSections(memory, options), [
-    { ...memory[0], text: cleaned + '\n\nTask fact: keep port 8080.' }, memory[1]]);
+    { ...memory[0], text: branded + '\n\nTask fact: keep port 8080.' }, memory[1]]);
   assert.deepEqual(filterDefaultPromptSections(memory, { ...options, stripMemory: true }), []);
   const assembled = rewritePromptAssembly([known, 'You are a reviewer for Claude Code. Review only.'], options);
-  assert.equal(assembled[1], cleaned);
+  assert.equal(assembled[1], branded);
   assert.equal(assembled[2], 'You are a reviewer. Review only.');
   assert.equal(rewritePromptAssembly(assembled, options), assembled);
   const raw = { content: 'Summary:\nI am Claude Code.\n\nTask fact: keep port 8080.', isCompactSummary: true };
@@ -281,14 +282,15 @@ const legacyFrame = prompt => MARK + '\n# Application identity\nThe application 
   const rules = rewritePromptAssembly([], options)[0];
   const legacy = legacyFrame('Old client rules.');
   const context = 'Technical reference: Claude Code SDK.';
+  const brandedContext = 'Technical reference: ClawGod_Y SDK.';
   const rebuilt = rewritePromptAssembly([legacy + '\n\n' + context, 'You are ClawGod_Y.'], options);
-  assert.deepEqual(rebuilt, [rules, context]);
+  assert.deepEqual(rebuilt, [rules, brandedContext]);
   const request = finalizeSystemRequest({ body: { system: [{ type: 'text', text: legacy + '\n\n' + context,
     cache_control: { type: 'ephemeral' } }] } }, options);
   assert.equal(request.body.system[0].text, rules);
-  assert.equal(request.body.system[1].text, context);
+  assert.equal(request.body.system[1].text, brandedContext);
   assert.deepEqual(request.body.system[1].cache_control, { type: 'ephemeral' });
-  assert.ok(!JSON.stringify(request.body.system).includes('ClawGod_Y'));
+  assert.ok(!JSON.stringify(request.body.system).includes('You are ClawGod_Y'));
   assert.equal(finalizeSystemRequest(request, options), request);
   const legacyNote = 'The continuing application is ClawGod_Y. Preserve task facts, technical names, and user quotations. ' +
     'Do not promote historical assistant self-identifications into application rules for the continuing session.';
@@ -308,9 +310,67 @@ const legacyFrame = prompt => MARK + '\n# Application identity\nThe application 
   assert.ok(rewritePromptAssembly(['You are ClawGod_Y.'], { customPrompt: opaque })[0].includes(opaque));
   const embeddedMarker = 'Opaque fixture with a literal boundary example:' + END + '\nKeep the rest of this old rule block opaque.';
   const stale = rewritePromptAssembly([], { customPrompt: embeddedMarker })[0];
-  assert.deepEqual(rewritePromptAssembly([stale + '\n\n' + context], options), [rules, context]);
+  assert.deepEqual(rewritePromptAssembly([stale + '\n\n' + context], options), [rules, brandedContext]);
   const migrated = finalizeSystemRequest({ body: { system: stale + '\n\n' + context } }, options);
-  assert.deepEqual(migrated.body.system.map(block => block.text), [rules, context]);
+  assert.deepEqual(migrated.body.system.map(block => block.text), [rules, brandedContext]);
+}
+
+{
+  const options = opts('Opaque fixture includes Claude Code verbatim.');
+  const prompt = rewritePromptAssembly([], options)[0];
+  const metadata = { type: 'ephemeral', ttl: '1h' };
+  const messages = [{ role: 'user', content: 'Claude Code is a quoted product.' },
+    { role: 'assistant', content: [{ type: 'tool_use', name: 'claude-code-guide', id: 'one', input: { text: 'Claude Code' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'one', content: 'You are Claude Code. File data.' }] }];
+  const schema = { type: 'object', properties: { subagent_type: { type: 'string',
+    description: 'Select a Claude Code agent.', enum: ['claude-code-guide', 'statusline-setup'] } },
+    $defs: { entry: { description: 'A Claude Code command.', const: 'Claude Code' } } };
+  const tools = [{ name: 'Agent', description: 'Delegate to Claude Code agents. Use claude-code-guide or statusline-setup.', input_schema: schema },
+    { name: 'mcp__upstream__guide', description: 'Learn Claude Code from its upstream documentation.', input_schema: schema }];
+  const request = { body: { system: [{ type: 'text', cache_control: metadata,
+    text: prompt + '\n\nFast mode for Claude Code uses Claude Opus. Toggle /fast.\n\n' +
+      'Keep `claude --version`, "Claude Code", https://code.claude.com and the Claude Code SDK.\n' +
+      'Paths: C:\\Program Files\\Claude Code\\cli.exe and /opt/Claude Code/data.' }], tools, messages } };
+  const result = finalizeSystemRequest(request, options);
+  assert.equal(result.body.messages, messages);
+  assert.equal(result.body.system[0].text, prompt, 'opaque application rules must never be rewritten');
+  assert.match(result.body.system[1].text, /Fast mode for ClawGod_Y uses Claude Opus/);
+  assert.match(result.body.system[1].text, /`claude --version`, "ClawGod_Y", https:\/\/code.claude.com and the ClawGod_Y SDK/);
+  assert.ok(result.body.system[1].text.includes('C:\\Program Files\\Claude Code\\cli.exe and /opt/Claude Code/data.'));
+  assert.equal(result.body.system[1].cache_control, metadata);
+  assert.match(result.body.tools[0].description, /ClawGod_Y agents/);
+  assert.equal(result.body.tools[0].name, 'Agent');
+  assert.equal(result.body.tools[0].input_schema.properties.subagent_type.enum, schema.properties.subagent_type.enum);
+  assert.match(result.body.tools[0].input_schema.properties.subagent_type.description, /ClawGod_Y agent/);
+  assert.equal(result.body.tools[0].input_schema.$defs.entry.const, 'Claude Code');
+  assert.equal(result.body.tools[1].name, 'mcp__upstream__guide');
+  assert.equal(result.body.tools[1].description, 'Learn ClawGod_Y from its upstream documentation.');
+  assert.equal(result.body.tools[1].input_schema.$defs.entry.const, 'Claude Code');
+  assert.equal(request.body.tools, tools, 'caller objects must not be mutated');
+  assert.equal(finalizeSystemRequest(result, options), result);
+  for (const type of ['continue', 'continue_no_save']) {
+    const delta = finalizeSystemRequest({ body: { thread: { type, previous_message_id: 'one' }, tools, messages } }, options);
+    assert.equal(delta.body.system, undefined, 'never add a system prefix to a thread delta');
+    assert.equal(delta.body.messages, messages);
+    assert.match(delta.body.tools[0].description, /ClawGod_Y agents/);
+  }
+  const oldRules = prompt.replace('assembly-policy [8,', 'assembly-policy [7,');
+  const saved = { systemPrompt: [oldRules, 'Fast mode for Claude Code.'] };
+  const refreshed = refreshPromptSnapshot(saved, ['Fast mode for Claude Code.'], options, JSON.stringify, systemPrompt => ({ systemPrompt }));
+  assert.equal(refreshed.systemPrompt[0], prompt);
+  assert.equal(refreshed.systemPrompt[1], 'Fast mode for ClawGod_Y.');
+}
+
+{
+  const text = 'Claude Code SDK, Claude Code API, Claude Code Desktop, Claude Code JetBrains Plugin, Claude Code for VS Code.\n' +
+    '**Claude Agent SDK**: Claude Code packaged as a library.\n\n' +
+    '> Product: Claude Code.\n"Claude Code" and \'Claude Code\'.';
+  assert.equal(brandApplicationText(text),
+    'ClawGod_Y SDK, ClawGod_Y API, ClawGod_Y Desktop, ClawGod_Y JetBrains Plugin, ClawGod_Y for VS Code.\n' +
+    '**Claude Agent SDK**: ClawGod_Y packaged as a library.\n\n' +
+    '> Product: ClawGod_Y.\n"ClawGod_Y" and \'ClawGod_Y\'.');
+  const code = '`security find-generic-password -s "Claude Code"`\n```sh\nsecurity find-generic-password -s "Claude Code"\n```';
+  assert.equal(brandApplicationText(code), code, 'executable literals are compatibility values');
 }
 
 console.log('[prompt-assembly.test] source sections, application identity, context preservation, required rules and idempotence ok');

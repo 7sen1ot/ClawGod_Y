@@ -334,5 +334,5 @@ function install() {
 module.exports = { CellSegmenter, install, scanChunks };
 
 if (install() && process.env.CLAWGOD_BUN_ANT_SHIM_DEBUG === '1') {
-  process.stderr.write('[clawgod] Bun.ant shim active (Claude Code >= 2.1.271 renderer on stock Bun)\n');
+  process.stderr.write('[clawgod] Bun.ant shim active (ClawGod_Y runtime >= 2.1.271 renderer on stock Bun)\n');
 }

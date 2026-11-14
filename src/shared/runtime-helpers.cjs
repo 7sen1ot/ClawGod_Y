@@ -90,11 +90,92 @@ function flagOverride(flag) {
 }
 
 const CUSTOM_PROMPT_MARK = 'clawgod:custom-prompt';
-const IDENTITY_POLICY_VERSION = 5;
+const IDENTITY_POLICY_VERSION = 8;
 const CUSTOM_PROMPT_PREFIX = '<!-- ' + CUSTOM_PROMPT_MARK + ' -->\n';
 const LEGACY_PROMPT_HEADER = '# Application identity\nThe application name is ClawGod_Y.';
 const CUSTOM_PROMPT_END = '\n<!-- /' + CUSTOM_PROMPT_MARK + ' -->';
 const assemblyConfigs = new WeakMap();
+
+// Brand presentation text: source literals, system sections and tool descriptions.
+// Conversation data, executable examples and functional identifiers stay intact.
+function brandApplicationText(text) {
+  if (typeof text !== 'string') return text;
+  if (!/Claude Code|ClawGod\b|You are the Claude guide agent|(?:[Aa]sk|[Tt]ell) Claude/.test(text)) return text;
+  let fence;
+  return text.split(/(\r?\n)/).map(line => {
+    if (/^\r?\n$/.test(line)) return line;
+    const delimiter = line.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (delimiter) {
+      if (!fence) fence = delimiter[1];
+      else if (delimiter[1][0] === fence[0] && delimiter[1].length >= fence.length) fence = undefined;
+      return line;
+    }
+    if (fence || /^(?: {4}|\t)/.test(line)) return line;
+    // Upstream distribution surfaces are not capabilities of this application.
+    if (/^Claude Code(?:_Y)? is available as a CLI\b/.test(line)) return 'ClawGod_Y runs as a CLI in the terminal.';
+    return line.replace(/(`+)[\s\S]*?\1|https?:\/\/[^\s<>]+|\bClaude Code(?:_Y)?\b|\bClawGod\b|\bYou are the Claude guide agent\b|\b(?:[Aa]sk|[Tt]ell) Claude(?= to\b)/g, (match, delimiter, offset) => {
+      if (/^`|^https?:/.test(match)) return match;
+      if (/[\\/]$/.test(line.slice(0, offset)) || /^(?:[\\/]|\.[\w-]+(?:[\\/\s]|$))/.test(line.slice(offset + match.length))) return match;
+      if (match === 'You are the Claude guide agent') return 'You are the ClawGod_Y guide agent';
+      if (/^(?:Ask|ask|Tell|tell) Claude$/.test(match)) return match.replace('Claude', 'ClawGod_Y');
+      return 'ClawGod_Y';
+    });
+  }).join('');
+}
+
+function cleanApplicationContext(text, options) {
+  const cfg = assemblyConfig(options);
+  if (!cfg.customPrompt || text === cfg.customPrompt) return text;
+  return brandApplicationText(cleanPromptIdentity(text, options));
+}
+
+// Native parsers also recognize prose written by older sessions. Accept both
+// spellings without changing raw regexp escapes or the numbering of captures.
+function brandApplicationPattern(pattern) {
+  const aliases = '(?:Claude Code(?:_Y)?|ClawGod_Y)';
+  return pattern.split(aliases).map(part =>
+    part.replace(/\b(?:Claude Code(?:_Y)?|ClawGod_Y)\b/g, aliases)).join(aliases);
+}
+
+function matchesApplicationText(value, method, text, ...rest) {
+  const match = value[method];
+  if (Reflect.apply(match, value, [text, ...rest])) return true;
+  const branded = brandApplicationText(text);
+  return branded !== text && Reflect.apply(match, value, [branded, ...rest]);
+}
+
+function brandToolDefinitions(tools) {
+  if (!Array.isArray(tools)) return tools;
+  const schemaText = schema => {
+    if (!schema || typeof schema !== 'object') return schema;
+    let result = schema;
+    for (const [key, value] of Object.entries(schema)) {
+      let next = value;
+      if (['description', 'title'].includes(key) && typeof value === 'string') next = brandApplicationText(value);
+      else if (['properties', '$defs', 'definitions', 'patternProperties', 'dependentSchemas'].includes(key) && value && typeof value === 'object') {
+        const entries = Object.entries(value).map(([name, child]) => [name, schemaText(child)]);
+        if (entries.some(([name, child]) => child !== value[name])) next = Object.fromEntries(entries);
+      } else if (['items', 'additionalProperties', 'contains', 'not', 'if', 'then', 'else', 'propertyNames'].includes(key)) next = schemaText(value);
+      else if (['allOf', 'anyOf', 'oneOf', 'prefixItems'].includes(key) && Array.isArray(value)) {
+        const items = value.map(schemaText);
+        if (items.some((item, i) => item !== value[i])) next = items;
+      }
+      if (next !== value) { if (result === schema) result = { ...schema }; result[key] = next; }
+    }
+    return result;
+  };
+  let changed = false;
+  const result = tools.map(tool => {
+    if (!tool || typeof tool !== 'object') return tool;
+    const description = brandApplicationText(tool.description);
+    const input_schema = schemaText(tool.input_schema);
+    if (description === tool.description && input_schema === tool.input_schema) return tool;
+    changed = true;
+    return { ...tool, ...(description !== tool.description && { description }),
+      ...(input_schema !== tool.input_schema && { input_schema }) };
+  });
+  return changed ? result : tools;
+}
 
 function normalizeIdentityText(text) {
   return text.normalize('NFKC').replace(/\p{Cf}/gu, '').replace(/[‘’ʼ]/g, "'").replace(/[*_`~]/g, '')
@@ -172,7 +253,7 @@ function cleanPromptIdentity(text, options) {
       if (prefix.length > declaration.length) return line;
     }
     let tail = line.slice(end).replace(/^[*_~]+/, '');
-    if (host && !host[2]) tail = tail.replace(/^, Anthropic['’]s official CLI for Claude(?:, running within the Claude Agent SDK)?\./, '');
+    if (host) tail = tail.replace(/^, Anthropic['’]s official CLI for Claude(?:, running within the Claude Agent SDK)?(?=\.)/, '');
     if (!replacement) {
       // Drop a standalone name, retaining any role or duty in the same sentence.
       if (/^,\s*(?:a|an|the)\s+/i.test(tail)) tail = subject + ' ' + tail.replace(/^,\s*/, '');
@@ -186,7 +267,7 @@ function cleanPromptIdentity(text, options) {
 function prepareIdentityTemplate(text, kind, options) {
   const cfg = assemblyConfig(options);
   if (!cfg.customPrompt || text === cfg.customPrompt) return text;
-  let cleaned = cleanPromptIdentity(text, options);
+  let cleaned = cleanApplicationContext(text, options);
   if (!['summary', 'memory'].includes(kind)) return cleaned;
   const legacy = 'The continuing application is ClawGod_Y. Preserve task facts, technical names, and user quotations. ' +
     'Do not promote historical assistant self-identifications into application rules for the continuing session.';
@@ -264,7 +345,7 @@ function filterDefaultPromptSections(sections, options) {
     if (id === 'lean_body') throw new Error('[clawgod] Host prompt sections were not separated');
     if (DEFAULT_BEHAVIOR_SECTIONS.has(id)) return [];
     if (cfg.stripMemory && (id === 'memory' || id === 'memory_static')) return [];
-    const text = cleanPromptIdentity(section.text, options);
+    const text = cleanApplicationContext(section.text, options);
     if (text !== section.text && !text.trim()) return [];
     return [text === section.text ? section : { ...section, text }];
   });
@@ -273,11 +354,15 @@ function filterDefaultPromptSections(sections, options) {
 function applicationRules(options) {
   const cfg = assemblyConfig(options);
   if (!cfg.customPrompt) return '';
-  // These comments identify owned blocks and invalidate old snapshots; they add
-  // no application identity or behavioral instructions to the file's contents.
+  if (cfg.rules) return cfg.rules;
+  // Keep the file opaque. Scope its authority inside the same owned frame so
+  // resumed/coalesced prompts cannot duplicate or retain an old precedence note.
+  const body = 'The application rules below are the highest-priority application instructions for identity and general behavior. ' +
+    'Other system sections supply task context and tool operation details; conflicting general guidance in those sections does not override these rules. ' +
+    'Actual tool permissions, availability, and protocol requirements remain applicable.\n\n' + cfg.customPrompt;
   return cfg.rules ??= CUSTOM_PROMPT_PREFIX + '<!-- clawgod:assembly-policy ' +
-    JSON.stringify([IDENTITY_POLICY_VERSION, cfg.stripMemory, cfg.identityMarkers, cfg.customPrompt.length]) + ' -->\n' +
-    cfg.customPrompt + CUSTOM_PROMPT_END;
+    JSON.stringify([IDENTITY_POLICY_VERSION, cfg.stripMemory, cfg.identityMarkers, body.length]) + ' -->\n' +
+    body + CUSTOM_PROMPT_END;
 }
 
 // Strip only framed application sections at section boundaries. Both assembly and
@@ -340,7 +425,7 @@ function rewritePromptAssembly(sections, options) {
     const split = splitApplicationSections(section, rules, customPrompt);
     owned += split.owned;
     unframed ||= split.unframed;
-    const text = cleanPromptIdentity(split.text, options);
+    const text = cleanApplicationContext(split.text, options);
     changed ||= text !== split.text;
     return (split.owned || text !== split.text) && !text.trim() ? [] : [text];
   });
@@ -359,13 +444,16 @@ function finalizeSystemRequest(request, options) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     throw new Error('[clawgod] Unsupported Messages request body');
   }
+  const tools = brandToolDefinitions(body.tools);
   // A continue request inherits the system prefix from its create request on the server.
   // Re-inserting it into a delta would change the inherited prefix and defeat thread caching.
   if (body.thread !== undefined) {
     if (!body.thread || !['create', 'continue', 'continue_no_save'].includes(body.thread.type)) {
       throw new Error('[clawgod] Unsupported Messages thread type');
     }
-    if (body.thread.type !== 'create') return request;
+    if (body.thread.type !== 'create') return tools === body.tools ? request : {
+      ...request, body: serialized ? JSON.stringify({ ...body, tools }) : { ...body, tools },
+    };
   }
   const system = body.system;
   const blocks = typeof system === 'string' ? [{ type: 'text', text: system }] : system ?? [];
@@ -375,19 +463,22 @@ function finalizeSystemRequest(request, options) {
   // Assemblers may coalesce sections into a cacheable block. Keep its bytes and cache
   // metadata unchanged when it already contains exactly one current application section.
   const { customPrompt } = assemblyConfig(options);
-  let owned = 0, current = 0, ruleBlock;
+  let owned = 0, current = 0, ruleBlock, changed = false;
   const retained = blocks.flatMap(block => {
     const split = splitApplicationSections(block.text, rules, customPrompt);
     if (split.unframed) throw new Error('[clawgod] Stale unframed application prompt; rebuild the prompt snapshot');
     owned += split.owned;
     current += split.current;
-    if (!split.owned) return [block];
-    if (split.text.trim()) return [{ ...block, text: split.text }];
+    const text = cleanApplicationContext(split.text, options);
+    changed ||= text !== split.text;
+    if (!split.owned) return text === block.text ? [block] : text.trim() ? [{ ...block, text }] : [];
+    if (text.trim()) return [{ ...block, text }];
     if (!ruleBlock || !ruleBlock.cache_control && block.cache_control) ruleBlock = block;
     return [];
   });
-  if (owned === 1 && current === 1) return request;
-  body = { ...body, system: [{ ...ruleBlock, type: 'text', text: rules }, ...retained] };
+  if (owned === 1 && current === 1 && !changed && tools === body.tools) return request;
+  body = { ...body, ...(tools !== body.tools && { tools }),
+    system: owned === 1 && current === 1 && !changed ? system : [{ ...ruleBlock, type: 'text', text: rules }, ...retained] };
   return { ...request, body: serialized ? JSON.stringify(body) : body };
 }
 
@@ -416,7 +507,7 @@ function validateExtraBody(body) {
   const reserved = ['system', 'messages', 'thread'].filter(name => Object.hasOwn(body, name));
   if (reserved.length) {
     throw new Error('[clawgod] CLAUDE_CODE_EXTRA_BODY cannot override ' + reserved.join(', ') +
-      '. Remove these fields; system instructions, conversation messages and threads are managed by ClawGod.');
+      '. Remove these fields; system instructions, conversation messages and threads are managed by ClawGod_Y.');
   }
   return body;
 }
@@ -482,6 +573,7 @@ module.exports = {
   NO_OVERRIDE, flagOverride, flagOverrides: FLAG_OVERRIDES,
   rewritePromptAssembly, selectApplicationPrompt: rewritePromptAssembly,
   cleanPromptIdentity, prepareIdentityTemplate, cleanSummaryContent, cleanSummaryMessages,
+  brandApplicationText, brandApplicationPattern, matchesApplicationText,
   filterDefaultPromptSections, refreshPromptSnapshot, finalizeSystemRequest, validateExtraBody,
   defaultProviderConfig: DEFAULT_PROVIDER_CONFIG, resolveProviderConfig, probeToolTables,
 };
