@@ -1704,7 +1704,7 @@ function flagOverride(flag) {
 }
 
 const CUSTOM_PROMPT_MARK = 'clawgod:custom-prompt';
-const IDENTITY_POLICY_VERSION = 8;
+const IDENTITY_POLICY_VERSION = 10;
 const CUSTOM_PROMPT_PREFIX = '<!-- ' + CUSTOM_PROMPT_MARK + ' -->\n';
 const LEGACY_PROMPT_HEADER = '# Application identity\nThe application name is ClawGod_Y.';
 const CUSTOM_PROMPT_END = '\n<!-- /' + CUSTOM_PROMPT_MARK + ' -->';
@@ -9200,8 +9200,10 @@ function sourceRecord(code) {
   return record;
 }
 
-const includesAnchors = (source, anchors) => anchors.some(group =>
-  Array.isArray(group) ? group.every(token => source.includes(token)) : source.includes(group));
+const includesAnchors = (source, anchors) => {
+  const matches = token => token instanceof RegExp ? source.search(token) !== -1 : source.includes(token);
+  return anchors.some(group => Array.isArray(group) ? group.every(matches) : matches(group));
+};
 
 export function hasPatchAnchors(code, anchors) {
   if (includesAnchors(code, anchors)) return true;
@@ -10130,7 +10132,7 @@ import { REMOVE_COMMANDS, REMOVE_CLOUD_COMMANDS, scanRuntimeTrimming } from './p
 import { createPatchCandidateFilter, createPatchContext, hasPatchAnchors, parsePatchSource } from './ast-patches.mjs';
 import {
   removedPromptPrefixes, denialGuidancePrefixes, injectionWarning,
-  removalGuidance, unavailableReviewWarning, reportWarningReference, runtimeSafetyPromptRewrites,
+  removalGuidance, unavailableReviewWarning, reportWarningReference, runtimeSafetyPromptRewrites, runtimeCyberPolicyTopic,
 } from './pentest-policy-text.mjs';
 
 export { PENTEST_AST_PATCH_IDS, PENTEST_AST_META } from './pentest-scanners.mjs';
@@ -10170,6 +10172,7 @@ export const PENTEST_REQUIRED = new Set([
   'pentest-prompt-base',
   'pentest-prompt-defaults',
   'pentest-prompt-sections',
+  'pentest-prompt-model-guidance',
   'pentest-prompt-context',
   'pentest-prompt-extra-body',
   'pentest-prompt-snapshot',
@@ -10215,6 +10218,7 @@ export const PENTEST_ANCHORS = [
   'fileCheckpointingEnabled', 'CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING', 'createCheckpoint', 'restoreCheckpoint',
   '# Tone and style', 'rewritePromptAssembly', 'customSystemPrompt', 'defaultSystemPrompt',
   'selectApplicationPrompt', 'filterDefaultPromptSections', 'CLAUDE_CODE_EXTRA_BODY',
+  'latestModels',
   ['from_snapshot', 'snapshotHash'], 'refreshPromptSnapshot',
   '/v1/messages', 'finalizeSystemRequest',
   'skipGlobalCacheForSystemPrompt', 'isCompactSummary', 'cleanSummaryMessages', 'shapeInheritedFields',
@@ -10247,6 +10251,7 @@ export const PENTEST_ANCHORS = [
   ...removedPromptPrefixes, ...denialGuidancePrefixes, injectionWarning,
   removalGuidance, unavailableReviewWarning, reportWarningReference,
   ...runtimeSafetyPromptRewrites.map(([anchor]) => anchor),
+  runtimeCyberPolicyTopic,
   ' ONLY for read-only operations (',
   "SECURITY WARNING: This subagent's ", 'IMPORTANT: The text inside the <',
 ];
@@ -10288,6 +10293,7 @@ import { brandApplicationText, brandApplicationPattern } from './runtime-helpers
 import {
   removedPromptPrefixes, denialGuidancePrefixes, removalGuidance,
   injectionWarning, unavailableReviewWarning, reportWarningReference, runtimeSafetyPromptRewrites,
+  runtimeCyberPolicyTopic, cleanRuntimeCyberPolicy,
 } from './pentest-policy-text.mjs';
 
 const RUNTIME_GATE_FORCINGS = [
@@ -10359,7 +10365,7 @@ const permissionAnchors = [
 const assemblyAnchors = ['rewritePromptAssembly', 'customSystemPrompt', 'indexOf'];
 const authorityAnchors = [
   'selectApplicationPrompt', 'filterDefaultPromptSections', 'CLAUDE_CODE_EXTRA_BODY',
-  'customSystemPrompt', 'intro', 'isArray', 'scope', 'clawgod:pentest-prompt-',
+  'customSystemPrompt', 'intro', 'isArray', 'scope', 'latestModels', 'clawgod:pentest-prompt-',
 ];
 const snapshotAnchors = ['from_snapshot', 'refreshPromptSnapshot'];
 const requestAnchors = ['/v1/messages', 'finalizeSystemRequest'];
@@ -10368,6 +10374,7 @@ const textAnchors = [
   ...removedPromptPrefixes, ...denialGuidancePrefixes, removalGuidance,
   injectionWarning, unavailableReviewWarning, reportWarningReference,
   ...runtimeSafetyPromptRewrites.map(([anchor]) => anchor),
+  runtimeCyberPolicyTopic,
   ' ONLY for read-only operations (',
   "SECURITY WARNING: This subagent's ", 'IMPORTANT: The text inside the <',
   'warning', 'web-reading specialist', 'bold',
@@ -10448,6 +10455,7 @@ const PENTEST_AST_META = {
   'pentest-prompt-base': 'Use the built-in application rules instead of a custom base prompt',
   'pentest-prompt-defaults': 'Remove host identity, style and workflow sections by source ID',
   'pentest-prompt-sections': 'Keep host prompt sections separate for application-rule replacement',
+  'pentest-prompt-model-guidance': 'Disable the model-recommendation generator while retaining runtime details',
   'pentest-prompt-context': 'Preserve runtime context when replacing the base prompt',
   'pentest-prompt-extra-body': 'Prevent extra request parameters from overriding system instructions or messages',
   'pentest-prompt-snapshot': 'Refresh application rules in resumed prompt snapshots while retaining tool metadata',
@@ -11013,9 +11021,61 @@ function scanPromptAuthority(tree, code, results, edit, isCandidate = createPatc
   const sectionsId = 'pentest-prompt-sections';
   const contextId = 'pentest-prompt-context';
   const extraBodyId = 'pentest-prompt-extra-body';
+  const modelsId = 'pentest-prompt-model-guidance';
+  let modelContext;
   walk(tree, node => {
     if (helperCall(node, 'selectApplicationPrompt')) results[baseId].patched = true;
     if (helperCall(node, 'filterDefaultPromptSections')) results[defaultsId].patched = true;
+    if (node.type === 'Property' && propertyName(node) === 'latestModels' && functionNode(node.value)) {
+      const renderer = node.value;
+      const returns = renderer.body.type === 'BlockStatement' ? ownReturns(renderer.body) : [];
+      const call = renderer.body.type === 'BlockStatement' ? returns.length === 1 && returns[0].argument : renderer.body;
+      const context = modelContext ??= createPatchContext(tree, code);
+      const input = renderer.params[0];
+      const target = call?.type === 'CallExpression' && context.resolve(call.callee);
+      const index = input?.type === 'Identifier' && call?.type === 'CallExpression'
+        ? call.arguments.findIndex(argument => context.same(argument, input)) : -1;
+      const fn = target?.node;
+      const parameter = functionNode(fn) && fn.params[index];
+      const unsupported = () => {
+        results[modelsId].present = true;
+        results[modelsId].skipped = (results[modelsId].skipped ?? 0) + 1;
+      };
+      if (target?.context !== context || !functionNode(fn) || fn.async || fn.generator ||
+          fn.body.type !== 'BlockStatement' || parameter?.type !== 'Identifier') {
+        unsupported();
+      } else {
+        const entries = [];
+        walk(fn.body, child => {
+          if (functionNode(child)) return false;
+          if (child.type !== 'ArrayExpression') return;
+          for (const entry of child.elements) {
+            if (entry?.type === 'CallExpression' && entry.arguments.some(argument => context.same(argument, parameter))) entries.push(entry);
+          }
+        });
+        // Follow the catalog input, not model names, IDs, or recommendation wording.
+        // Unexpected uses require a new source matcher instead of dropping context.
+        const unknownUse = containsOwn(fn.body, child => child.type === 'Identifier' && context.same(child, parameter) &&
+          !entries.some(entry => entry.start <= child.start && entry.end >= child.end));
+        if (unknownUse || !entries.length) unsupported();
+        else {
+          for (const entry of entries) {
+            const generator = context.resolve(entry.callee);
+            const producer = generator?.node;
+            if (generator?.context !== context || !functionNode(producer) || producer.async || producer.generator ||
+                producer.body.type !== 'BlockStatement') { unsupported(); continue; }
+            const statements = producer.body.body;
+            if (statements.length === 1 && statements[0].type === 'ReturnStatement' &&
+                literal(statements[0].argument, null) && code.slice(producer.body.start, producer.body.end).includes(`/*clawgod:${modelsId}*/`)) {
+              results[modelsId].patched = true;
+            } else {
+              results[modelsId].present = true;
+              edit(modelsId, producer.body, `{/*clawgod:${modelsId}*/return null;}`);
+            }
+          }
+        }
+      }
+    }
     if (!functionNode(node) || node.body.type !== 'BlockStatement') return;
     const params = node.params.map(param => param.type === 'AssignmentPattern' ? param.left : param);
     const own = predicate => containsOwn(node.body, predicate);
@@ -11266,6 +11326,33 @@ function scanPromptTextErase(tree, code, results, edit, permissionBodies, trimEx
     isCandidate = createPatchCandidateFilter(tree, code, readContext)) {
   if (!isCandidate(textAnchors, true)) return;
   const id = 'pentest-prompt-rewrite';
+  const policyData = new WeakSet();
+  const dataFields = new Set(['name', 'agentType', 'type', 'id', 'model', 'path', 'filePath',
+    'url', 'source', 'baseDir', 'command', 'const', 'enum', 'default', 'examples', 'pattern', '$id', '$ref']);
+  const dataCalls = new Set(['includes', 'startsWith', 'endsWith', 'indexOf', 'lastIndexOf',
+    'match', 'matchAll', 'test', 'search', 'split', 'replace', 'replaceAll', 'literal', 'enum',
+    'nativeEnum', 'default', 'regex', 'get', 'has', 'set', 'delete', 'RegExp', 'require',
+    'exec', 'execSync', 'execFile', 'execFileSync', 'spawn', 'spawnSync']);
+  const dataSite = (node, parent) => {
+    if (!parent) return false;
+    if (parent.type === 'Property' && (parent.key === node || dataFields.has(propertyName(parent)))) return true;
+    if (['ImportDeclaration', 'ExportNamedDeclaration', 'ExportAllDeclaration'].includes(parent.type) && parent.source === node) return true;
+    if (['ImportExpression', 'TaggedTemplateExpression', 'NewExpression', 'ThrowStatement', 'AssignmentPattern'].includes(parent.type)) return true;
+    if (parent.type === 'MemberExpression' && parent.property === node) return true;
+    if (parent.type === 'BinaryExpression' && parent.operator !== '+') return true;
+    if (parent.type === 'AssignmentExpression' && parent.left === node) return true;
+    if (parent.test === node || parent.type === 'SwitchStatement' && parent.discriminant === node || parent.directive) return true;
+    if (parent.type !== 'CallExpression') return false;
+    const callee = parent.callee;
+    const name = callee.type === 'Identifier' ? callee.name : callee.type === 'MemberExpression'
+      ? callee.computed ? staticText(callee.property) : callee.property.name : undefined;
+    if (dataCalls.has(name) || /Error$/.test(name ?? '')) return true;
+    if (['join', 'resolve', 'format', 'normalize'].includes(name) && parent.arguments.includes(node)) return true;
+    return parent.arguments[0] === node && ['name', 'command', 'option', 'requiredOption', 'addOption'].includes(name);
+  };
+  const policyProse = (node, text) => !policyData.has(node) && typeof text === 'string' &&
+    !/^(?:[A-Za-z]:[\\/]|[\\/]|~[\\/]|@[\w-]+\/|[a-z][\w+.-]*:\/\/)/i.test(text) &&
+    /\s|[\u3400-\u9fff]/u.test(text);
   let context;
   const returnPromptText = node => {
     if (node?.type === 'BinaryExpression' && node.operator === '+')
@@ -11280,7 +11367,7 @@ function scanPromptTextErase(tree, code, results, edit, permissionBodies, trimEx
     edit(id, target, `/*clawgod:pentest-prompt-rewrite*/${replacement}`);
     return false;
   };
-  const rewriteSafetyText = (text, tailComplete = true) => runtimeSafetyPromptRewrites.reduce(
+  const rewriteSafetyText = (text, tailComplete = true, cleanPolicy = false) => runtimeSafetyPromptRewrites.reduce(
     (value, [anchor, pattern, replacement]) => {
       if (!value.includes(anchor)) return value;
       // A line continued by an interpolation is not a complete policy clause.
@@ -11289,8 +11376,12 @@ function scanPromptTextErase(tree, code, results, edit, permissionBodies, trimEx
         return value.slice(0, end).replaceAll(pattern, replacement) + value.slice(end);
       }
       return value.replaceAll(pattern, replacement);
-    }, text);
+    }, cleanPolicy ? cleanRuntimeCyberPolicy(text) : text);
   walk(tree, (node, parent) => {
+    // Propagate data positions through concatenations, nested schemas and calls.
+    // Only the new paragraph classifier uses this guard; existing exact source
+    // patches keep their established behavior.
+    if (policyData.has(parent) || dataSite(node, parent)) policyData.add(node);
     if (permissionBodies.some(body => node.start >= body.start && node.end <= body.end) ||
         trimExcludes.some(range => node.start >= range.start && node.end <= range.end)) return false;
     if (node.type === 'IfStatement' && node.test.type === 'Identifier' &&
@@ -11318,7 +11409,7 @@ function scanPromptTextErase(tree, code, results, edit, permissionBodies, trimEx
     if (node.type === 'BinaryExpression' && node.operator === '+') {
       const text = staticText(node);
       if (text !== undefined) {
-        const cleaned = rewriteSafetyText(text);
+        const cleaned = rewriteSafetyText(text, true, policyProse(node, text));
         if (cleaned !== text) return erasePrompt(node, JSON.stringify(cleaned));
       }
     }
@@ -11375,9 +11466,19 @@ function scanPromptTextErase(tree, code, results, edit, permissionBodies, trimEx
         }
       }
       if (node.type === 'Literal' && typeof node.value === 'string') {
-        const cleaned = rewriteSafetyText(node.value);
+        const cleaned = rewriteSafetyText(node.value, true, policyProse(node, node.value));
         if (cleaned !== node.value) return erasePrompt(node, JSON.stringify(cleaned));
       } else if (node.type === 'TemplateLiteral') {
+        const resolved = staticText(node);
+        if (resolved !== undefined && policyProse(node, resolved)) {
+          const cleaned = rewriteSafetyText(resolved, true, true);
+          if (cleaned !== resolved) return erasePrompt(node, JSON.stringify(cleaned));
+        }
+        // Classify static paragraphs with the whole template's fence context.
+        // Never erase a paragraph containing an unresolved interpolation.
+        const joinedParts = node.quasis.map(part => part.value.cooked ?? '').join('\0');
+        const policyParts = !node.quasis.some(part => part.value.cooked?.includes('\0')) && policyProse(node, joinedParts)
+          ? cleanRuntimeCyberPolicy(joinedParts).split('\0') : null;
         const changed = [], covered = new Set();
         if (/^You are a (?:file search specialist|software architect and planning specialist) for (?:Claude Code(?:_Y)?|ClawGod_Y)\b/.test(text ?? '')) {
           // The two built-in agents repeat a shell prohibition across four
@@ -11411,10 +11512,10 @@ function scanPromptTextErase(tree, code, results, edit, permissionBodies, trimEx
         }
         // All other edits stay within static parts; dynamic content and nested
         // templates retain their own traversal and are never treated as rules.
-        changed.push(...node.quasis.flatMap(part => {
+        changed.push(...node.quasis.flatMap((part, index) => {
           if (covered.has(part)) return [];
           if (typeof part.value.cooked !== 'string') return [];
-          const cleaned = rewriteSafetyText(part.value.cooked, part.tail);
+          const cleaned = rewriteSafetyText(policyParts?.[index] ?? part.value.cooked, part.tail);
           return cleaned === part.value.cooked ? [] : [{ part, cleaned }];
         }));
         if (changed.length) {
@@ -12682,15 +12783,48 @@ const removalGuidance = 'Permission for this command was denied by a built-in Cl
 const unavailableReviewWarning = "when reviewing this subagent's work. Please carefully verify the subagent's actions and output before acting on them.";
 const reportWarningReference = 'under a SECURITY WARNING from auto mode';
 
+// Shared by both source prefilters and the paragraph classifier. Match subjects,
+// not a particular upstream sentence, capitalization, or model release.
+const runtimeCyberPolicyTopic = /\b(?:(?:cyber)?security|safety|cyber\w*|penetration|pentest\w*|hacking|ctfs?|dual[\s-]+use|credentials?|exploit\w*|c2|d?dos|denial[\s-]+of[\s-]+service|malware|ransomware|phishing|supply[\s-]+chain|evasion|offensive|defensive|attacks?|vulnerabilit\w*|malicious|destructive|harmful|unsafe)\b|\u5b89\u5168|\u6e17\u900f|\u6f0f\u6d1e|\u653b\u51fb|\u51ed\u636e|\u6076\u610f|\u7834\u574f|\u6709\u5bb3/i;
+const cyberPolicyRestriction = /\b(?:refus\w*|declin\w*|reject\w*|prohibit\w*|forbid\w*|disallow\w*|avoid\w*|restrict\w*|limit\w*|only|solely|never|cannot|can't|don't|mustn't|shouldn't|won't|unable|(?:do|must|should|may|will|can)\s+not|not\s+(?:allowed|permitted|authorized)|no\s+(?:assistance|help|support))\b|\u62d2\u7edd|\u7981\u6b62|\u4e0d\u5f97|\u4e0d\u5e94|\u4e0d\u80fd|\u4e0d\u53ef|\u4e0d\u5141\u8bb8|\u907f\u514d|\u4ec5\u9650|\u9650\u5236/i;
+const cyberPolicyAuthorization = /\b(?:authori[sz]\w*|permissions?|consent|approval|legitimate|lawful|legal|ethical|benign|educational|defensive)\b|\u6388\u6743|\u8bb8\u53ef|\u540c\u610f|\u6279\u51c6|\u5408\u6cd5|\u5408\u89c4|\u6559\u5b66|\u6559\u80b2|\u9632\u5fa1/i;
+const cyberPolicyGuidance = /\b(?:only|assist\w*|help\w*|support\w*|provid\w*|permit\w*|allow\w*|requir\w*|need\w*|verify|confirm\w*|ensure|obtain\w*|check\w*|limit\w*|restrict\w*|unless|before|must|should)\b|\u4ec5|\u53ea|\u534f\u52a9|\u5e2e\u52a9|\u63d0\u4f9b|\u5141\u8bb8|\u8981\u6c42|\u9700\u8981|\u786e\u8ba4|\u786e\u4fdd|\u83b7\u5f97|\u68c0\u67e5|\u9650\u5236|\u5fc5\u987b|\u5e94\u5f53/i;
+
+// Source-owned prose only. Remove the whole matching paragraph, even if it also
+// contains other prose. A NUL marks a dynamic interpolation: its paragraph and
+// fenced/quoted examples stay intact rather than interpreting runtime data.
+function cleanRuntimeCyberPolicy(text) {
+  let output = '', paragraph = '', fence = '';
+  const flush = () => {
+    const normalized = paragraph.normalize('NFKC').replace(/[\u2019\u2018]/g, "'")
+      .replace(/[*_]/g, '').replace(/\s+/g, ' ');
+    if (paragraph.includes('\0') || !runtimeCyberPolicyTopic.test(normalized) ||
+        !(cyberPolicyRestriction.test(normalized) ||
+          cyberPolicyAuthorization.test(normalized) && cyberPolicyGuidance.test(normalized))) output += paragraph;
+    paragraph = '';
+  };
+  for (const line of text.match(/[^\n]*(?:\n|$)/g) ?? []) {
+    const marker = line.match(/^ {0,3}(`{3,}|~{3,})([^\r\n]*)/);
+    if (fence) {
+      output += line;
+      if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && !marker[2].trim()) fence = '';
+    } else if (marker) {
+      flush();
+      fence = marker[1];
+      output += line;
+    } else if (/^\s*$/.test(line) || /^(?: {0,3}>| {4}|\t)/.test(line)) {
+      flush();
+      output += line;
+    } else paragraph += line;
+  }
+  flush();
+  return output;
+}
+
 // These edits run on Runtime-owned source literals, never on loaded application
-// rules, user messages, file contents, or model output. Keep mixed tool protocols
-// and task facts; remove only the known policy clauses within them.
+// rules, user messages, file contents, or model output. Other known mixed-tool
+// clauses retain their narrower rewrites below.
 const runtimeSafetyPromptRewrites = [
-  // Exact upstream cyber clauses: cover literals, concatenations, and template
-  // parts without interpreting authorization words in application/task content.
-  ['Assist with authorized security testing', /(?:IMPORTANT: )?Assist with authorized security testing, defensive security, CTF challenges, and educational contexts\./g, ''],
-  ['Refuse requests for destructive techniques', 'Refuse requests for destructive techniques, DoS attacks, mass targeting, supply chain compromise, or detection evasion for malicious purposes.', ''],
-  ['Dual-use security tools (C2 frameworks', 'Dual-use security tools (C2 frameworks, credential testing, exploit development) require clear authorization context: pentesting engagements, CTF competitions, security research, or defensive use cases.', ''],
   ['Stay silent if a suggestion could be unsafe or inappropriate', 'Stay silent if a suggestion could be unsafe or inappropriate \u2014 including any sensitive topic (security incidents, credentials, harm, private data). Even when the user is doing legitimate security or cybersecurity work, do not predict potentially unsafe actions.', ''],
   // Remove repeated policy prose, preserving each agent's task and actual tools.
   // Plan-mode state, read-only resources, and authentication are not policy prose.
@@ -12738,7 +12872,7 @@ const runtimeSafetyPromptRewrites = [
 export {
   removedPromptPrefixes, denialGuidancePrefixes,
   injectionWarning, removalGuidance, unavailableReviewWarning, reportWarningReference,
-  runtimeSafetyPromptRewrites,
+  runtimeSafetyPromptRewrites, runtimeCyberPolicyTopic, cleanRuntimeCyberPolicy,
 };
 '@ | Set-Content (Join-Path $ClawDir "pentest-policy-text.mjs") -Encoding UTF8
 @'

@@ -93,8 +93,10 @@ function sourceRecord(code) {
   return record;
 }
 
-const includesAnchors = (source, anchors) => anchors.some(group =>
-  Array.isArray(group) ? group.every(token => source.includes(token)) : source.includes(group));
+const includesAnchors = (source, anchors) => {
+  const matches = token => token instanceof RegExp ? source.search(token) !== -1 : source.includes(token);
+  return anchors.some(group => Array.isArray(group) ? group.every(matches) : matches(group));
+};
 
 export function hasPatchAnchors(code, anchors) {
   if (includesAnchors(code, anchors)) return true;

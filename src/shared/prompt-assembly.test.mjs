@@ -25,7 +25,7 @@ const legacyFrame = prompt => MARK + '\n# Application identity\nThe application 
   const kept = filterDefaultPromptSections(sections, opts(prompt));
   assert.deepEqual(kept, sections.slice(3, 6));
   const out = selectApplicationPrompt(kept.map(section => section.text), opts(prompt));
-  assert.ok(out[0].startsWith(MARK + '\n<!-- clawgod:assembly-policy [8,'));
+  assert.ok(out[0].startsWith(MARK + '\n<!-- clawgod:assembly-policy [10,'));
   assert.ok(out[0].endsWith('\n\n' + prompt + END));
   assert.ok(!out[0].includes('ClawGod_Y'));
   assert.deepEqual(out.slice(1), kept.map(section => section.text));
@@ -354,7 +354,7 @@ const legacyFrame = prompt => MARK + '\n# Application identity\nThe application 
     assert.equal(delta.body.messages, messages);
     assert.match(delta.body.tools[0].description, /ClawGod_Y agents/);
   }
-  const oldRules = prompt.replace('assembly-policy [8,', 'assembly-policy [7,');
+  const oldRules = prompt.replace('assembly-policy [10,', 'assembly-policy [9,');
   const saved = { systemPrompt: [oldRules, 'Fast mode for Claude Code.'] };
   const refreshed = refreshPromptSnapshot(saved, ['Fast mode for Claude Code.'], options, JSON.stringify, systemPrompt => ({ systemPrompt }));
   assert.equal(refreshed.systemPrompt[0], prompt);

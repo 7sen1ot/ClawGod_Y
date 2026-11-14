@@ -247,6 +247,9 @@ try {
       '(section.scope==="shared"||section.scope==="session")&&section.text!==excluded)}',
     sections: 'function sections(lean){return lean?[["lean_body","Combined."]]:' +
       '[["intro","Host identity."],["doing_tasks","Host workflow."],["tools","Tool protocol."],["tone","Host style."]]}',
+    modelGuidance: 'function catalogGuidance(models){return models.join(", ")}' +
+      'function environmentText(models){return[catalogGuidance(models),"Runtime details."].filter(value=>value!==null).join("\\n")}' +
+      'const renderers={latestModels:models=>environmentText(models)};',
     context: 'function context({customSystemPrompt,tools,mainLoopModel}){' +
       'return{defaultSystemPrompt:customSystemPrompt?[]:["Runtime."],userContext:{cwd:"/fixture"},systemContext:{model:mainLoopModel}}}',
   };

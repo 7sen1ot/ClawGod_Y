@@ -90,7 +90,7 @@ function flagOverride(flag) {
 }
 
 const CUSTOM_PROMPT_MARK = 'clawgod:custom-prompt';
-const IDENTITY_POLICY_VERSION = 8;
+const IDENTITY_POLICY_VERSION = 10;
 const CUSTOM_PROMPT_PREFIX = '<!-- ' + CUSTOM_PROMPT_MARK + ' -->\n';
 const LEGACY_PROMPT_HEADER = '# Application identity\nThe application name is ClawGod_Y.';
 const CUSTOM_PROMPT_END = '\n<!-- /' + CUSTOM_PROMPT_MARK + ' -->';
