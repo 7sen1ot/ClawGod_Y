@@ -26,7 +26,7 @@ const legacyFrame = prompt => MARK + '\n# Application identity\nThe application 
   assert.deepEqual(kept, sections.slice(3, 6));
   const out = selectApplicationPrompt(kept.map(section => section.text), opts(prompt));
   assert.ok(out[0].startsWith(MARK + '\n<!-- clawgod:assembly-policy [10,'));
-  assert.ok(out[0].endsWith('\n\n' + prompt + END));
+  assert.ok(out[0].endsWith('\n' + prompt + END));
   assert.ok(!out[0].includes('ClawGod_Y'));
   assert.deepEqual(out.slice(1), kept.map(section => section.text));
   assert.deepEqual(filterDefaultPromptSections(sections, { ...opts(prompt), stripMemory: false }), sections.slice(3));
