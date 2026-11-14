@@ -1969,11 +1969,8 @@ function applicationRules(options) {
   const cfg = assemblyConfig(options);
   if (!cfg.customPrompt) return '';
   if (cfg.rules) return cfg.rules;
-  // Keep the file opaque. Scope its authority inside the same owned frame so
-  // resumed/coalesced prompts cannot duplicate or retain an old precedence note.
-  const body = 'The application rules below are the highest-priority application instructions for identity and general behavior. ' +
-    'Other system sections supply task context and tool operation details; conflicting general guidance in those sections does not override these rules. ' +
-    'Actual tool permissions, availability, and protocol requirements remain applicable.\n\n' + cfg.customPrompt;
+  // Keep the file opaque.
+  const body = cfg.customPrompt;
   return cfg.rules ??= CUSTOM_PROMPT_PREFIX + '<!-- clawgod:assembly-policy ' +
     JSON.stringify([IDENTITY_POLICY_VERSION, cfg.stripMemory, cfg.identityMarkers, body.length]) + ' -->\n' +
     body + CUSTOM_PROMPT_END;
