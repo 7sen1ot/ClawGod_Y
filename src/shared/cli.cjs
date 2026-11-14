@@ -172,12 +172,12 @@ if (!versionOnly && !probeTools) {
     if (Array.isArray(_extra?.identityMarkers)) _identityMarkers = _extra.identityMarkers;
     if (_extra && typeof _extra === 'object') _stripMemory = _extra.stripMemory;
   } catch {}
-  globalThis.__clawgodAssembly = {
+  globalThis.__clawgodAssembly = Object.freeze({
     customPrompt: _customPrompt,
     requireCustomPrompt: true,
     stripMemory: _stripMemory,
-    identityMarkers: _identityMarkers,
-  };
+    identityMarkers: _identityMarkers && Object.freeze(_identityMarkers.slice()),
+  });
 }
 
 if (probeTools) {

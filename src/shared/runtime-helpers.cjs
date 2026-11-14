@@ -90,7 +90,11 @@ function flagOverride(flag) {
 }
 
 const CUSTOM_PROMPT_MARK = 'clawgod:custom-prompt';
-const APPLICATION_NAME = 'ClawGod_Y';
+const IDENTITY_POLICY_VERSION = 5;
+const CUSTOM_PROMPT_PREFIX = '<!-- ' + CUSTOM_PROMPT_MARK + ' -->\n';
+const LEGACY_PROMPT_HEADER = '# Application identity\nThe application name is ClawGod_Y.';
+const CUSTOM_PROMPT_END = '\n<!-- /' + CUSTOM_PROMPT_MARK + ' -->';
+const assemblyConfigs = new WeakMap();
 
 function normalizeIdentityText(text) {
   return text.normalize('NFKC').replace(/\p{Cf}/gu, '').replace(/[‘’ʼ]/g, "'").replace(/[*_`~]/g, '')
@@ -99,12 +103,144 @@ function normalizeIdentityText(text) {
 
 function assemblyConfig(snapshot) {
   const cfg = snapshot && typeof snapshot === 'object' ? snapshot : {};
+  if (assemblyConfigs.has(cfg)) return assemblyConfigs.get(cfg);
   const customPrompt = typeof cfg.customPrompt === 'string' ? cfg.customPrompt.trim() : '';
-  const stripMemory = cfg.stripMemory !== false;
+  if (!customPrompt && cfg.requireCustomPrompt) throw new Error('[clawgod] Required application rules are empty');
+  const stripMemory = cfg.stripMemory === true;
   const identityMarkers = Array.isArray(cfg.identityMarkers)
-    ? [...new Set(cfg.identityMarkers.filter(m => typeof m === 'string').map(normalizeIdentityText).filter(Boolean))]
+    ? [...new Set(cfg.identityMarkers.filter(m => typeof m === 'string').map(normalizeIdentityText).filter(Boolean))].sort()
     : [];
-  return { customPrompt, stripMemory, identityMarkers };
+  const config = { customPrompt, stripMemory, identityMarkers };
+  // Only cache immutable launcher configuration; callers may still use mutable options.
+  if (Object.isFrozen(cfg) && (!cfg.identityMarkers || Object.isFrozen(cfg.identityMarkers))) {
+    assemblyConfigs.set(cfg, config);
+  }
+  return config;
+}
+
+// Only instruction sections and explicitly marked summaries enter this function.
+// Match declarations at paragraph boundaries, never arbitrary mentions of a name.
+function cleanPromptIdentity(text, options) {
+  const cfg = assemblyConfig(options);
+  if (!cfg.customPrompt || typeof text !== 'string' || text === cfg.customPrompt) return text;
+  let fence, paragraph = true;
+  return text.split(/(\r?\n)/).map(line => {
+    if (/^\r?\n$/.test(line)) return line;
+    const syntax = line.normalize('NFKC').replace(/\p{Cf}/gu, '');
+    const delimiter = syntax.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (delimiter) {
+      if (!fence) fence = delimiter[1];
+      else if (delimiter[1][0] === fence[0] && delimiter[1].length >= fence.length) fence = undefined;
+      paragraph = false;
+      return line;
+    }
+    if (!syntax.trim()) { paragraph = true; return line; }
+    if (fence || /^(?: {4}|\t)|^\s*(?:>|["'“‘«「『`])/.test(syntax)) { paragraph = false; return line; }
+    if (/^ {0,3}#{1,6}\s|^(?:Summary:|<\/?summary>)\s*$/.test(syntax)) { paragraph = true; return line; }
+    const atStart = paragraph;
+    paragraph = false;
+    if (!atStart) return line;
+    const normalized = normalizeIdentityText(line);
+    let declaration, replacement = '', subject = 'You are';
+    const host = normalized.match(/^(you are|i am) (?:(a|an) ([^.!?\n]{1,120}?) (for|in) )?(?:claude code(?:y)?|clawgody)(?=$|[\s\p{P}])/u);
+    const sdk = normalized.match(/^(you are|i am) a (?:claude|clawgody) agent(?=$|[\s\p{P}])/u);
+    const chinese = normalized.match(/^(你是|我是)\s*(?:claude code(?:y)?|clawgody)(?=$|[\s\p{P}])/u);
+    if (host) {
+      const suffix = normalized.slice(host[0].length);
+      if (/^['’]s\b|^\s+(?!and\b|who\b)\p{L}/u.test(suffix) ||
+          host[4] === 'in' && /\b(?:expert|specialist)\b/.test(host[3])) return line;
+      declaration = host[0];
+      subject = host[1] === 'i am' ? 'I am' : 'You are';
+      if (host[2]) replacement = subject + ' ' + host[2] + ' ' + host[3];
+    } else if (sdk) {
+      declaration = sdk[0];
+      replacement = (sdk[1] === 'i am' ? 'I am' : 'You are') + ' an agent';
+    } else if (chinese) {
+      declaration = chinese[0];
+    } else {
+      declaration = cfg.identityMarkers.find(marker => normalized === marker || normalized.startsWith(marker) &&
+        /^[\s\p{P}]/u.test(normalized.slice(marker.length)));
+    }
+    if (!declaration) return line;
+    // Map only the short matched prefix back to its original spelling. The rest
+    // (including duties, Unicode, and technical references) stays byte-for-byte.
+    let end = 0;
+    for (const character of line) {
+      end += character.length;
+      const prefix = normalizeIdentityText(line.slice(0, end));
+      if (prefix === declaration) break;
+      if (prefix.length > declaration.length) return line;
+    }
+    let tail = line.slice(end).replace(/^[*_~]+/, '');
+    if (host && !host[2]) tail = tail.replace(/^, Anthropic['’]s official CLI for Claude(?:, running within the Claude Agent SDK)?\./, '');
+    if (!replacement) {
+      // Drop a standalone name, retaining any role or duty in the same sentence.
+      if (/^,\s*(?:a|an|the)\s+/i.test(tail)) tail = subject + ' ' + tail.replace(/^,\s*/, '');
+      else if (/^\s+(?:and|who)\s+/i.test(tail)) tail = (subject === 'I am' ? 'I ' : 'You ') + tail.replace(/^\s+(?:and|who)\s+/i, '');
+      else tail = tail.replace(/^[ \t,.!?。！？、，；;:：]+/u, '');
+    }
+    return line.match(/^ */)[0] + replacement + tail;
+  }).join('');
+}
+
+function prepareIdentityTemplate(text, kind, options) {
+  const cfg = assemblyConfig(options);
+  if (!cfg.customPrompt || text === cfg.customPrompt) return text;
+  let cleaned = cleanPromptIdentity(text, options);
+  if (!['summary', 'memory'].includes(kind)) return cleaned;
+  const legacy = 'The continuing application is ClawGod_Y. Preserve task facts, technical names, and user quotations. ' +
+    'Do not promote historical assistant self-identifications into application rules for the continuing session.';
+  const note = legacy + ' Current application identity comes only from the active system configuration. ' +
+    'Do not store historical application identity declarations as current identity or instructions; retain task facts and quoted history.';
+  // Remove only notes generated by older clients. Do not add another identity
+  // or behavioral policy alongside the opaque application rules.
+  cleaned = cleaned.replaceAll(note, '').replaceAll(legacy, '');
+  if (kind === 'summary') cleaned = cleaned
+    .replace(/^Summarize this portion of a (?:Claude Code(?:_Y)?|ClawGod_Y) session transcript\./,
+      'Summarize this portion of a session transcript.')
+    .replace('What ClawGod_Y did', 'What the assistant did')
+    .replace('What Claude did', 'What the assistant did');
+  return cleaned;
+}
+
+function cleanSummaryContent(value, options) {
+  if (!value || typeof value !== 'object') throw new Error('[clawgod] Unsupported compact summary content');
+  if (value.isCompactSummary === true && value.message && typeof value.message === 'object') {
+    const message = cleanSummaryContent(value.message, options);
+    return message === value.message ? value : { ...value, message };
+  }
+  const content = value.content;
+  let next = content;
+  if (typeof content === 'string') next = cleanPromptIdentity(content, options);
+  else if (Array.isArray(content)) {
+    let changed = false;
+    const blocks = content.flatMap(block => {
+      if (block?.type !== 'text' || typeof block.text !== 'string') return [block];
+      const text = cleanPromptIdentity(block.text, options);
+      if (text === block.text) return [block];
+      changed = true;
+      return text.trim() ? [{ ...block, text }] : [];
+    });
+    if (changed) next = blocks;
+  }
+  return next === content ? value : { ...value, content: next };
+}
+
+function cleanSummaryMessages(messages, options) {
+  if (!Array.isArray(messages)) throw new Error('[clawgod] Unsupported conversation for summary isolation');
+  let changed = false;
+  const result = messages.flatMap(record => {
+    if (record?.type !== 'user' || record.isCompactSummary !== true || !record.message) return [record];
+    const message = cleanSummaryContent(record.message, options);
+    if (typeof message.content === 'string' && !message.content.trim() || Array.isArray(message.content) && !message.content.length) {
+      changed = true;
+      return [];
+    }
+    if (message === record.message) return [record];
+    changed = true;
+    return [{ ...record, message }];
+  });
+  return changed ? result : messages;
 }
 
 const DEFAULT_BEHAVIOR_SECTIONS = new Set([
@@ -120,22 +256,73 @@ function filterDefaultPromptSections(sections, options) {
   const cfg = assemblyConfig(options);
   if (!cfg.customPrompt) return sections;
   if (!Array.isArray(sections)) throw new Error('[clawgod] Unsupported default prompt sections');
-  return sections.filter(section => {
+  return sections.flatMap(section => {
     if (!section || typeof section.id !== 'string') {
       throw new Error('[clawgod] Default prompt section is missing its source ID');
     }
     const id = section.id.split(':', 1)[0];
     if (id === 'lean_body') throw new Error('[clawgod] Host prompt sections were not separated');
-    if (DEFAULT_BEHAVIOR_SECTIONS.has(id)) return false;
-    if (cfg.stripMemory && (id === 'memory' || id === 'memory_static')) return false;
-    if (!cfg.identityMarkers.length || typeof section.text !== 'string') return true;
-    const text = normalizeIdentityText(section.text);
-    return !cfg.identityMarkers.some(marker => text.includes(marker));
+    if (DEFAULT_BEHAVIOR_SECTIONS.has(id)) return [];
+    if (cfg.stripMemory && (id === 'memory' || id === 'memory_static')) return [];
+    const text = cleanPromptIdentity(section.text, options);
+    if (text !== section.text && !text.trim()) return [];
+    return [text === section.text ? section : { ...section, text }];
   });
 }
 
-const isCustomSection = section =>
-  typeof section === 'string' && section.includes(CUSTOM_PROMPT_MARK);
+function applicationRules(options) {
+  const cfg = assemblyConfig(options);
+  if (!cfg.customPrompt) return '';
+  // These comments identify owned blocks and invalidate old snapshots; they add
+  // no application identity or behavioral instructions to the file's contents.
+  return cfg.rules ??= CUSTOM_PROMPT_PREFIX + '<!-- clawgod:assembly-policy ' +
+    JSON.stringify([IDENTITY_POLICY_VERSION, cfg.stripMemory, cfg.identityMarkers, cfg.customPrompt.length]) + ' -->\n' +
+    cfg.customPrompt + CUSTOM_PROMPT_END;
+}
+
+// Strip only framed application sections at section boundaries. Both assembly and
+// transport use this parser so coalesced runtime context survives repeated assembly.
+function splitApplicationSections(text, rules, customPrompt) {
+  if (text === customPrompt) return { text: '', owned: 1, current: 0, unframed: false };
+  const parts = [];
+  let cursor = 0, search = 0, owned = 0, current = 0, unframed = false, start;
+  while ((start = text.indexOf(CUSTOM_PROMPT_PREFIX, search)) >= 0) {
+    search = start + CUSTOM_PROMPT_PREFIX.length;
+    if (start > 0 && text.slice(start - 2, start) !== '\n\n' && text.slice(start - 4, start) !== '\r\n\r\n') continue;
+    // A quoted marker/header alone does not establish ownership. Recognize the
+    // legacy client wrapper solely for migration; never reproduce its rules.
+    let managed = text.startsWith(LEGACY_PROMPT_HEADER, search), frameEnd;
+    if (!managed) {
+      const lineEnd = text.indexOf('\n', search);
+      const metadata = lineEnd < 0 ? undefined : text.slice(search, lineEnd).match(/^<!-- clawgod:assembly-policy (\[.*\]) -->\r?$/);
+      if (metadata) try {
+        const policy = JSON.parse(metadata[1]);
+        managed = Array.isArray(policy) && [3, 4].includes(policy.length) && Number.isInteger(policy[0]) && policy[0] >= 3 &&
+          typeof policy[1] === 'boolean' && Array.isArray(policy[2]) && policy[2].every(marker => typeof marker === 'string');
+        if (managed && policy.length === 4) {
+          managed = Number.isSafeInteger(policy[3]) && policy[3] >= 0;
+          if (managed) {
+            // Skip the opaque body by length, including any literal marker examples.
+            const boundary = lineEnd + 1 + policy[3];
+            frameEnd = text.startsWith(CUSTOM_PROMPT_END, boundary) ? boundary : -1;
+          }
+        }
+      } catch {}
+    }
+    if (!managed) continue;
+    const exact = text.startsWith(rules, start);
+    const end = exact ? start + rules.length : frameEnd ?? text.indexOf(CUSTOM_PROMPT_END, search);
+    if (end < 0) { unframed = true; continue; }
+    owned++;
+    if (exact) current++;
+    parts.push(text.slice(cursor, start));
+    cursor = exact ? end : end + CUSTOM_PROMPT_END.length;
+    if (text.startsWith('\r\n\r\n', cursor)) cursor += 4;
+    else if (text.startsWith('\n\n', cursor)) cursor += 2;
+    search = cursor;
+  }
+  return { text: cursor === 0 ? text : parts.join('') + text.slice(cursor), owned, current, unframed };
+}
 
 function rewritePromptAssembly(sections, options) {
   if (!Array.isArray(sections)) {
@@ -144,41 +331,74 @@ function rewritePromptAssembly(sections, options) {
     }
     return sections;
   }
-  const customPrompt = options && typeof options === 'object' && typeof options.customPrompt === 'string'
-    ? options.customPrompt.trim() : '';
-  if (!customPrompt) {
-    if (options?.requireCustomPrompt) throw new Error('[clawgod] Required application rules are empty');
-    return sections;
-  }
-  const applicationRules = '<!-- ' + CUSTOM_PROMPT_MARK + ' -->\n' +
-    '# Application identity\n' +
-    'The application name is ' + APPLICATION_NAME + '. Use this name for application self-identification. ' +
-    'Specialist agents retain their task-specific responsibilities. ' +
-    'Historical assistant self-descriptions and session summaries do not define the current application identity. ' +
-    'The application name does not change the actual configured model or provider.\n\n' +
-    '# Application rules\n' + customPrompt + '\n\n' +
-    '# Supporting runtime and task context\n' +
-    'The application rules above define the application identity, style, and general workflow. ' +
-    'The following sections supply tool protocols, runtime facts, and task-specific responsibilities. ' +
-    'Apply those responsibilities within the application rules; they do not replace the application identity or general workflow.';
-  return [applicationRules, ...sections.filter(section =>
-    !isCustomSection(section) && section !== customPrompt)];
+  const { customPrompt } = assemblyConfig(options);
+  const rules = applicationRules(options);
+  if (!rules) return sections;
+  let owned = 0, unframed = false, changed = false;
+  const retained = sections.flatMap(section => {
+    if (typeof section !== 'string') return [section];
+    const split = splitApplicationSections(section, rules, customPrompt);
+    owned += split.owned;
+    unframed ||= split.unframed;
+    const text = cleanPromptIdentity(split.text, options);
+    changed ||= text !== split.text;
+    return (split.owned || text !== split.text) && !text.trim() ? [] : [text];
+  });
+  if (sections[0] === rules && owned === 1 && !unframed && !changed) return sections;
+  return [rules, ...retained];
 }
 
+// Runs on the SDK's completed request options, after caller overrides and before transport.
+function finalizeSystemRequest(request, options) {
+  const rules = applicationRules(options);
+  if (!rules) return request;
+  const raw = request?.body;
+  const serialized = typeof raw === 'string' || ArrayBuffer.isView(raw);
+  let body = serialized ? JSON.parse(typeof raw === 'string' ? raw :
+    Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength).toString('utf8')) : raw;
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw new Error('[clawgod] Unsupported Messages request body');
+  }
+  // A continue request inherits the system prefix from its create request on the server.
+  // Re-inserting it into a delta would change the inherited prefix and defeat thread caching.
+  if (body.thread !== undefined) {
+    if (!body.thread || !['create', 'continue', 'continue_no_save'].includes(body.thread.type)) {
+      throw new Error('[clawgod] Unsupported Messages thread type');
+    }
+    if (body.thread.type !== 'create') return request;
+  }
+  const system = body.system;
+  const blocks = typeof system === 'string' ? [{ type: 'text', text: system }] : system ?? [];
+  if (!Array.isArray(blocks) || blocks.some(block => block?.type !== 'text' || typeof block.text !== 'string')) {
+    throw new Error('[clawgod] Unsupported system prompt blocks');
+  }
+  // Assemblers may coalesce sections into a cacheable block. Keep its bytes and cache
+  // metadata unchanged when it already contains exactly one current application section.
+  const { customPrompt } = assemblyConfig(options);
+  let owned = 0, current = 0, ruleBlock;
+  const retained = blocks.flatMap(block => {
+    const split = splitApplicationSections(block.text, rules, customPrompt);
+    if (split.unframed) throw new Error('[clawgod] Stale unframed application prompt; rebuild the prompt snapshot');
+    owned += split.owned;
+    current += split.current;
+    if (!split.owned) return [block];
+    if (split.text.trim()) return [{ ...block, text: split.text }];
+    if (!ruleBlock || !ruleBlock.cache_control && block.cache_control) ruleBlock = block;
+    return [];
+  });
+  if (owned === 1 && current === 1) return request;
+  body = { ...body, system: [{ ...ruleBlock, type: 'text', text: rules }, ...retained] };
+  return { ...request, body: serialized ? JSON.stringify(body) : body };
+}
 
 function refreshPromptSnapshot(result, currentPrompt, options, hashPrompt, createRecord) {
-  const rules = rewritePromptAssembly([], options)[0];
-  if (rules === undefined) return result;
-  const prefix = '<!-- ' + CUSTOM_PROMPT_MARK + ' -->\n';
-  let replaced = false;
-  let prompt = result.systemPrompt.flatMap(section => {
-    if (typeof section !== 'string' || !section.startsWith(prefix)) return [section];
-    if (replaced) return [];
-    replaced = true;
-    return [rules];
-  });
-  // Unmarked legacy snapshots must use the live prompt, which has already passed the existing filters.
-  if (!replaced) prompt = rewritePromptAssembly(currentPrompt, options);
+  const rules = applicationRules(options);
+  if (!rules) return result;
+  if (!Array.isArray(result?.systemPrompt)) throw new Error('[clawgod] Unsupported prompt snapshot');
+  if (rewritePromptAssembly(result.systemPrompt, options) === result.systemPrompt) return result;
+  // Rebuild stale snapshots from filtered live sections, so old host identity/workflow
+  // cannot survive a rule update. Keep upstream tool and wire metadata in the record.
+  const prompt = rewritePromptAssembly(currentPrompt, options);
   if (prompt.length === result.systemPrompt.length &&
       prompt.every((section, index) => section === result.systemPrompt[index])) return result;
   return {
@@ -193,10 +413,10 @@ function refreshPromptSnapshot(result, currentPrompt, options, hashPrompt, creat
 }
 
 function validateExtraBody(body) {
-  const reserved = ['system', 'messages'].filter(name => Object.hasOwn(body, name));
+  const reserved = ['system', 'messages', 'thread'].filter(name => Object.hasOwn(body, name));
   if (reserved.length) {
     throw new Error('[clawgod] CLAUDE_CODE_EXTRA_BODY cannot override ' + reserved.join(', ') +
-      '. Remove these fields; system instructions and conversation messages are managed by ClawGod.');
+      '. Remove these fields; system instructions, conversation messages and threads are managed by ClawGod.');
   }
   return body;
 }
@@ -261,7 +481,8 @@ module.exports = {
   classifierTimeoutFloor, terminalReplyDelay, enablePredicate, sessionPath, instructionFileFilter,
   NO_OVERRIDE, flagOverride, flagOverrides: FLAG_OVERRIDES,
   rewritePromptAssembly, selectApplicationPrompt: rewritePromptAssembly,
-  filterDefaultPromptSections, refreshPromptSnapshot, validateExtraBody,
+  cleanPromptIdentity, prepareIdentityTemplate, cleanSummaryContent, cleanSummaryMessages,
+  filterDefaultPromptSections, refreshPromptSnapshot, finalizeSystemRequest, validateExtraBody,
   defaultProviderConfig: DEFAULT_PROVIDER_CONFIG, resolveProviderConfig, probeToolTables,
 };
 globalThis.__clawgodHelpers = module.exports;

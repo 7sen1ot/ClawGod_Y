@@ -991,6 +991,7 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
 }
 
 export function applyAstEdits(code, edits) {
+  if (!edits.length) return code;
   const sorted = [...edits].sort((a, b) => a.start - b.start || a.end - b.end);
   const parts = [];
   let cursor = 0;

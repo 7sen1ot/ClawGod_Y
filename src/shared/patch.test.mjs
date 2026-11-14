@@ -232,6 +232,10 @@ try {
     'return{prompt:defaultSystemPrompt,servesDefault:true}}';
   const authority = {
     runtime: requiredRuntime,
+    identity: 'function identity(){return "You are Claude Code. Keep specialist duties."}',
+    prefix: 'function* query(messages,system){return wire(system,true,{skipGlobalCacheForSystemPrompt:false})}',
+    summary: 'function compact(content){return message({content,isCompactSummary:true})}',
+    request: 'class Messages{create(body,options){return this._client.post("/v1/messages",{body,...options})}}',
     snapshot: 'function snapshot(history,current,{stamp}){const saved=loadSnapshot(history);' +
       'if(saved)return{systemPrompt:saved.systemPrompt,source:"from_snapshot",snapshotHash:saved.systemPromptHash};' +
       'return{systemPrompt:current,source:"live_recorded",snapshotHash:fingerprint(current),' +
@@ -301,7 +305,7 @@ try {
       }
       assert.equal(injections, scenario === 'primary' ? 2 : 1, `${label}: each assembly entry point injects once`);
       const selected = functions.select('Custom override.', ['Tool protocol.']);
-      assert.match(selected[0], /# Application rules\nFixture rules\./);
+      assert.match(selected[0], /\nFixture rules\.\n<!-- \/clawgod:custom-prompt -->$/);
       assert.deepEqual(selected.slice(1), ['Tool protocol.']);
       const kept = functions.defaults([
         { id: 'intro', scope: 'shared', text: 'Host identity.' },

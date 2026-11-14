@@ -589,7 +589,7 @@ const astPresent = new Set();
 const astPatched = new Set();
 const astSkipped = new Map();
 const astEdits = new Map();
-const promptFallbacks = [];
+const promptSourcePaths = new Set();
 try {
   const readContext = name => {
     const content = files[name];
@@ -613,18 +613,16 @@ try {
     const pentest = scanPentestPatches(content, upstreamRanges, readTree);
     for (const scan of [result, pentest]) {
       for (const [id, found] of Object.entries(scan)) {
-        if (found.present) astPresent.add(id);
+        const matches = found.fallbackMatches?.length ? [...found.matches, ...found.fallbackMatches] : found.matches;
+        if (PENTEST_REQUIRED.has(id) && (found.present || found.patched || matches.length || found.skipped)) {
+          promptSourcePaths.add(file);
+        }
+        if (found.present || found.fallbackMatches?.length) astPresent.add(id);
         if (found.patched) astPatched.add(id);
         if (found.skipped) astSkipped.set(id, (astSkipped.get(id) ?? 0) + found.skipped);
-        if (found.matches.length) astMatches.get(id).push({ file, content, matches: found.matches });
+        if (matches.length) astMatches.get(id).push({ file, content, matches });
       }
     }
-    const fallbackMatches = pentest['pentest-prompt-assembly'].fallbackMatches;
-    if (fallbackMatches.length) promptFallbacks.push({ file, content, matches: fallbackMatches });
-  }
-  if (promptFallbacks.length) {
-    astMatches.get('pentest-prompt-assembly').push(...promptFallbacks);
-    astPresent.add('pentest-prompt-assembly');
   }
 } catch (error) {
   console.error(`AST scan failed: ${error.message}. Source files were not changed.`);
@@ -769,7 +767,6 @@ for (const p of [...patches.filter(p => p.ast), ...patches.filter(p => !p.ast)])
 
 astMatches.clear();
 astEdits.clear();
-promptFallbacks.length = 0;
 
 console.log(`\n${'─'.repeat(55)}`);
 console.log(`  Result: ${applied} applied, ${skipped} skipped, ${failed} failed`);
@@ -801,9 +798,17 @@ if (!dryRun && !verify && applied > 0) {
 
 if (promptRequired && !dryRun && !verify) {
   const hooks = new Set();
-  for (const content of Object.values(files)) {
-    for (const id of findAppliedPromptHooks(content)) hooks.add(id);
-    if (hooks.size === PENTEST_REQUIRED.size) break;
+  // Recheck every surviving prompt module, including modules without any applied marker.
+  // Seeing all hook IDs once does not prove that other call sites were covered.
+  for (const file of promptSourcePaths) {
+    const content = files[file];
+    if (content === undefined) continue;
+    try {
+      for (const id of findAppliedPromptHooks(content)) hooks.add(id);
+    } catch (error) {
+      console.error(`Required application prompt verification failed in ${relative(__dirname, file)}: ${error.message}; source files were not changed.`);
+      process.exit(1);
+    }
   }
   const missing = [...PENTEST_REQUIRED].filter(id => !hooks.has(id));
   if (missing.length) {
