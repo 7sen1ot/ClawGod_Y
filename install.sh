@@ -10078,7 +10078,7 @@ export const PENTEST_ANCHORS = [
   'fileCheckpointingEnabled', 'CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING', 'createCheckpoint', 'restoreCheckpoint',
   '# Tone and style', 'rewritePromptAssembly', 'customSystemPrompt', 'defaultSystemPrompt',
   'selectApplicationPrompt', 'filterDefaultPromptSections', 'CLAUDE_CODE_EXTRA_BODY',
-  'latestModels',
+  'latestModels', 'latest_per_family', 'clawgod:pentest-prompt-model-guidance',
   ['from_snapshot', 'snapshotHash'], 'refreshPromptSnapshot',
   '/v1/messages', 'finalizeSystemRequest',
   'skipGlobalCacheForSystemPrompt', 'isCompactSummary', 'cleanSummaryMessages', 'shapeInheritedFields',
@@ -10225,7 +10225,7 @@ const permissionAnchors = [
 const assemblyAnchors = ['rewritePromptAssembly', 'customSystemPrompt', 'indexOf'];
 const authorityAnchors = [
   'selectApplicationPrompt', 'filterDefaultPromptSections', 'CLAUDE_CODE_EXTRA_BODY',
-  'customSystemPrompt', 'intro', 'isArray', 'scope', 'latestModels', 'clawgod:pentest-prompt-',
+  'customSystemPrompt', 'intro', 'isArray', 'scope', 'latestModels', 'latest_per_family', 'clawgod:pentest-prompt-',
 ];
 const snapshotAnchors = ['from_snapshot', 'refreshPromptSnapshot'];
 const requestAnchors = ['/v1/messages', 'finalizeSystemRequest'];
@@ -10883,6 +10883,23 @@ function scanPromptAuthority(tree, code, results, edit, isCandidate = createPatc
   const extraBodyId = 'pentest-prompt-extra-body';
   const modelsId = 'pentest-prompt-model-guidance';
   let modelContext;
+  const unsupportedModels = () => {
+    results[modelsId].present = true;
+    results[modelsId].skipped = (results[modelsId].skipped ?? 0) + 1;
+  };
+  const disableModelGenerator = generator => {
+    const producer = generator?.node;
+    if (generator?.context !== modelContext || !functionNode(producer) || producer.async || producer.generator ||
+        producer.body.type !== 'BlockStatement') { unsupportedModels(); return; }
+    const statements = producer.body.body;
+    if (statements.length === 1 && statements[0].type === 'ReturnStatement' &&
+        literal(statements[0].argument, null) && code.slice(producer.body.start, producer.body.end).includes(`/*clawgod:${modelsId}*/`)) {
+      results[modelsId].patched = true;
+    } else {
+      results[modelsId].present = true;
+      edit(modelsId, producer.body, `{/*clawgod:${modelsId}*/return null;}`);
+    }
+  };
   walk(tree, node => {
     if (helperCall(node, 'selectApplicationPrompt')) results[baseId].patched = true;
     if (helperCall(node, 'filterDefaultPromptSections')) results[defaultsId].patched = true;
@@ -10897,13 +10914,9 @@ function scanPromptAuthority(tree, code, results, edit, isCandidate = createPatc
         ? call.arguments.findIndex(argument => context.same(argument, input)) : -1;
       const fn = target?.node;
       const parameter = functionNode(fn) && fn.params[index];
-      const unsupported = () => {
-        results[modelsId].present = true;
-        results[modelsId].skipped = (results[modelsId].skipped ?? 0) + 1;
-      };
       if (target?.context !== context || !functionNode(fn) || fn.async || fn.generator ||
           fn.body.type !== 'BlockStatement' || parameter?.type !== 'Identifier') {
-        unsupported();
+        unsupportedModels();
       } else {
         const entries = [];
         walk(fn.body, child => {
@@ -10917,23 +10930,8 @@ function scanPromptAuthority(tree, code, results, edit, isCandidate = createPatc
         // Unexpected uses require a new source matcher instead of dropping context.
         const unknownUse = containsOwn(fn.body, child => child.type === 'Identifier' && context.same(child, parameter) &&
           !entries.some(entry => entry.start <= child.start && entry.end >= child.end));
-        if (unknownUse || !entries.length) unsupported();
-        else {
-          for (const entry of entries) {
-            const generator = context.resolve(entry.callee);
-            const producer = generator?.node;
-            if (generator?.context !== context || !functionNode(producer) || producer.async || producer.generator ||
-                producer.body.type !== 'BlockStatement') { unsupported(); continue; }
-            const statements = producer.body.body;
-            if (statements.length === 1 && statements[0].type === 'ReturnStatement' &&
-                literal(statements[0].argument, null) && code.slice(producer.body.start, producer.body.end).includes(`/*clawgod:${modelsId}*/`)) {
-              results[modelsId].patched = true;
-            } else {
-              results[modelsId].present = true;
-              edit(modelsId, producer.body, `{/*clawgod:${modelsId}*/return null;}`);
-            }
-          }
-        }
+        if (unknownUse || !entries.length) unsupportedModels();
+        else for (const entry of entries) disableModelGenerator(context.resolve(entry.callee));
       }
     }
     if (!functionNode(node) || node.body.type !== 'BlockStatement') return;
@@ -11033,6 +11031,32 @@ function scanPromptAuthority(tree, code, results, edit, isCandidate = createPatc
         replace(defaultsId, child.callee.object, call('filterDefaultPromptSections', custom));
       }
     });
+  });
+  // Older runtimes build the same environment paragraph directly, before the
+  // latestModels renderer existed. Follow its catalog-backed prose producer;
+  // keep the adjacent CLI and /fast facts and the renderer's null filtering.
+  if (!results[modelsId].present && !results[modelsId].patched &&
+      isCandidate(['latest_per_family', `clawgod:${modelsId}`])) walk(tree, node => {
+    if (node.type !== 'CallExpression' || !member(node.callee, 'filter') ||
+        node.callee.object.type !== 'ArrayExpression') return;
+    const entries = node.callee.object.elements;
+    const filter = node.arguments[0];
+    if (entries.length !== 3 || entries[0]?.type !== 'CallExpression' || !functionNode(filter) ||
+        filter.params.length !== 1 || filter.params[0].type !== 'Identifier' ||
+        filter.body.type !== 'BinaryExpression' || filter.body.operator !== '!==' ||
+        !ident(filter.body.left, filter.params[0].name) || !literal(filter.body.right, null)) return;
+    const availability = staticText(entries[1]) ?? '';
+    if (!/\b(?:Claude Code|ClawGod_Y)\b/.test(availability) || !/\bCLI\b/.test(availability) ||
+        !contains(entries[2], child => typeof staticText(child) === 'string' && /\/fast\b/.test(staticText(child)))) return;
+    const context = modelContext ??= createPatchContext(tree, code);
+    const generator = context.resolve(entries[0].callee);
+    const producer = generator?.node;
+    if (!functionNode(producer) || !(containsOwn(producer.body, child => member(child, 'latest_per_family')) ||
+        code.slice(producer.body.start, producer.body.end).includes(`/*clawgod:${modelsId}*/`))) {
+      unsupportedModels();
+      return;
+    }
+    disableModelGenerator(generator);
   });
 }
 
@@ -11519,8 +11543,12 @@ function scanApplicationBranding(tree, code, results, edit, upstreamRanges = [])
     }
     if (node.type === 'NewExpression' && ident(node.callee, 'RegExp')) {
       const argument = node.arguments[0];
-      const pattern = argument?.type === 'TaggedTemplateExpression' && member(argument.tag, 'raw') && ident(argument.tag.object, 'String')
-        ? argument.quasi : argument;
+      // Bundlers can lower String.raw`...` to String.raw(tagFactory(...)`...`, ...).
+      // Wrap the evaluated pattern, preserving the template object and escapes.
+      const rawCall = argument?.type === 'CallExpression' && member(argument.callee, 'raw') && ident(argument.callee.object, 'String');
+      const template = rawCall ? argument.arguments[0] : argument;
+      const pattern = template?.type === 'TaggedTemplateExpression' &&
+        (rawCall || member(template.tag, 'raw') && ident(template.tag.object, 'String')) ? template.quasi : argument;
       const text = staticTextOf(pattern);
       if (typeof text === 'string' && /\b(?:Claude Code(?:_Y)?|ClawGod_Y)\b/.test(text) && proseSite(pattern, node, text) &&
           !blocked.some(([start, end]) => argument.start < end && argument.end > start)) {
