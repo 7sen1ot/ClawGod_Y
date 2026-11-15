@@ -43,16 +43,16 @@ ClawGod_Y は公式 [Claude Code](https://docs.anthropic.com/en/docs/claude-code
 **macOS / Linux / WSL：**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/7sen1ot/ClawGod_Y/main/install.sh | bash -s -- latest
+curl -fsSL https://raw.githubusercontent.com/7sen1ot/ClawGod_Y/main/install.sh | bash -s --
 ```
 
 **Windows PowerShell：**
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/7sen1ot/ClawGod_Y/main/install.ps1))) latest
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/7sen1ot/ClawGod_Y/main/install.ps1)))
 ```
 
-例の `latest` を `stable` または具体的なバージョン番号（例：`2.1.322`）に置き換えることで、バージョンを選択できます。`latest` と `stable` は、それぞれ npm の対応するタグのバージョンを使用します。
+デフォルトでは Claude Code `2.1.322` をインストールします。別のバージョンを選ぶには、上記のコマンドの末尾に `latest`、`stable`、または具体的なバージョン番号を追加してください。
 
 インストール後、新しいターミナルを開き、`clawgod` でパッチ済み Claude を起動してください。公式 Claude Code がすでにインストールされていた場合は、引き続き `claude` でオリジナルを起動できます。パッチ済みランタイムは `~/.clawgod`（Windows では `%USERPROFILE%\.clawgod`）に保存されます。
 

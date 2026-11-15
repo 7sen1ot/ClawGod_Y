@@ -43,16 +43,16 @@ The patch implementation draws on [0Chencc/clawgod](https://github.com/0Chencc/c
 **macOS / Linux / WSL:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/7sen1ot/ClawGod_Y/main/install.sh | bash -s -- latest
+curl -fsSL https://raw.githubusercontent.com/7sen1ot/ClawGod_Y/main/install.sh | bash -s --
 ```
 
 **Windows PowerShell:**
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/7sen1ot/ClawGod_Y/main/install.ps1))) latest
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/7sen1ot/ClawGod_Y/main/install.ps1)))
 ```
 
-Replace `latest` in the examples with `stable` or a specific version (such as `2.1.322`) as needed. `latest` and `stable` use the versions associated with the corresponding npm tags.
+Installs Claude Code `2.1.322` by default. To choose another version, append `latest`, `stable`, or a specific version number to either command above.
 
 After installation, open a new terminal and run `clawgod` to start patched Claude. If official Claude Code was already installed, `claude` still starts the original. The patched runtime is stored in `~/.clawgod`, or `%USERPROFILE%\.clawgod` on Windows.
 

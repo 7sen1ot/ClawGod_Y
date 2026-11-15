@@ -43,16 +43,16 @@ ClawGod_Y 是针对官方 [Claude Code](https://docs.anthropic.com/en/docs/claud
 **macOS / Linux / WSL：**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/7sen1ot/ClawGod_Y/main/install.sh | bash -s -- latest
+curl -fsSL https://raw.githubusercontent.com/7sen1ot/ClawGod_Y/main/install.sh | bash -s --
 ```
 
 **Windows PowerShell：**
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/7sen1ot/ClawGod_Y/main/install.ps1))) latest
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/7sen1ot/ClawGod_Y/main/install.ps1)))
 ```
 
-将示例中的 `latest` 替换为 `stable` 或具体版本号（如 `2.1.322`）即可。`latest` 和 `stable` 分别使用 npm 上对应标签的版本。
+默认安装 Claude Code `2.1.322`。如需选择其他版本，在上述命令末尾追加 `latest`、`stable` 或具体版本号。
 
 安装完成后打开新终端，运行 `clawgod` 启动打补丁的 Claude。如果本机原先已安装官方 Claude Code，仍可通过 `claude` 启动原版。补丁运行时存放在 `~/.clawgod`，Windows 下为 `%USERPROFILE%\.clawgod`。
 
