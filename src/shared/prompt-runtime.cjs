@@ -265,7 +265,6 @@ function filterDefaultPromptSections(sections, options) {
 function applicationRules(options) {
   const cfg = assemblyConfig(options);
   if (!cfg.customPrompt) return '';
-  if (cfg.rules) return cfg.rules;
   // Keep the file opaque.
   const body = cfg.customPrompt;
   return cfg.rules ??= CUSTOM_PROMPT_PREFIX + '<!-- clawgod:assembly-policy ' +

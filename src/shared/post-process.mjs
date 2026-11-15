@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, unlinkSync, existsSync, realpathSync } fro
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { parse } from './acorn.mjs';
+import { applyAstEdits, walk } from './ast-helpers.mjs';
 
 const here = realpathSync.native(dirname(fileURLToPath(import.meta.url)));
 const src = `${here}/cli.original.js`;
@@ -27,12 +28,10 @@ function fixAssetRequires(c, assets) {
   const isRequire = node => node?.type === 'MemberExpression' &&
     (node.computed ? node.property.value === 'require' : node.property.name === 'require') &&
     node.object.type === 'MetaProperty' && node.object.meta.name === 'import';
-  const pending = [parse(c, { ecmaVersion: 'latest', sourceType: 'module' })];
   const edits = [];
-  while (pending.length) {
-    const node = pending.pop();
+  walk(parse(c, { ecmaVersion: 'latest', sourceType: 'module' }), node => {
     if (node.type === 'ArrowFunctionExpression' &&
-        c.startsWith(marker, node.body.start + 1)) continue;
+        c.startsWith(marker, node.body.start + 1)) return false;
     const alias = node.type === 'VariableDeclarator' ? node.init
       : node.type === 'AssignmentExpression' && node.operator === '=' ? node.right : null;
     if (isRequire(alias)) edits.push(alias);
@@ -41,11 +40,7 @@ function fixAssetRequires(c, assets) {
       const key = typeof id === 'string' && process.platform === 'win32' ? id.toLowerCase() : id;
       if (typeof id !== 'string' || assets.has(key)) edits.push(node.callee);
     }
-    for (const value of Object.values(node)) {
-      if (value?.type) pending.push(value);
-      else if (Array.isArray(value)) pending.push(...value.filter(child => child?.type));
-    }
-  }
+  });
   if (!edits.length) return c;
   const loader = `(() => {${marker}
         const fs = import.meta.require('node:fs');
@@ -62,14 +57,7 @@ function fixAssetRequires(c, assets) {
       return import.meta.require(id);
     };
   })()`;
-  const parts = [];
-  let cursor = 0;
-  for (const node of edits.sort((a, b) => a.start - b.start)) {
-    parts.push(c.slice(cursor, node.start), loader);
-    cursor = node.end;
-  }
-  parts.push(c.slice(cursor));
-  return parts.join('');
+  return applyAstEdits(c, edits.map(({ start, end }) => ({ start, end, replacement: loader })));
 }
 
 if (isChunked) {

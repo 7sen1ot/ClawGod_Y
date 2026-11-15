@@ -125,7 +125,7 @@ if (!captureAndApply && existsSync(CLEAN_SOURCE) && !verify) {
     const snapshot = JSON.parse(readFileSync(CLEAN_SOURCE, 'utf8'));
     const sourceFiles = Object.fromEntries(Object.entries(snapshot.files ?? {})
       .filter(([name]) => sourcePaths.has(join(__dirname, name))));
-    const names = Object.keys(files).map(name => relative(__dirname, name).replaceAll('\\', '/')).sort();
+    const names = Object.keys(files).map(name => relative(__dirname, name).replaceAll('\\', '/'));
     const snapshotNames = Object.keys(sourceFiles);
     if (snapshot.format !== 1 || snapshot.version !== version ||
         !snapshot.files || typeof snapshot.files !== 'object' ||

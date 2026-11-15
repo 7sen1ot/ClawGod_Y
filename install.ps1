@@ -708,6 +708,7 @@ import { readFileSync, writeFileSync, unlinkSync, existsSync, realpathSync } fro
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { parse } from './acorn.mjs';
+import { applyAstEdits, walk } from './ast-helpers.mjs';
 
 const here = realpathSync.native(dirname(fileURLToPath(import.meta.url)));
 const src = `${here}/cli.original.js`;
@@ -733,12 +734,10 @@ function fixAssetRequires(c, assets) {
   const isRequire = node => node?.type === 'MemberExpression' &&
     (node.computed ? node.property.value === 'require' : node.property.name === 'require') &&
     node.object.type === 'MetaProperty' && node.object.meta.name === 'import';
-  const pending = [parse(c, { ecmaVersion: 'latest', sourceType: 'module' })];
   const edits = [];
-  while (pending.length) {
-    const node = pending.pop();
+  walk(parse(c, { ecmaVersion: 'latest', sourceType: 'module' }), node => {
     if (node.type === 'ArrowFunctionExpression' &&
-        c.startsWith(marker, node.body.start + 1)) continue;
+        c.startsWith(marker, node.body.start + 1)) return false;
     const alias = node.type === 'VariableDeclarator' ? node.init
       : node.type === 'AssignmentExpression' && node.operator === '=' ? node.right : null;
     if (isRequire(alias)) edits.push(alias);
@@ -747,11 +746,7 @@ function fixAssetRequires(c, assets) {
       const key = typeof id === 'string' && process.platform === 'win32' ? id.toLowerCase() : id;
       if (typeof id !== 'string' || assets.has(key)) edits.push(node.callee);
     }
-    for (const value of Object.values(node)) {
-      if (value?.type) pending.push(value);
-      else if (Array.isArray(value)) pending.push(...value.filter(child => child?.type));
-    }
-  }
+  });
   if (!edits.length) return c;
   const loader = `(() => {${marker}
         const fs = import.meta.require('node:fs');
@@ -768,14 +763,7 @@ function fixAssetRequires(c, assets) {
       return import.meta.require(id);
     };
   })()`;
-  const parts = [];
-  let cursor = 0;
-  for (const node of edits.sort((a, b) => a.start - b.start)) {
-    parts.push(c.slice(cursor, node.start), loader);
-    cursor = node.end;
-  }
-  parts.push(c.slice(cursor));
-  return parts.join('');
+  return applyAstEdits(c, edits.map(({ start, end }) => ({ start, end, replacement: loader })));
 }
 
 if (isChunked) {
@@ -2016,7 +2004,6 @@ function filterDefaultPromptSections(sections, options) {
 function applicationRules(options) {
   const cfg = assemblyConfig(options);
   if (!cfg.customPrompt) return '';
-  if (cfg.rules) return cfg.rules;
   // Keep the file opaque.
   const body = cfg.customPrompt;
   return cfg.rules ??= CUSTOM_PROMPT_PREFIX + '<!-- clawgod:assembly-policy ' +
@@ -9070,25 +9057,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 '@ | Set-Content (Join-Path $ClawDir "acorn.LICENSE") -Encoding UTF8
 
-& node $postProc 2>&1 | ForEach-Object { Write-Host "  $_" }
-if (($LASTEXITCODE -ne 0) -or -not (Test-Path (Join-Path $ClawDir "cli.original.cjs"))) {
-    Write-Err "Post-process failed"
-    Restore-Install
-    exit 1
-}
-
-Set-Content -Path (Join-Path $ClawDir ".source-version") -Value $NativeBinLabel -Encoding ASCII
-
-if ($NativeBin -and (Test-Path $NativeBin)) {
-    Move-Item -Force $NativeBin (Join-Path $ClawDir "claude.staged.exe")
-}
-
-if ($NativeBinTmpDir -and (Test-Path $NativeBinTmpDir)) {
-    Remove-Item -Recurse -Force $NativeBinTmpDir -ErrorAction SilentlyContinue
-}
-
-Write-OK "cli.original.cjs ready ($NativeBinLabel)"
-
 @'
 import { parse } from './acorn.mjs';
 
@@ -9520,6 +9488,26 @@ export function applyAstEdits(code, edits) {
   return parts.join('');
 }
 '@ | Set-Content (Join-Path $ClawDir "ast-helpers.mjs") -Encoding UTF8
+
+& node $postProc 2>&1 | ForEach-Object { Write-Host "  $_" }
+if (($LASTEXITCODE -ne 0) -or -not (Test-Path (Join-Path $ClawDir "cli.original.cjs"))) {
+    Write-Err "Post-process failed"
+    Restore-Install
+    exit 1
+}
+
+Set-Content -Path (Join-Path $ClawDir ".source-version") -Value $NativeBinLabel -Encoding ASCII
+
+if ($NativeBin -and (Test-Path $NativeBin)) {
+    Move-Item -Force $NativeBin (Join-Path $ClawDir "claude.staged.exe")
+}
+
+if ($NativeBinTmpDir -and (Test-Path $NativeBinTmpDir)) {
+    Remove-Item -Recurse -Force $NativeBinTmpDir -ErrorAction SilentlyContinue
+}
+
+Write-OK "cli.original.cjs ready ($NativeBinLabel)"
+
 @'
 import {
   AST_HELPERS, contains, containsOwn, createPatchCandidateFilter, createPatchContext,
@@ -11049,6 +11037,8 @@ const helperCall = (node, name) => node?.type === 'CallExpression' &&
   member(node.arguments[1], '__clawgodAssembly') && ident(node.arguments[1].object, 'globalThis');
 const erasedPromptPrefixes = [...denialGuidancePrefixes, ...removedPromptPrefixes];
 const returnedPromptPrefixes = [removalGuidance, ...removedPromptPrefixes];
+const identifierFields = new Set(['name', 'agentType', 'type', 'id', 'model', 'path', 'filePath',
+  'url', 'source', 'baseDir', 'command', 'const', 'enum', 'default', 'examples', 'pattern', '$id', '$ref']);
 
 function scanCombinerWrap(tree, code, results, edit, isCandidate = createPatchCandidateFilter(tree, code)) {
   if (!isCandidate(assemblyAnchors)) return;
@@ -11467,15 +11457,13 @@ function scanPromptTextErase(tree, code, results, edit, permissionBodies, trimEx
     ...Object.values(results).flatMap(result => result.fallbackMatches.map(match => [match.start, match.end]))];
   const overlaps = node => blocked.some(([start, end]) => node.start < end && node.end > start);
   const policyData = new WeakSet();
-  const dataFields = new Set(['name', 'agentType', 'type', 'id', 'model', 'path', 'filePath',
-    'url', 'source', 'baseDir', 'command', 'const', 'enum', 'default', 'examples', 'pattern', '$id', '$ref']);
   const dataCalls = new Set(['includes', 'startsWith', 'endsWith', 'indexOf', 'lastIndexOf',
     'match', 'matchAll', 'test', 'search', 'split', 'replace', 'replaceAll', 'literal', 'enum',
     'nativeEnum', 'default', 'regex', 'get', 'has', 'set', 'delete', 'RegExp', 'require',
     'exec', 'execSync', 'execFile', 'execFileSync', 'spawn', 'spawnSync']);
   const dataSite = (node, parent) => {
     if (!parent) return false;
-    if (parent.type === 'Property' && (parent.key === node || dataFields.has(propertyName(parent)))) return true;
+    if (parent.type === 'Property' && (parent.key === node || identifierFields.has(propertyName(parent)))) return true;
     if (['ImportDeclaration', 'ExportNamedDeclaration', 'ExportAllDeclaration'].includes(parent.type) && parent.source === node) return true;
     if (['ImportExpression', 'TaggedTemplateExpression', 'NewExpression', 'ThrowStatement', 'AssignmentPattern'].includes(parent.type)) return true;
     if (parent.type === 'MemberExpression' && parent.property === node) return true;
@@ -11705,7 +11693,6 @@ function scanApplicationBranding(tree, code, results, edit, upstreamRanges = [])
   const safetyEdits = results['pentest-prompt-rewrite'].matches;
   const blocked = [...claimedRanges(results, upstreamRanges, new Set(['pentest-prompt-rewrite'])),
     ...Object.values(results).flatMap(result => result.fallbackMatches.map(match => [match.start, match.end]))];
-  const rebrand = brandApplicationText;
   const templateKind = first => {
     if (typeof first !== 'string') return;
     if (/^(?:Your task is to create a detailed summary of (?:this conversation|the RECENT portion of the conversation|the conversation so far)\b|Summarize this portion of a (?:Claude Code|ClawGod_Y) session transcript\.)/.test(first)) return 'summary';
@@ -11734,8 +11721,6 @@ function scanApplicationBranding(tree, code, results, edit, upstreamRanges = [])
     results[id].present = true;
     return true;
   };
-  const identifierFields = new Set(['name', 'agentType', 'type', 'id', 'model', 'path', 'filePath',
-    'url', 'source', 'baseDir', 'command', 'const', 'enum', 'default', 'examples', 'pattern', '$id', '$ref']);
   const identifierSite = (node, parent) => {
     if (parent?.type === 'Property' && parent.key === node) return true;
     for (let owner = parent; owner && ['Property', 'ArrayExpression', 'ObjectExpression'].includes(owner.type); owner = parents.get(owner)) {
@@ -11784,7 +11769,7 @@ function scanApplicationBranding(tree, code, results, edit, upstreamRanges = [])
     if (node.type === 'CallExpression' && !node.optional && !node.callee.optional && node.callee.type === 'MemberExpression' &&
         ['includes', 'startsWith', 'endsWith'].some(name => member(node.callee, name))) {
       const text = staticText(node.arguments[0]);
-      if (typeof text === 'string' && rebrand(text) !== text &&
+      if (typeof text === 'string' && brandApplicationText(text) !== text &&
           !blocked.some(([start, end]) => node.start < end && node.end > start)) {
         const method = node.callee.computed ? node.callee.property.value : node.callee.property.name;
         results[displayId].present = true;
@@ -11869,13 +11854,13 @@ function scanApplicationBranding(tree, code, results, edit, upstreamRanges = [])
     const restart = /^Claude Code(?:_Y)? couldn't restart\b/.test(first);
     const prose = proseSite(node, parent, staticTextOf(node));
     if (parent?.type === 'TaggedTemplateExpression') {
-      if (prose && node.quasis.some(part => rebrand(part.value.cooked) !== part.value.cooked)) {
+      if (prose && node.quasis.some(part => brandApplicationText(part.value.cooked) !== part.value.cooked)) {
         results[displayId].present = true;
         results[displayId].skipped = (results[displayId].skipped ?? 0) + 1;
       }
       return false;
     }
-    if ((displayed || titleDefault || help || version || restart || prose) && rewrite(node, displayId, rebrand)) {
+    if ((displayed || titleDefault || help || version || restart || prose) && rewrite(node, displayId, brandApplicationText)) {
       if (help && parent.callee.object.type === 'CallExpression' && member(parent.callee.object.callee, 'name')) {
         const name = parent.callee.object.arguments[0];
         if (literal(name, 'claude')) edit(displayId, name, '"clawgod"');
@@ -12965,23 +12950,26 @@ export function pruneRuntimeGraph(files, originalFiles) {
   };
   const inspect = (code, name, detailed = false) => {
     const tree = readTree(code, name);
-    const parents = new Map(), refs = new Map(), declarations = new Map();
-    const scopes = new Map(), imports = new Map(), exports = new Map(), dependencies = new Set();
-    const dynamicDependencies = new Set(), analysisDependencies = new Set();
+    const parents = new Map(), declarations = new Map();
+    const scopes = new Map(), imports = new Map(), exports = new Map();
+    const summary = detailed ? null : { refs: new Map(), dependencies: new Set(),
+      dynamicDependencies: new Set(), analysisDependencies: new Set() };
     walk(tree, (node, parent) => {
-      if (detailed) parents.set(node, parent);
-      if (reference(node, parent)) refs.set(node.name, (refs.get(node.name) ?? 0) + 1);
-      const target = dependency(node);
-      if (target) {
-        dependencies.add(target);
-        if (parent?.type !== 'ImportDeclaration') dynamicDependencies.add(target);
+      if (summary) {
+        if (reference(node, parent)) summary.refs.set(node.name, (summary.refs.get(node.name) ?? 0) + 1);
+        const target = dependency(node);
+        if (target) {
+          summary.dependencies.add(target);
+          if (parent?.type !== 'ImportDeclaration') summary.dynamicDependencies.add(target);
+        }
+        if (node.type === 'CallExpression' && node.arguments.length === 1 &&
+            (node.callee.name === 'require' || member(node.callee, 'require'))) {
+          const target = resolve(staticText(node.arguments[0]));
+          if (target) summary.analysisDependencies.add(target);
+        }
+        return;
       }
-      if (node.type === 'CallExpression' && node.arguments.length === 1 &&
-          (node.callee.name === 'require' || member(node.callee, 'require'))) {
-        const target = resolve(staticText(node.arguments[0]));
-        if (target) analysisDependencies.add(target);
-      }
-      if (!detailed) return;
+      parents.set(node, parent);
       if (node.type === 'BlockStatement' || node.type === 'CatchClause' ||
           ['ForStatement', 'ForInStatement', 'ForOfStatement'].includes(node.type)) {
         const bindings = new Map();
@@ -13023,13 +13011,12 @@ export function pruneRuntimeGraph(files, originalFiles) {
       }
     }
     // Retain only scalar summaries between files and fixpoint iterations.
-    for (const target of dependencies) analysisDependencies.add(target);
-    for (const entry of imports.values()) if (entry.file) analysisDependencies.add(entry.file);
-    if (!detailed) {
+    if (summary) {
+      for (const target of summary.dependencies) summary.analysisDependencies.add(target);
+      for (const entry of imports.values()) if (entry.file) summary.analysisDependencies.add(entry.file);
       const constants = ownConstants({ code, declarations });
       const compactImports = new Map([...imports].map(([binding, { file, name }]) => [binding, { file, name }]));
-      return { code, refs, imports: compactImports, exports, dependencies,
-        dynamicDependencies, analysisDependencies, constants };
+      return { code, ...summary, imports: compactImports, exports, constants };
     }
     const getBinding = (node, name) => {
       for (let parent = parents.get(node); parent; parent = parents.get(parent)) {
@@ -13058,8 +13045,7 @@ export function pruneRuntimeGraph(files, originalFiles) {
       const binding = getBinding(node, node.name);
       if (binding) boundRefs.set(binding, (boundRefs.get(binding) ?? 0) + 1);
     });
-    return { code, tree, parents, refs, boundRefs, writes, getBinding, declarations, imports, exports,
-      dependencies, dynamicDependencies, analysisDependencies };
+    return { code, tree, boundRefs, writes, getBinding, declarations, imports, exports };
   };
   const touched = new Set(Object.keys(output).filter(name => output[name] !== originalFiles[name] &&
     /\/\*clawgod:security-/.test(output[name])));
@@ -13364,8 +13350,7 @@ export function pruneRuntimeGraph(files, originalFiles) {
       for (const node of info.tree.body) {
         if (node.type === 'FunctionDeclaration' && remove.has(node.id.name)) edits.push({ ...node, replacement: '' });
         if (node.type === 'VariableDeclaration') {
-          const kept = node.declarations.filter(entry => !remove.has(entry.id.name));
-          if (kept.length !== node.declarations.length) edits.push({ ...node, replacement:
+          if (node.declarations.some(entry => remove.has(entry.id.name))) edits.push({ ...node, replacement:
             node.declarations.map(entry => {
               if (!remove.has(entry.id.name)) return `${node.kind} ${info.code.slice(entry.start, entry.end)};`;
               return entry.init?.type === 'CallExpression' &&
@@ -13925,10 +13910,7 @@ export const upstreamPatches = [
     toggleable: true,
     name: 'Neutralize geo-detection probe (rdp)',
     pattern: /function ([\w$]+)\(\)\{if\([\w$]+\(\)\)return null;let [\w$]+=[\w$]+\(\),[\w$]+=[\w$]+\(\),[\w$]+=[\w$]+==="Asia\/Shanghai"\|\|[\w$]+==="Asia\/Urumqi"[\s\S]*?\}\}/g,
-    replacer: (m) => {
-      const fn = m.match(/^function ([\w$]+)/)[1];
-      return `function ${fn}(){if(${gate('geo-detect-probe')})return null;` + m.slice(`function ${fn}(){`.length, -1) + `}`;
-    },
+    replacer: (m, fn) => `function ${fn}(){if(${gate('geo-detect-probe')})return null;` + m.slice(`function ${fn}(){`.length, -1) + `}`,
     sentinel: ['Asia/Shanghai', 'Asia/Urumqi'],
   },
   {
@@ -13943,10 +13925,8 @@ export const upstreamPatches = [
       'return"(?:\\\\u02[Bb]9|\\u02B9)"\\}',
       'g'
     ),
-    replacer: (m) => {
-      const [, fn, params] = m.match(/^function ([\w$]+)\(([^)]*)\)/);
-      return `function ${fn}(${params}){if(${gate('geo-apostrophe-stego')})return"'";` + m.slice(m.indexOf('{') + 1, -1) + `}`;
-    },
+    replacer: (m, fn, left, right) =>
+      `function ${fn}(${left},${right}){if(${gate('geo-apostrophe-stego')})return"'";` + m.slice(m.indexOf('{') + 1, -1) + `}`,
     optional: true,
   },
 
@@ -14173,7 +14153,7 @@ if (!captureAndApply && existsSync(CLEAN_SOURCE) && !verify) {
     const snapshot = JSON.parse(readFileSync(CLEAN_SOURCE, 'utf8'));
     const sourceFiles = Object.fromEntries(Object.entries(snapshot.files ?? {})
       .filter(([name]) => sourcePaths.has(join(__dirname, name))));
-    const names = Object.keys(files).map(name => relative(__dirname, name).replaceAll('\\', '/')).sort();
+    const names = Object.keys(files).map(name => relative(__dirname, name).replaceAll('\\', '/'));
     const snapshotNames = Object.keys(sourceFiles);
     if (snapshot.format !== 1 || snapshot.version !== version ||
         !snapshot.files || typeof snapshot.files !== 'object' ||

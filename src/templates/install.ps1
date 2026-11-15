@@ -350,6 +350,10 @@ Write-OK "Bun.ant runtime shim created (bun-ant-shim.cjs)"
 {{CLAWGOD:acorn.LICENSE}}
 '@ | Set-Content (Join-Path $ClawDir "acorn.LICENSE") -Encoding UTF8
 
+@'
+{{CLAWGOD:ast-helpers.mjs}}
+'@ | Set-Content (Join-Path $ClawDir "ast-helpers.mjs") -Encoding UTF8
+
 & node $postProc 2>&1 | ForEach-Object { Write-Host "  $_" }
 if (($LASTEXITCODE -ne 0) -or -not (Test-Path (Join-Path $ClawDir "cli.original.cjs"))) {
     Write-Err "Post-process failed"
@@ -369,9 +373,6 @@ if ($NativeBinTmpDir -and (Test-Path $NativeBinTmpDir)) {
 
 Write-OK "cli.original.cjs ready ($NativeBinLabel)"
 
-@'
-{{CLAWGOD:ast-helpers.mjs}}
-'@ | Set-Content (Join-Path $ClawDir "ast-helpers.mjs") -Encoding UTF8
 @'
 {{CLAWGOD:ast-patches.mjs}}
 '@ | Set-Content (Join-Path $ClawDir "ast-patches.mjs") -Encoding UTF8

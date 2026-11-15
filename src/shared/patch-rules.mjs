@@ -268,10 +268,7 @@ export const upstreamPatches = [
     toggleable: true,
     name: 'Neutralize geo-detection probe (rdp)',
     pattern: /function ([\w$]+)\(\)\{if\([\w$]+\(\)\)return null;let [\w$]+=[\w$]+\(\),[\w$]+=[\w$]+\(\),[\w$]+=[\w$]+==="Asia\/Shanghai"\|\|[\w$]+==="Asia\/Urumqi"[\s\S]*?\}\}/g,
-    replacer: (m) => {
-      const fn = m.match(/^function ([\w$]+)/)[1];
-      return `function ${fn}(){if(${gate('geo-detect-probe')})return null;` + m.slice(`function ${fn}(){`.length, -1) + `}`;
-    },
+    replacer: (m, fn) => `function ${fn}(){if(${gate('geo-detect-probe')})return null;` + m.slice(`function ${fn}(){`.length, -1) + `}`,
     sentinel: ['Asia/Shanghai', 'Asia/Urumqi'],
   },
   {
@@ -286,10 +283,8 @@ export const upstreamPatches = [
       'return"(?:\\\\u02[Bb]9|\\u02B9)"\\}',
       'g'
     ),
-    replacer: (m) => {
-      const [, fn, params] = m.match(/^function ([\w$]+)\(([^)]*)\)/);
-      return `function ${fn}(${params}){if(${gate('geo-apostrophe-stego')})return"'";` + m.slice(m.indexOf('{') + 1, -1) + `}`;
-    },
+    replacer: (m, fn, left, right) =>
+      `function ${fn}(${left},${right}){if(${gate('geo-apostrophe-stego')})return"'";` + m.slice(m.indexOf('{') + 1, -1) + `}`,
     optional: true,
   },
 

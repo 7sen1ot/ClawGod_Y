@@ -273,6 +273,10 @@ cat > "$CLAWGOD_DIR/acorn.LICENSE" << 'ACORN_LICENSE_EOF'
 {{CLAWGOD:acorn.LICENSE}}
 ACORN_LICENSE_EOF
 
+cat > "$CLAWGOD_DIR/ast-helpers.mjs" << 'AST_HELPERS_EOF'
+{{CLAWGOD:ast-helpers.mjs}}
+AST_HELPERS_EOF
+
 node "$CLAWGOD_DIR/post-process.mjs" 2>&1 | while IFS= read -r line; do echo "  $line"; done
 if [ "${PIPESTATUS[0]}" -ne 0 ]; then err "Post-process failed"; exit 1; fi
 [ -f "$CLAWGOD_DIR/cli.original.cjs" ] || { err "Post-process failed"; exit 1; }
@@ -289,9 +293,6 @@ fi
 
 info "cli.original.cjs ready ($NATIVE_BIN_LABEL)"
 
-cat > "$CLAWGOD_DIR/ast-helpers.mjs" << 'AST_HELPERS_EOF'
-{{CLAWGOD:ast-helpers.mjs}}
-AST_HELPERS_EOF
 cat > "$CLAWGOD_DIR/ast-patches.mjs" << 'AST_PATCHES_EOF'
 {{CLAWGOD:ast-patches.mjs}}
 AST_PATCHES_EOF
