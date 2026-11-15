@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const windows = process.platform === 'win32';
@@ -11,17 +11,24 @@ const dir = join(home, '.clawgod');
 const bin = join(home, '.local', 'bin');
 const commands = join(root, 'commands');
 const installer = join(root, windows ? 'install.ps1' : 'install.sh');
+const uninstallerName = windows ? 'uninstall.ps1' : 'uninstall.sh';
+const uninstaller = join(root, uninstallerName);
 const native = windows ? 'claude.fallback.exe' : 'claude.fallback';
 const launcher = join(bin, windows ? 'clawgod.cmd' : 'clawgod');
-const cache = join(dir, windows ? 'install.ps1' : 'install.sh');
+const cache = join(dir, uninstallerName);
 const savedUserPath = windows ? spawnSync('powershell.exe', ['-NoProfile', '-Command', '[Environment]::GetEnvironmentVariable("Path", "User")'], { encoding: 'utf8' }).stdout.trimEnd() : '';
 const env = { ...process.env, HOME: home, USERPROFILE: home, CLAWGOD_FIXTURE_INSTALLER: installer,
+  CLAWGOD_FIXTURE_UNINSTALLER: uninstaller,
   PATH: commands + (windows ? ';' : ':') + process.env.PATH };
 for (const key of Object.keys(env)) if (/^(?:https?_proxy|all_proxy)$/i.test(key)) delete env[key];
 const source = name => readFileSync(new URL(name, import.meta.url), 'utf8');
+const uninstallerSource = process.argv[2]
+  ? readFileSync(join(dirname(resolve(process.argv[2])), uninstallerName), 'utf8')
+  : source('../templates/' + uninstallerName);
 const payloads = {
   'cli.cjs': source('./cli.cjs'),
   'runtime-helpers.cjs': source('./runtime-helpers.cjs'),
+  'prompt-runtime.cjs': source('./prompt-runtime.cjs'),
   'lean-mode.cjs': source('./lean-mode.cjs'),
   'lean-apply.cjs': source('../windows/lean-apply.cjs'),
   'startup-check.cjs': source('./startup-check.cjs'),
@@ -74,10 +81,10 @@ const run = (args = [], extra = {}, piped = false) => {
     env: { ...env, ...extra }, input: piped ? template : undefined, encoding: 'utf8', timeout: 60000,
   });
   const command = `function Invoke-WebRequest { throw 'Optional import download is offline' }
-function Invoke-RestMethod { if($env:CLAWGOD_FAIL_CACHE -eq '1'){throw 'Uninstaller download failed'};[IO.File]::ReadAllText($env:CLAWGOD_FIXTURE_INSTALLER) }
+function Invoke-RestMethod { if($env:CLAWGOD_FAIL_CACHE -eq '1'){throw 'Uninstaller download failed'};[IO.File]::ReadAllText($env:CLAWGOD_FIXTURE_UNINSTALLER) }
 ${['PROCESSOR_ARCHITECTURE', 'PROCESSOR_ARCHITEW6432'].filter(key => Object.hasOwn(extra, key)).map(key => `$env:${key}='${extra[key].replaceAll("'", "''")}'`).join('\n')}
 ${extra.CLAWGOD_FAIL_LAUNCHER ? '$lock=[IO.File]::Open((Join-Path $env:USERPROFILE ".local\\bin\\clawgod.cmd"),"Open","Read","Read")' : ''}
-& ([scriptblock]::Create([IO.File]::ReadAllText($env:CLAWGOD_FIXTURE_INSTALLER))) ${args.map(arg => `'${arg.replaceAll("'", "''")}'`).join(' ')}
+${piped ? '& ([scriptblock]::Create([IO.File]::ReadAllText($env:CLAWGOD_FIXTURE_INSTALLER)))' : '& $env:CLAWGOD_FIXTURE_INSTALLER'} ${args.map(arg => `'${arg.replaceAll("'", "''")}'`).join(' ')}
 if (-not $?) { exit 1 }
 `;
   return spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', command], {
@@ -89,7 +96,8 @@ const retained = ['provider.json', 'features.json', 'patches.json', 'assembly.js
 try {
   mkdirSync(bin, { recursive: true });
   mkdirSync(commands);
-  writeFileSync(installer, template);
+  writeFileSync(installer, (windows ? '\ufeff' : '') + template);
+  writeFileSync(uninstaller, uninstallerSource);
   const official = join(commands, windows ? 'claude.exe' : 'claude');
   writeFileSync(official, 'official Claude must remain unchanged', { mode: 0o755 });
   if (windows) writeFileSync(join(commands, 'rg.cmd'), '@echo off\r\necho ripgrep fixture\r\n');
@@ -112,7 +120,7 @@ exec /usr/bin/uname "$@"\n`);
     shellFile('curl', `while [ "$#" -gt 0 ]; do if [ "$1" = -o ];then target="$2";shift 2;else shift;fi;done
 case "$target" in */clawgod-import) exit 22;; esac
 [ "\${CLAWGOD_FAIL_CACHE:-0}" != 1 ] || exit 22
-cp "$CLAWGOD_FIXTURE_INSTALLER" "$target"\n`);
+cp "$CLAWGOD_FIXTURE_UNINSTALLER" "$target"\n`);
     shellFile('mv', `for target in "$@"; do :; done
 case "$target" in */.local/bin/clawgod) [ "\${CLAWGOD_FAIL_LAUNCHER:-0}" != 1 ] || exit 73;; esac
 exec /bin/mv "$@"\n`);
@@ -123,6 +131,8 @@ exec /bin/mv "$@"\n`);
     assert.equal(readFileSync(join(dir, '.source-version'), 'utf8').trim(), version);
     assert.match(result.stdout, new RegExp('ClawGod_Y runtime version: ' + version.replaceAll('.', '\\.')));
     assert.ok(existsSync(cache), 'Successful install must save a local uninstaller');
+    assert.equal(readFileSync(cache, 'utf8'), uninstallerSource, 'The cached file must be the standalone uninstaller');
+    assert.equal(existsSync(join(dir, windows ? 'install.ps1' : 'install.sh')), false, 'Installation must not cache the installer as an uninstaller');
     assert.ok(existsSync(join(dir, native)), 'Selected native binary must be retained even with an official claude on PATH');
     assert.ok(readFileSync(launcher, 'utf8').includes(windows ? 'CLAUDE_CODE_EXECPATH=%USERPROFILE%\\.clawgod\\claude.fallback.exe' : `CLAUDE_CODE_EXECPATH="${join(dir, native)}"`));
     assert.equal(readFileSync(official, 'utf8'), 'official Claude must remain unchanged');
@@ -150,7 +160,8 @@ exec /bin/mv "$@"\n`);
     ...['download', 'corrupt', 'missing-binary', 'extract', 'post-process', 'patch', 'startup'].map(stage => ({ CLAWGOD_FAIL_STAGE: stage }))]) {
     writeFileSync(join(dir, '.compiled-runtime'), 'cli.compiled-old\n');
     writeFileSync(join(dir, 'cli.compiled-old'), 'old compiled runtime');
-    const old = Object.fromEntries(['cli.original.cjs', 'cli.cjs', '.source-version', native, 'install.' + (windows ? 'ps1' : 'sh'), '.compiled-runtime', 'source-backup.json', 'bunfs/asset.txt', ...retained]
+    const old = Object.fromEntries(['cli.original.cjs', 'cli.cjs', '.source-version', native, uninstallerName, '.compiled-runtime', 'source-backup.json', 'bunfs/asset.txt',
+      'ast-helpers.mjs', 'patch-rules.mjs', 'pentest-prompts.mjs', 'prompt-runtime.cjs', ...retained]
       .map(name => [name, readFileSync(join(dir, name))]));
     const oldLauncher = readFileSync(launcher);
     const result = run(['latest'], extra, true);
@@ -170,13 +181,15 @@ exec /bin/mv "$@"\n`);
   mkdirSync(join(home, '.claude'), { recursive: true });
   const settings = join(home, '.claude', 'settings.json');
   writeFileSync(settings, '{"keep":"shared settings"}');
+  succeeds(spawnSync('bun', [join(dir, 'cli.cjs'), '--uninstall'], { env, encoding: 'utf8', timeout: 30000 }));
+  assert.equal(existsSync(launcher), false, 'The CLI must invoke the standalone uninstaller');
   const uninstall = spawnSync(windows ? 'powershell.exe' : 'bash', windows
-    ? ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', cache, '-Uninstall'] : [cache, '--uninstall'], {
+    ? ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', cache] : [cache], {
     env, encoding: 'utf8', timeout: 30000,
   });
   succeeds(uninstall);
   assert.equal(existsSync(launcher), false);
-  assert.deepEqual(readdirSync(dir).sort(), [...retained, windows ? 'install.ps1' : 'install.sh'].sort(), 'Only configuration and the cached uninstaller should remain');
+  assert.deepEqual(readdirSync(dir).sort(), [...retained, uninstallerName].sort(), 'Only configuration and the cached uninstaller should remain');
   assert.equal(readFileSync(settings, 'utf8'), '{"keep":"shared settings"}');
   assert.equal(readFileSync(official, 'utf8'), 'official Claude must remain unchanged');
   for (const name of retained) assert.equal(JSON.parse(readFileSync(join(dir, name), 'utf8')).fixture, name);

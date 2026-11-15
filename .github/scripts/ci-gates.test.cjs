@@ -67,7 +67,8 @@ try {
   const release = join(root, 'release');
   mkdirSync(join(release, 'dist'), { recursive: true });
   const originals = Object.fromEntries(['install.sh', 'install.ps1'].map(name => [name, readFileSync(join(repository, name), 'utf8')]));
-  const reset = () => { for (const [name, text] of Object.entries(originals)) writeFileSync(join(release, name), text); };
+  const uninstallers = Object.fromEntries(['uninstall.sh', 'uninstall.ps1'].map(name => [name, readFileSync(join(repository, name), 'utf8')]));
+  const reset = () => { for (const [name, text] of Object.entries({ ...originals, ...uninstallers })) writeFileSync(join(release, name), text); };
   reset();
   for (const name of imports) writeFileSync(join(release, 'dist', name), 'fixture binary');
   for (const tag of ['v1.2.3', 'v1.2.3-beta.1']) {
@@ -83,6 +84,9 @@ try {
       assert.ok(actual.match(pattern)[0].includes(tag.slice(1)));
       assert.equal(actual.replace(pattern, ''), original.replace(pattern, ''), 'Only the self-version may change');
     }
+    for (const [name, original] of Object.entries(uninstallers)) {
+      assert.equal(readFileSync(join(release, name), 'utf8'), original, 'Standalone uninstallers must remain unchanged');
+    }
   }
   for (const tag of ['vfoo', 'v1.2.3;echo bad', 'v1.2.3\nextra', 'v1.2.3\n']) assert.throws(() => prepareInstallers(release, tag), /Invalid release tag/);
   for (const invalid of [originals['install.ps1'].replace('$ClawSelfVersion =', '$MissingVersion ='),
@@ -94,13 +98,14 @@ try {
     assert.equal(readFileSync(join(release, 'install.sh'), 'utf8'), originals['install.sh'], 'Failed preparation must not partly update installers');
   }
   reset();
-  for (const name of imports) {
-    const path = join(release, 'dist', name);
+  for (const name of [...Object.keys(uninstallers), ...imports.map(name => join('dist', name))]) {
+    const path = join(release, name);
+    const original = readFileSync(path);
     rmSync(path);
-    assert.throws(() => verifyAssets(release), /missing/);
+    assert.throws(() => verifyAssets(release), /missing|ENOENT/);
     writeFileSync(path, '');
     assert.throws(() => verifyAssets(release), /empty/);
-    writeFileSync(path, 'fixture binary');
+    writeFileSync(path, original);
   }
   writeFileSync(join(release, 'dist', 'clawgod-import-unknown'), 'unexpected');
   assert.throws(() => verifyAssets(release), /unexpected/);

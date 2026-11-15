@@ -80,7 +80,7 @@ OpenAI Chat Completions 互換サービスの場合は `protocol` を `openai-ch
 clawgod --uninstall
 ```
 
-`clawgod` を起動できない場合、**macOS / Linux / WSL** では `bash ~/.clawgod/install.sh --uninstall`、**Windows PowerShell** では `powershell -File "$env:USERPROFILE\.clawgod\install.ps1" -Uninstall` を実行してください。
+`clawgod` を起動できない場合、**macOS / Linux / WSL** では `bash "$HOME/.clawgod/uninstall.sh"`、**Windows PowerShell** では `powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.clawgod\uninstall.ps1"` を実行してください。
 
 アンインストールでは `clawgod` ランチャ、主要なランタイムファイル、独立した `~/.clawgod/lean-settings.json` を削除し、`~/.claude/settings.json` は変更しません。`provider.json` や `features.json` などの設定と一部のファイルは保持され、`~/.clawgod` ディレクトリ全体は削除されません。
 

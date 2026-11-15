@@ -7,14 +7,14 @@ const { spawnSync } = require('child_process');
 const clawgodDir = join(homedir(), '.clawgod');
 if (process.argv.length === 3 && process.argv[2] === '--uninstall') {
   const windows = process.platform === 'win32';
-  const installer = join(__dirname, windows ? 'install.ps1' : 'install.sh');
-  if (!existsSync(installer)) {
-    process.stderr.write('[clawgod] Local uninstaller is missing. Rerun the installer with its uninstall option.\n');
+  const uninstaller = join(__dirname, windows ? 'uninstall.ps1' : 'uninstall.sh');
+  if (!existsSync(uninstaller)) {
+    process.stderr.write('[clawgod] Local uninstaller is missing. Download and run uninstall.ps1 (Windows) or uninstall.sh (macOS/Linux) from the ClawGod_Y release.\n');
     process.exit(1);
   }
   const result = spawnSync(windows ? 'powershell' : 'bash', windows
-    ? ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', installer, '-Uninstall']
-    : [installer, '--uninstall'], { stdio: 'inherit', env: process.env });
+    ? ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', uninstaller]
+    : [uninstaller], { stdio: 'inherit', env: process.env });
   if (result.error) process.stderr.write('[clawgod] Uninstall failed: ' + result.error.message + '\n');
   process.exit(Number.isInteger(result.status) ? result.status : 1);
 }

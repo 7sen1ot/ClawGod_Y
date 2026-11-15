@@ -12,6 +12,8 @@
 | `tool-guard.py` | Layer 3 | PreToolUse | Bash/Write 工具调用风险评估 → allow/block |
 | `setup.sh` | — | 安装时 | 一键安装 hook 脚本 + 注册到 settings.json（macOS/Linux） |
 | `setup.ps1` | — | 安装时 | 一键安装（Windows） |
+| `uninstall.sh` | — | 卸载时 | 移除 hook 脚本及注册项（macOS/Linux） |
+| `uninstall.ps1` | — | 卸载时 | 移除 hook 脚本及注册项（Windows） |
 
 ---
 
@@ -63,12 +65,16 @@ cp scene-router.py tool-guard.py ~/.claude/hooks/
 
 ## 卸载
 
+在本目录执行；卸载会保留 rules 和审计日志。
+
 ```bash
 # macOS / Linux
-bash setup.sh --uninstall
+bash uninstall.sh
+```
 
-# Windows
-.\setup.ps1 -Uninstall
+```powershell
+# Windows PowerShell
+.\uninstall.ps1
 ```
 
 ---

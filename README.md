@@ -80,7 +80,7 @@ For an OpenAI Chat Completions-compatible service, set `protocol` to `openai-cha
 clawgod --uninstall
 ```
 
-If `clawgod` cannot start, on **macOS / Linux / WSL** run `bash ~/.clawgod/install.sh --uninstall`; in **Windows PowerShell** run `powershell -File "$env:USERPROFILE\.clawgod\install.ps1" -Uninstall`.
+If `clawgod` cannot start, on **macOS / Linux / WSL** run `bash "$HOME/.clawgod/uninstall.sh"`; in **Windows PowerShell** run `powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.clawgod\uninstall.ps1"`.
 
 Uninstallation removes the `clawgod` launcher, the main runtime files, and the separate `~/.clawgod/lean-settings.json` file without modifying `~/.claude/settings.json`. Configuration such as `provider.json` and `features.json`, along with some other files, is retained; the entire `~/.clawgod` directory is not deleted.
 

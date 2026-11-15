@@ -30,9 +30,9 @@ function weaveFeaturesMeta(content, meta) {
 
 const SHARED_SOURCES = Object.fromEntries([
   'extract-natives.mjs', 'post-process.mjs', 'openai-proxy.cjs', 'cli.cjs',
-  'startup-check.cjs', 'compile-runtime.mjs', 'runtime-helpers.cjs', 'bun-ant-shim.cjs',
-  'feature-gates.cjs', 'patch.mjs', 'patch-registry.mjs', 'ast-patches.mjs',
-  'pentest-patches.mjs', 'pentest-scanners.mjs', 'pentest-trimming.mjs',
+  'startup-check.cjs', 'compile-runtime.mjs', 'runtime-helpers.cjs', 'prompt-runtime.cjs', 'bun-ant-shim.cjs',
+  'feature-gates.cjs', 'patch.mjs', 'patch-rules.mjs', 'patch-registry.mjs', 'ast-patches.mjs', 'ast-helpers.mjs',
+  'pentest-patches.mjs', 'pentest-scanners.mjs', 'pentest-prompts.mjs', 'pentest-trimming.mjs',
   'pentest-policy-text.mjs', 'pentest-pruner.mjs', 'lean-mode.cjs',
   'system-prompt.md', 'acorn.mjs', 'acorn.LICENSE', 'features.json',
 ].map(name => [name, `shared/${name}`]));
@@ -53,6 +53,18 @@ const TARGETS = [
       ...SHARED_SOURCES,
       'lean-apply.cjs': 'windows/lean-apply.cjs',
     },
+  },
+  {
+    name: 'uninstall.sh',
+    template: 'templates/uninstall.sh',
+    mode: 0o755,
+    sources: {},
+  },
+  {
+    name: 'uninstall.ps1',
+    template: 'templates/uninstall.ps1',
+    asciiOnly: true,
+    sources: {},
   },
 ];
 

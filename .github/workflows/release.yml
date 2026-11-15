@@ -95,9 +95,9 @@ jobs:
         run: |
           node .github/scripts/release-assets.cjs "$GITHUB_REF_NAME"
           bash -n install.sh
+          bash -n uninstall.sh
 
-      - name: Check installation from the final release script
-        # The lifecycle fixture replaces network/model payloads but keeps the final script structure.
+      - name: Check installation and uninstall from the final release scripts
         run: node src/shared/installer-lifecycle.test.mjs install.sh
 
       - name: Create GitHub release
@@ -106,9 +106,9 @@ jobs:
         run: |
           tag="${{ steps.versions.outputs.tag }}"
           if gh release view "$tag" >/dev/null 2>&1; then
-            gh release upload "$tag" install.sh install.ps1 dist/clawgod-import-* --clobber
+            gh release upload "$tag" install.sh install.ps1 uninstall.sh uninstall.ps1 dist/clawgod-import-* --clobber
           else
-            gh release create "$tag" install.sh install.ps1 dist/clawgod-import-* \
+            gh release create "$tag" install.sh install.ps1 uninstall.sh uninstall.ps1 dist/clawgod-import-* \
               --title "ClawGod_Y $tag" \
               --notes-file release-notes.md
           fi

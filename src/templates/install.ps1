@@ -2,8 +2,7 @@
 param(
     [Parameter(Position = 0)]
     [ValidatePattern('^(latest|stable|[0-9]+\.[0-9]+\.[0-9]+)$')]
-    [string]$Version = "2.1.322",
-    [switch]$Uninstall
+    [string]$Version = "2.1.322"
 )
 
 $ErrorActionPreference = "Stop"
@@ -21,34 +20,6 @@ Write-Host ""
 Write-Host "  ClawGod_Y Installer" -ForegroundColor White -NoNewline
 Write-Host " (Windows)" -ForegroundColor DarkGray
 Write-Host ""
-
-if ($Uninstall) {
-    $clawgodCmd = Join-Path $BinDir "clawgod.cmd"
-    if (Test-Path $clawgodCmd) {
-        Remove-Item -Force $clawgodCmd
-        Write-OK "Removed ClawGod_Y launcher"
-    }
-    foreach ($leftover in @("claude.orig.cmd", "claude.orig.exe")) {
-        $p = Join-Path $BinDir $leftover
-        if (Test-Path $p) { Remove-Item -Force $p }
-    }
-
-    foreach ($f in @("cli.js","cli.cjs","cli.original.js","cli.original.cjs","cli.original.js.bak","cli.original.cjs.bak","source-backup.json","patch.js","patch.mjs","ast-patches.mjs","pentest-patches.mjs","pentest-scanners.mjs","pentest-trimming.mjs","pentest-policy-text.mjs","pentest-pruner.mjs","lean-mode.cjs","lean-settings.json",".lean-disabled",".lean-max","acorn.mjs","acorn.LICENSE","extract-natives.mjs","post-process.mjs","repatch.mjs","startup-check.cjs","startup-check.log","openai-proxy.cjs","feature-gates.cjs","runtime-helpers.cjs","bun-ant-shim.cjs","clawgod-import.exe","claude.staged.exe","claude.fallback.exe",".source-version","node_modules","bun-runtime","vendor","bunfs","pathmap.json")) {
-        $p = Join-Path $ClawDir $f
-        if (Test-Path $p) { Remove-Item -Recurse -Force $p }
-    }
-    Remove-Item -LiteralPath (Join-Path $ClawDir "compile-runtime.mjs"), (Join-Path $ClawDir ".compiled-runtime"), (Join-Path $ClawDir ".compiled-runtime-cache.json") -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath (Join-Path $ClawDir "patch-registry.mjs"), (Join-Path $ClawDir "system-prompt.md"), (Join-Path $ClawDir "probe-tools.log"), (Join-Path $ClawDir ".clawgod-version") -Force -ErrorAction SilentlyContinue
-    Get-ChildItem -LiteralPath $ClawDir -Filter "cli.compiled-*" -File -ErrorAction SilentlyContinue |
-        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
-    Get-ChildItem -LiteralPath $ClawDir -Filter "claude.fallback.*.exe" -File -ErrorAction SilentlyContinue |
-        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
-    Write-OK "ClawGod_Y uninstalled"
-    Write-Host ""
-    Write-Dim "Restart your terminal for changes to take effect."
-    Write-Host ""
-    exit 0
-}
 
 try { $null = Get-Command node -ErrorAction Stop }
 catch {
@@ -242,8 +213,9 @@ if ($useNpmFetch) {
 $RollbackDir = $null
 $script:RollbackPending = $false
 $RollbackFiles = @("cli.original.cjs","cli.original.cjs.bak","cli.original.js",".source-version",
+    "ast-helpers.mjs","patch-rules.mjs","pentest-prompts.mjs","prompt-runtime.cjs",
     "source-backup.json","bunfs","vendor","pathmap.json","extract-natives.mjs","post-process.mjs",
-    "openai-proxy.cjs","feature-gates.cjs","cli.cjs",".clawgod-version","claude.fallback.exe","install.ps1","lean-settings.json","patches.json",
+    "openai-proxy.cjs","feature-gates.cjs","cli.cjs",".clawgod-version","claude.fallback.exe","uninstall.ps1","lean-settings.json","patches.json",
     "startup-check.cjs","compile-runtime.mjs",".compiled-runtime",".compiled-runtime-cache.json","runtime-helpers.cjs","bun-ant-shim.cjs","system-prompt.md","patch.mjs","patch-registry.mjs","ast-patches.mjs","pentest-patches.mjs","pentest-scanners.mjs","pentest-trimming.mjs","pentest-policy-text.mjs","pentest-pruner.mjs","lean-mode.cjs","acorn.mjs","acorn.LICENSE")
 $origCjs = Join-Path $ClawDir "cli.original.cjs"
 $sourceVerFile = Join-Path $ClawDir ".source-version"
@@ -280,7 +252,7 @@ if ((Test-Path $origCjs) -and (Test-Path $sourceVerFile)) {
 
 function Restore-Install {
     Remove-Item -LiteralPath (Join-Path $ClawDir "claude.staged.exe") -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath (Join-Path $ClawDir "install.ps1.tmp"), (Join-Path $BinDir "clawgod.cmd.tmp") -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $ClawDir "uninstall.ps1.tmp"), (Join-Path $BinDir "clawgod.cmd.tmp") -Force -ErrorAction SilentlyContinue
     if (-not $script:RollbackPending) { return }
     $script:RollbackPending = $false
     if (-not $RollbackDir) { return }
@@ -357,6 +329,9 @@ Write-OK "Wrapper created (cli.cjs)"
 @'
 {{CLAWGOD:runtime-helpers.cjs}}
 '@ | Set-Content (Join-Path $ClawDir "runtime-helpers.cjs") -Encoding UTF8
+@'
+{{CLAWGOD:prompt-runtime.cjs}}
+'@ | Set-Content (Join-Path $ClawDir "prompt-runtime.cjs") -Encoding UTF8
 Write-OK "Classifier helper created (runtime-helpers.cjs)"
 
 @'
@@ -395,6 +370,9 @@ if ($NativeBinTmpDir -and (Test-Path $NativeBinTmpDir)) {
 Write-OK "cli.original.cjs ready ($NativeBinLabel)"
 
 @'
+{{CLAWGOD:ast-helpers.mjs}}
+'@ | Set-Content (Join-Path $ClawDir "ast-helpers.mjs") -Encoding UTF8
+@'
 {{CLAWGOD:ast-patches.mjs}}
 '@ | Set-Content (Join-Path $ClawDir "ast-patches.mjs") -Encoding UTF8
 @'
@@ -404,6 +382,9 @@ Write-OK "cli.original.cjs ready ($NativeBinLabel)"
 @'
 {{CLAWGOD:pentest-scanners.mjs}}
 '@ | Set-Content (Join-Path $ClawDir "pentest-scanners.mjs") -Encoding UTF8
+@'
+{{CLAWGOD:pentest-prompts.mjs}}
+'@ | Set-Content (Join-Path $ClawDir "pentest-prompts.mjs") -Encoding UTF8
 @'
 {{CLAWGOD:pentest-trimming.mjs}}
 '@ | Set-Content (Join-Path $ClawDir "pentest-trimming.mjs") -Encoding UTF8
@@ -423,6 +404,9 @@ $systemPromptEscaped = @'
 $systemPromptText = [Regex]::Replace($systemPromptEscaped, '\\u([0-9a-fA-F]{4})', { param($m) [char]([Convert]::ToInt32($m.Groups[1].Value, 16)) }) -join ''
 Set-Content (Join-Path $ClawDir "system-prompt.md") $systemPromptText -Encoding UTF8
 
+@'
+{{CLAWGOD:patch-rules.mjs}}
+'@ | Set-Content (Join-Path $ClawDir "patch-rules.mjs") -Encoding UTF8
 $patcherCode = @'
 {{CLAWGOD:patch.mjs}}
 '@
@@ -650,19 +634,23 @@ $launcherContent = $launcherContent.Replace($sourceLaunch, $compiledLaunch)
 $launcherContent | Set-Content (Join-Path $BinDir "clawgod.cmd.tmp") -Encoding Default
 
 $selfPath = $MyInvocation.MyCommand.Path
-if ($selfPath -and (Test-Path $selfPath) -and
-    ([System.IO.Path]::GetFullPath($selfPath) -ne [System.IO.Path]::GetFullPath((Join-Path $ClawDir "install.ps1")))) {
-    Copy-Item -LiteralPath $selfPath -Destination (Join-Path $ClawDir "install.ps1.tmp") -Force -ErrorAction Stop
-    Move-Item -LiteralPath (Join-Path $ClawDir "install.ps1.tmp") -Destination (Join-Path $ClawDir "install.ps1") -Force
-} elseif (-not $selfPath) {
-    $installerSource = Invoke-RestMethod "https://raw.githubusercontent.com/7sen1ot/ClawGod_Y/main/install.ps1"
-    if ([string]::IsNullOrWhiteSpace($installerSource)) { throw 'Downloaded uninstaller is empty' }
-    [System.IO.File]::WriteAllText((Join-Path $ClawDir "install.ps1.tmp"), $installerSource,
+$uninstallerPath = if ($selfPath) { Join-Path (Split-Path -Parent $selfPath) "uninstall.ps1" } else { $null }
+if ($uninstallerPath -and (Test-Path -LiteralPath $uninstallerPath -PathType Leaf)) {
+    Copy-Item -LiteralPath $uninstallerPath -Destination (Join-Path $ClawDir "uninstall.ps1.tmp") -Force -ErrorAction Stop
+} else {
+    $uninstallerUrl = if ($ClawSelfVersion -eq "0.0.0-dev") {
+        "https://raw.githubusercontent.com/7sen1ot/ClawGod_Y/main/uninstall.ps1"
+    } else {
+        "https://github.com/7sen1ot/ClawGod_Y/releases/download/v$ClawSelfVersion/uninstall.ps1"
+    }
+    $uninstallerSource = Invoke-RestMethod $uninstallerUrl
+    if ([string]::IsNullOrWhiteSpace($uninstallerSource)) { throw 'Downloaded uninstaller is empty' }
+    [System.IO.File]::WriteAllText((Join-Path $ClawDir "uninstall.ps1.tmp"), $uninstallerSource,
         (New-Object System.Text.UTF8Encoding $false))
-    Move-Item -LiteralPath (Join-Path $ClawDir "install.ps1.tmp") -Destination (Join-Path $ClawDir "install.ps1") -Force
 }
-if (-not (Test-Path -LiteralPath (Join-Path $ClawDir "install.ps1") -PathType Leaf) -or
-    (Get-Item -LiteralPath (Join-Path $ClawDir "install.ps1")).Length -eq 0) { throw 'Local uninstaller is missing or empty' }
+if (-not (Test-Path -LiteralPath (Join-Path $ClawDir "uninstall.ps1.tmp") -PathType Leaf) -or
+    (Get-Item -LiteralPath (Join-Path $ClawDir "uninstall.ps1.tmp")).Length -eq 0) { throw 'Uninstaller is missing or empty' }
+Move-Item -LiteralPath (Join-Path $ClawDir "uninstall.ps1.tmp") -Destination (Join-Path $ClawDir "uninstall.ps1") -Force
 
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
 if ($userPath -notlike "*$BinDir*") {
@@ -694,6 +682,7 @@ foreach ($leftover in @("claude.orig.cmd", "claude.orig.exe", "claude.cmd")) {
 Get-ChildItem $BinDir -Filter "claude.*.exe" -ErrorAction SilentlyContinue |
     ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue }
 Remove-Item -Force (Join-Path $ClawDir "claude.staged.exe") -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath (Join-Path $ClawDir "install.ps1") -Force -ErrorAction SilentlyContinue
 Get-ChildItem -LiteralPath $ClawDir -Filter "claude.fallback.*.exe" -File -ErrorAction SilentlyContinue |
     ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
 

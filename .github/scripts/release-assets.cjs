@@ -24,7 +24,7 @@ function prepareInstallers(root, tag) {
 function verifyAssets(root) {
   const actual = readdirSync(join(root, 'dist')).filter(name => name.startsWith('clawgod-import-')).sort();
   if (JSON.stringify(actual) !== JSON.stringify([...imports].sort())) throw new Error('Release import assets are missing or unexpected');
-  for (const name of ['install.sh', 'install.ps1', ...imports.map(name => join('dist', name))]) {
+  for (const name of ['install.sh', 'install.ps1', 'uninstall.sh', 'uninstall.ps1', ...imports.map(name => join('dist', name))]) {
     const info = statSync(join(root, name));
     if (!info.isFile() || info.size === 0) throw new Error(`Release asset is empty or not a file: ${name}`);
   }

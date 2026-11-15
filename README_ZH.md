@@ -80,7 +80,7 @@ curl -fsSL https://raw.githubusercontent.com/7sen1ot/ClawGod_Y/main/install.sh |
 clawgod --uninstall
 ```
 
-如果 `clawgod` 无法启动，**macOS / Linux / WSL** 可运行 `bash ~/.clawgod/install.sh --uninstall`；**Windows PowerShell** 可运行 `powershell -File "$env:USERPROFILE\.clawgod\install.ps1" -Uninstall`。
+如果 `clawgod` 无法启动，**macOS / Linux / WSL** 可运行 `bash "$HOME/.clawgod/uninstall.sh"`；**Windows PowerShell** 可运行 `powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.clawgod\uninstall.ps1"`。
 
 卸载会移除 `clawgod` 启动器、主要运行时文件及独立的 `~/.clawgod/lean-settings.json`，不修改 `~/.claude/settings.json`。`provider.json`、`features.json` 等配置及部分文件会保留，`~/.clawgod` 目录不会整体删除。
 

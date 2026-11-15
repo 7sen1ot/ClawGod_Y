@@ -7,21 +7,11 @@ BIN_DIR="$HOME/.local/bin"
 VERSION="2.1.322"
 CLAWGOD_SELF_VERSION="0.0.0-dev"
 
-VERSION_SELECTED=0
-while [[ $# -gt 0 ]]; do
-  case $1 in
-    --uninstall) UNINSTALL=1; shift ;;
-    *)
-      if [[ "$VERSION_SELECTED" = 1 || ! "$1" =~ ^(latest|stable|[0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-        printf 'Invalid installer argument: %s\nUsage: bash install.sh [latest|stable|<version>] [--uninstall]\n' "$1" >&2
-        exit 2
-      fi
-      VERSION="$1"
-      VERSION_SELECTED=1
-      shift
-      ;;
-  esac
-done
+if [[ $# -gt 1 || ( $# -eq 1 && ! "$1" =~ ^(latest|stable|[0-9]+\.[0-9]+\.[0-9]+)$ ) ]]; then
+  printf 'Invalid installer arguments: %s\nUsage: bash install.sh [latest|stable|<version>]\n' "$*" >&2
+  exit 2
+fi
+if [ $# -eq 1 ]; then VERSION="$1"; fi
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -37,27 +27,6 @@ dim()   { echo -e "  ${DIM}$1${NC}"; }
 echo ""
 echo -e "${BOLD}  ClawGod_Y Installer${NC}"
 echo ""
-
-if [ "$UNINSTALL" = "1" ]; then
-  CLAUDE_BIN=$(command -v claude 2>/dev/null || true)
-  for DIR in "${CLAUDE_BIN:+$(dirname "$CLAUDE_BIN")}" "$BIN_DIR"; do
-    [ -z "$DIR" ] && continue
-    if [ -f "$DIR/clawgod" ] && grep -q "clawgod" "$DIR/clawgod" 2>/dev/null; then
-      rm -f "$DIR/clawgod"
-      info "Removed ClawGod_Y launcher ($DIR/clawgod)"
-    fi
-  done
-  rm -rf "$CLAWGOD_DIR/node_modules" "$CLAWGOD_DIR/vendor" "$CLAWGOD_DIR/bun-runtime" "$CLAWGOD_DIR/cli.original.js" "$CLAWGOD_DIR/cli.original.js.bak" "$CLAWGOD_DIR/cli.original.cjs" "$CLAWGOD_DIR/cli.original.cjs.bak" "$CLAWGOD_DIR/source-backup.json" "$CLAWGOD_DIR/cli.js" "$CLAWGOD_DIR/cli.cjs" "$CLAWGOD_DIR/patch.mjs" "$CLAWGOD_DIR/ast-patches.mjs" "$CLAWGOD_DIR/pentest-patches.mjs" "$CLAWGOD_DIR/pentest-scanners.mjs" "$CLAWGOD_DIR/pentest-trimming.mjs" "$CLAWGOD_DIR/pentest-policy-text.mjs" "$CLAWGOD_DIR/pentest-pruner.mjs" "$CLAWGOD_DIR/lean-mode.cjs" "$CLAWGOD_DIR/lean-settings.json" "$CLAWGOD_DIR/.lean-disabled" "$CLAWGOD_DIR/.lean-max" "$CLAWGOD_DIR/acorn.mjs" "$CLAWGOD_DIR/acorn.LICENSE" "$CLAWGOD_DIR/patch.js" "$CLAWGOD_DIR/extract-natives.mjs" "$CLAWGOD_DIR/post-process.mjs" "$CLAWGOD_DIR/repatch.mjs" "$CLAWGOD_DIR/startup-check.cjs" "$CLAWGOD_DIR/startup-check.log" "$CLAWGOD_DIR/openai-proxy.cjs" "$CLAWGOD_DIR/feature-gates.cjs" "$CLAWGOD_DIR/runtime-helpers.cjs" "$CLAWGOD_DIR/bun-ant-shim.cjs" "$CLAWGOD_DIR/clawgod-import" "$CLAWGOD_DIR/claude.staged" "$CLAWGOD_DIR/claude.fallback" "$CLAWGOD_DIR/.source-version"
-  rm -rf "$CLAWGOD_DIR/bunfs" "$CLAWGOD_DIR/pathmap.json"
-  rm -f "$CLAWGOD_DIR/patch-registry.mjs" "$CLAWGOD_DIR/system-prompt.md" "$CLAWGOD_DIR/probe-tools.log" "$CLAWGOD_DIR/.clawgod-version" "$CLAWGOD_DIR/compile-runtime.mjs" "$CLAWGOD_DIR/.compiled-runtime" "$CLAWGOD_DIR/.compiled-runtime-cache.json" "$CLAWGOD_DIR"/cli.compiled-*
-  hash -r 2>/dev/null
-  info "ClawGod_Y uninstalled"
-  echo ""
-  warn "  Restart your terminal or run: hash -r"
-  echo ""
-  exit 0
-fi
-
 
 if ! command -v node &>/dev/null; then
   warn "Node.js is required (>= 18) for the patcher. Install from https://nodejs.org"
@@ -181,9 +150,9 @@ PREV_BACKUP_DIR=""
 ROLLBACK_FILES=(cli.original.cjs cli.original.cjs.bak cli.original.js .source-version
   source-backup.json bunfs vendor pathmap.json extract-natives.mjs post-process.mjs
   openai-proxy.cjs feature-gates.cjs cli.cjs .clawgod-version
-  startup-check.cjs compile-runtime.mjs .compiled-runtime .compiled-runtime-cache.json runtime-helpers.cjs bun-ant-shim.cjs system-prompt.md
-  claude.fallback install.sh lean-settings.json patches.json
-  patch.mjs patch-registry.mjs ast-patches.mjs pentest-patches.mjs pentest-scanners.mjs
+  startup-check.cjs compile-runtime.mjs .compiled-runtime .compiled-runtime-cache.json runtime-helpers.cjs prompt-runtime.cjs bun-ant-shim.cjs system-prompt.md
+  claude.fallback uninstall.sh lean-settings.json patches.json
+  patch.mjs patch-rules.mjs patch-registry.mjs ast-patches.mjs ast-helpers.mjs pentest-patches.mjs pentest-scanners.mjs pentest-prompts.mjs
   pentest-trimming.mjs pentest-policy-text.mjs pentest-pruner.mjs lean-mode.cjs acorn.mjs acorn.LICENSE)
 if [ -f "$CLAWGOD_DIR/cli.original.cjs" ] && [ -f "$CLAWGOD_DIR/.source-version" ]; then
   PREV_BACKUP_DIR=$(mktemp -d "${CLAWGOD_DIR}-rollback-XXXXXX")
@@ -220,7 +189,7 @@ rollback_install() {
   trap - EXIT
   if [ "$status" -ne 0 ]; then
     rm -f "$CLAWGOD_DIR/claude.staged"
-    rm -f "$CLAWGOD_DIR/install.sh.tmp" "$BIN_DIR/clawgod.clawgod-$$.tmp"
+    rm -f "$CLAWGOD_DIR/uninstall.sh.tmp" "$BIN_DIR/clawgod.clawgod-$$.tmp"
     if [ -n "$PREV_BACKUP_DIR" ]; then
       dim "Rolling back to previous working installation ..."
       for f in "${ROLLBACK_FILES[@]}"; do rm -rf "$CLAWGOD_DIR/$f"; done
@@ -1191,14 +1160,14 @@ const { spawnSync } = require('child_process');
 const clawgodDir = join(homedir(), '.clawgod');
 if (process.argv.length === 3 && process.argv[2] === '--uninstall') {
   const windows = process.platform === 'win32';
-  const installer = join(__dirname, windows ? 'install.ps1' : 'install.sh');
-  if (!existsSync(installer)) {
-    process.stderr.write('[clawgod] Local uninstaller is missing. Rerun the installer with its uninstall option.\n');
+  const uninstaller = join(__dirname, windows ? 'uninstall.ps1' : 'uninstall.sh');
+  if (!existsSync(uninstaller)) {
+    process.stderr.write('[clawgod] Local uninstaller is missing. Download and run uninstall.ps1 (Windows) or uninstall.sh (macOS/Linux) from the ClawGod_Y release.\n');
     process.exit(1);
   }
   const result = spawnSync(windows ? 'powershell' : 'bash', windows
-    ? ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', installer, '-Uninstall']
-    : [installer, '--uninstall'], { stdio: 'inherit', env: process.env });
+    ? ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', uninstaller]
+    : [uninstaller], { stdio: 'inherit', env: process.env });
   if (result.error) process.stderr.write('[clawgod] Uninstall failed: ' + result.error.message + '\n');
   process.exit(Number.isInteger(result.status) ? result.status : 1);
 }
@@ -1479,7 +1448,7 @@ import { accessSync, constants, createReadStream, existsSync, lstatSync, readFil
 import { createHash } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { applyAstEdits, parsePatchSource, releasePatchSource, walk } from './ast-patches.mjs';
+import { applyAstEdits, parsePatchSource, releasePatchSource, walk } from './ast-helpers.mjs';
 import { tokenizer } from './acorn.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -1774,6 +1743,82 @@ function flagOverride(flag) {
   if (typeof flag !== 'string') return NO_OVERRIDE;
   return flag in FLAG_OVERRIDES ? FLAG_OVERRIDES[flag] : NO_OVERRIDE;
 }
+
+const {
+  rewritePromptAssembly, cleanPromptIdentity, prepareIdentityTemplate, cleanSummaryContent, cleanSummaryMessages,
+  brandApplicationText, brandApplicationPattern, matchesApplicationText,
+  filterDefaultPromptSections, refreshPromptSnapshot, finalizeSystemRequest, validateExtraBody,
+} = require('./prompt-runtime.cjs');
+
+const DEFAULT_PROVIDER_CONFIG = {
+  protocol: 'anthropic',
+  apiKey: '',
+  baseURL: 'https://api.anthropic.com',
+  model: '',
+  smallModel: '',
+  effort: '',
+  timeoutMs: 3000000,
+};
+
+function resolveProviderConfig(raw) {
+  const config = raw && typeof raw === 'object' ? raw : {};
+  const protocol = config.protocol;
+  if (protocol !== undefined && !['anthropic', 'openai-chat'].includes(protocol)) {
+    throw new Error('[clawgod] Unsupported provider protocol: ' + protocol + '. Use anthropic or openai-chat; auto and Responses are not supported.');
+  }
+  const type = config.type;
+  const useProxy = protocol === 'openai-chat' ||
+    (protocol === undefined && ['grok', 'openai-compat'].includes(type));
+  return {
+    ...Object.fromEntries(Object.entries(DEFAULT_PROVIDER_CONFIG).map(([key, fallback]) =>
+      [key, typeof config[key] === typeof fallback ? config[key] : fallback])),
+    protocol: protocol || undefined,
+    type: type || undefined,
+    useProxy,
+  };
+}
+
+async function probeToolTables() {
+  try {
+    const tables = globalThis.__clawgodTables;
+    const counts = {};
+    for (const kind of ['tools', 'commands']) {
+      const factories = tables?.[kind];
+      if (!Array.isArray(factories) || factories.length === 0) throw new Error(`${kind} factories not exposed`);
+      counts[kind] = 0;
+      for (const [index, factory] of factories.entries()) {
+        if (typeof factory !== 'function') throw new Error(`${kind} factory ${index} is not callable`);
+        const entries = await factory();
+        if (!Array.isArray(entries) || entries.length === 0) throw new Error(`${kind} factory ${index} returned an empty or invalid table`);
+        for (let i = 0; i < entries.length; i++) {
+          if (entries[i] == null || typeof entries[i].name !== 'string' || !entries[i].name) {
+            throw new Error(`${kind} factory ${index}, index ${i}: missing descriptor or name`);
+          }
+        }
+        counts[kind] += entries.length;
+      }
+    }
+    process.stderr.write('[clawgod] probe-tools ok: ' + counts.tools + ' tools, ' + counts.commands + ' commands\n');
+    return 0;
+  } catch (error) {
+    process.stderr.write('[clawgod] probe-tools error: ' + (error?.message ?? error) + '\n');
+    return 1;
+  }
+}
+
+module.exports = {
+  classifierTimeoutFloor, terminalReplyDelay, enablePredicate, sessionPath, instructionFileFilter,
+  NO_OVERRIDE, flagOverride, flagOverrides: FLAG_OVERRIDES,
+  rewritePromptAssembly, selectApplicationPrompt: rewritePromptAssembly,
+  cleanPromptIdentity, prepareIdentityTemplate, cleanSummaryContent, cleanSummaryMessages,
+  brandApplicationText, brandApplicationPattern, matchesApplicationText,
+  filterDefaultPromptSections, refreshPromptSnapshot, finalizeSystemRequest, validateExtraBody,
+  defaultProviderConfig: DEFAULT_PROVIDER_CONFIG, resolveProviderConfig, probeToolTables,
+};
+globalThis.__clawgodHelpers = module.exports;
+CFG_EOF
+cat > "$CLAWGOD_DIR/prompt-runtime.cjs" << 'PROMPT_RUNTIME_EOF'
+'use strict';
 
 const CUSTOM_PROMPT_MARK = 'clawgod:custom-prompt';
 const IDENTITY_POLICY_VERSION = 10;
@@ -2195,73 +2240,13 @@ function validateExtraBody(body) {
   return body;
 }
 
-const DEFAULT_PROVIDER_CONFIG = {
-  protocol: 'anthropic',
-  apiKey: '',
-  baseURL: 'https://api.anthropic.com',
-  model: '',
-  smallModel: '',
-  effort: '',
-  timeoutMs: 3000000,
-};
-
-function resolveProviderConfig(raw) {
-  const config = raw && typeof raw === 'object' ? raw : {};
-  const protocol = config.protocol;
-  if (protocol !== undefined && !['anthropic', 'openai-chat'].includes(protocol)) {
-    throw new Error('[clawgod] Unsupported provider protocol: ' + protocol + '. Use anthropic or openai-chat; auto and Responses are not supported.');
-  }
-  const type = config.type;
-  const useProxy = protocol === 'openai-chat' ||
-    (protocol === undefined && ['grok', 'openai-compat'].includes(type));
-  return {
-    ...Object.fromEntries(Object.entries(DEFAULT_PROVIDER_CONFIG).map(([key, fallback]) =>
-      [key, typeof config[key] === typeof fallback ? config[key] : fallback])),
-    protocol: protocol || undefined,
-    type: type || undefined,
-    useProxy,
-  };
-}
-
-async function probeToolTables() {
-  try {
-    const tables = globalThis.__clawgodTables;
-    const counts = {};
-    for (const kind of ['tools', 'commands']) {
-      const factories = tables?.[kind];
-      if (!Array.isArray(factories) || factories.length === 0) throw new Error(`${kind} factories not exposed`);
-      counts[kind] = 0;
-      for (const [index, factory] of factories.entries()) {
-        if (typeof factory !== 'function') throw new Error(`${kind} factory ${index} is not callable`);
-        const entries = await factory();
-        if (!Array.isArray(entries) || entries.length === 0) throw new Error(`${kind} factory ${index} returned an empty or invalid table`);
-        for (let i = 0; i < entries.length; i++) {
-          if (entries[i] == null || typeof entries[i].name !== 'string' || !entries[i].name) {
-            throw new Error(`${kind} factory ${index}, index ${i}: missing descriptor or name`);
-          }
-        }
-        counts[kind] += entries.length;
-      }
-    }
-    process.stderr.write('[clawgod] probe-tools ok: ' + counts.tools + ' tools, ' + counts.commands + ' commands\n');
-    return 0;
-  } catch (error) {
-    process.stderr.write('[clawgod] probe-tools error: ' + (error?.message ?? error) + '\n');
-    return 1;
-  }
-}
-
 module.exports = {
-  classifierTimeoutFloor, terminalReplyDelay, enablePredicate, sessionPath, instructionFileFilter,
-  NO_OVERRIDE, flagOverride, flagOverrides: FLAG_OVERRIDES,
   rewritePromptAssembly, selectApplicationPrompt: rewritePromptAssembly,
   cleanPromptIdentity, prepareIdentityTemplate, cleanSummaryContent, cleanSummaryMessages,
   brandApplicationText, brandApplicationPattern, matchesApplicationText,
   filterDefaultPromptSections, refreshPromptSnapshot, finalizeSystemRequest, validateExtraBody,
-  defaultProviderConfig: DEFAULT_PROVIDER_CONFIG, resolveProviderConfig, probeToolTables,
 };
-globalThis.__clawgodHelpers = module.exports;
-CFG_EOF
+PROMPT_RUNTIME_EOF
 info "Classifier runtime helpers created (runtime-helpers.cjs)"
 
 cat > "$CLAWGOD_DIR/bun-ant-shim.cjs" << 'BUNANT_EOF'
@@ -8961,28 +8946,9 @@ fi
 
 info "cli.original.cjs ready ($NATIVE_BIN_LABEL)"
 
-cat > "$CLAWGOD_DIR/ast-patches.mjs" << 'AST_PATCHES_EOF'
+cat > "$CLAWGOD_DIR/ast-helpers.mjs" << 'AST_HELPERS_EOF'
 import { parse } from './acorn.mjs';
 
-export const AST_PATCH_IDS = [
-  'user-type-ant', 'bun-standalone-executable', 'growthbook-env-overrides-graph', 'growthbook-config-overrides-graph',
-  'computer-use-default', 'ultraplan', 'voice-mode',
-  'geo-stego-date', 'remote-settings-off', 'wiggly-dove',
-  'agent-teams-graph',
-  'computer-use-gate-semantic', 'ultrareview-command',
-  'tool-result-pairing-recovery',
-  'session-project-paths', 'session-history-paths', 'session-state-paths', 'instruction-files-off', 'agents-md-off',
-];
-
-const anchors = ['external', 'isStandaloneExecutable', 'environmentOverridesParsed',
-  'pixelValidation', 'ultraplan', 'tengu_amber_quartz_disabled', 's date is ', 'getEnvironmentOverrides',
-  'Remote settings:', 'remote-settings.json', 'tengu_wiggly_dove', 'tengu_amber_flint',
-  'isEnabled', 'enabled', 'ultrareview', 'amber_flint', 'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS',
-  '[Tool result missing due to internal error]',
-  'projects', 'history.jsonl', 'sessions', 'tasks', 'todos', 'teams', 'plans',
-  'file-history', 'session-env', 'shell-snapshots', 'debug',
-  'instructionFiles', 'claudeMdExcludes', 'sessionPath'];
-const gate = id => `globalThis.__clawgodPatches?.[${JSON.stringify(id)}]!==!1`;
 function staticText(node, budget = 32) {
   if (!node || budget <= 0) return;
   if (node.type === 'Literal') return typeof node.value === 'string' ? node.value : undefined;
@@ -9008,16 +8974,12 @@ const propertyName = node => node.computed
   : (node.key?.name ?? node.key?.value);
 const member = (node, name) => node?.type === 'MemberExpression' &&
   (node.computed ? literal(node.property, name) : node.property.name === name);
-const thisMember = (node, name) => member(node, name) && node.object.type === 'ThisExpression';
 const boolean = (node, value, budget = 32) => budget > 0 && (literal(node, value) ||
   (node?.type === 'UnaryExpression' && node.operator === '!' &&
     (node.argument.type === 'Literal' ? !node.argument.value === value : boolean(node.argument, !value, budget - 1))));
 const firstPromptText = node => staticText(node) ?? (node?.type === 'BinaryExpression' && node.operator === '+'
   ? firstPromptText(node.left) || firstPromptText(node.right)
   : node?.type === 'TemplateLiteral' ? node.quasis[0].value.cooked : undefined);
-
-const isUndefined = node => node?.type === 'UnaryExpression' && node.operator === 'void' &&
-  literal(node.argument, 0);
 
 const functionNode = node => ['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node?.type);
 const declaredNames = node => !node ? [] : node.type === 'Identifier' ? [node.name]
@@ -9176,7 +9138,7 @@ export function containsOwn(root, predicate) {
   return found;
 }
 
-function walkScope(root, visit) {
+export function walkScope(root, visit) {
   walk(root, node => {
     visit(node);
     if (functionNode(node)) return false;
@@ -9190,70 +9152,6 @@ export function ownReturns(body) {
   });
   return returns;
 }
-
-function pairingScopeResolver(tree, sentinel) {
-  const scopes = new WeakMap(), writes = [];
-  const declare = (scope, pattern, value) => {
-    for (const name of declaredNames(pattern)) {
-      if (!scope.bindings.has(name)) scope.bindings.set(name, []);
-      if (value !== null) scope.bindings.get(name).push(value);
-    }
-  };
-  const resolve = (scope, name) => {
-    for (; scope; scope = scope.parent) {
-      if (scope.bindings.has(name)) return scope.bindings.get(name);
-    }
-  };
-  const pending = [{ node: tree, scope: null }];
-  while (pending.length) {
-    let { node, scope } = pending.pop();
-    const fn = functionNode(node);
-    const cls = node.type === 'ClassDeclaration' || node.type === 'ClassExpression';
-    if (node.type === 'FunctionDeclaration' || node.type === 'ClassDeclaration') declare(scope, node.id);
-    if (fn || cls || ['Program', 'BlockStatement', 'StaticBlock', 'CatchClause', 'ForStatement', 'ForInStatement', 'ForOfStatement', 'SwitchStatement'].includes(node.type)) {
-      scope = { parent: scope, bindings: new Map(), vars: scope?.vars };
-      if (fn || node.type === 'Program' || node.type === 'StaticBlock') scope.vars = scope;
-      scopes.set(node, scope);
-    }
-    if (fn) {
-      if (node.id) declare(scope, node.id);
-      for (const param of node.params) declare(scope, param);
-    }
-    if (cls && node.id) declare(scope, node.id);
-    if (node.type === 'CatchClause') declare(scope, node.param);
-    if (node.type === 'ImportDeclaration') for (const specifier of node.specifiers) declare(scope, specifier.local);
-    if (node.type === 'VariableDeclaration') {
-      for (const declaration of node.declarations) {
-        const value = declaration.id.type === 'Identifier' ? declaration.init : undefined;
-        declare(node.kind === 'var' ? scope.vars : scope, declaration.id, value);
-      }
-    }
-    if (node.type === 'AssignmentExpression' || node.type === 'UpdateExpression') {
-      writes.push({ scope, pattern: node.left ?? node.argument,
-        value: node.operator === '=' && node.left.type === 'Identifier' ? node.right : undefined });
-    }
-    if (node.type === 'ForInStatement' || node.type === 'ForOfStatement') {
-      const patterns = node.left.type === 'VariableDeclaration' ? node.left.declarations.map(d => d.id) : [node.left];
-      for (const pattern of patterns) writes.push({ scope, pattern, value: undefined });
-    }
-    for (const value of Object.values(node)) {
-      if (value?.type) pending.push({ node: value, scope });
-      else if (Array.isArray(value)) for (const child of value) if (child?.type) pending.push({ node: child, scope });
-    }
-  }
-  for (const { scope, pattern, value } of writes) {
-    for (const name of declaredNames(pattern)) resolve(scope, name)?.push(value);
-  }
-  return (expr, callback, owner) => {
-    const history = owner.params[0].name;
-    if (resolve(scopes.get(callback).parent, history) !== scopes.get(owner).bindings.get(history)) return false;
-    if (literal(expr, sentinel)) return true;
-    if (expr?.type !== 'Identifier') return false;
-    const values = resolve(scopes.get(callback.body) ?? scopes.get(callback), expr.name);
-    return !!values?.length && values.every(value => literal(value, sentinel));
-  };
-}
-
 
 function patchScope(tree, loadImport) {
   // Different import resolvers need separate binding identities for cycle detection.
@@ -9455,6 +9353,124 @@ export function createPatchContext(tree, code, loadImport = noImports) {
   };
   return context;
 }
+
+export function applyAstEdits(code, edits) {
+  if (!edits.length) return code;
+  const sorted = [...edits].sort((a, b) => a.start - b.start || a.end - b.end);
+  const parts = [];
+  let cursor = 0;
+  let prev;
+  for (const edit of sorted) {
+    if (edit.start < cursor) {
+      const snippet = (e) => JSON.stringify(code.slice(e.start, Math.min(e.end, e.start + 60)));
+      const repl = (e) => JSON.stringify((e.replacement ?? '').slice(0, 60));
+      throw new Error(
+        `Overlapping AST patch edits: previous [${prev.start},${prev.end}) ${snippet(prev)} → ${repl(prev)}; ` +
+        `current [${edit.start},${edit.end}) ${snippet(edit)} → ${repl(edit)}`);
+    }
+    const padding = code[edit.start - 1] === '/' && edit.replacement.startsWith('/*') ? ' ' : '';
+    parts.push(code.slice(cursor, edit.start), padding, edit.replacement);
+    cursor = edit.end;
+    prev = edit;
+  }
+  parts.push(code.slice(cursor));
+  return parts.join('');
+}
+AST_HELPERS_EOF
+cat > "$CLAWGOD_DIR/ast-patches.mjs" << 'AST_PATCHES_EOF'
+import {
+  AST_HELPERS, contains, containsOwn, createPatchCandidateFilter, createPatchContext,
+  hasPatchAnchors, ownReturns, parsePatchSource, walk, walkScope,
+} from './ast-helpers.mjs';
+export * from './ast-helpers.mjs';
+
+const { literal, propertyName, member, boolean, staticText, functionNode, declaredNames } = AST_HELPERS;
+const thisMember = (node, name) => member(node, name) && node.object.type === 'ThisExpression';
+const isUndefined = node => node?.type === 'UnaryExpression' && node.operator === 'void' &&
+  literal(node.argument, 0);
+
+export const AST_PATCH_IDS = [
+  'user-type-ant', 'bun-standalone-executable', 'growthbook-env-overrides-graph', 'growthbook-config-overrides-graph',
+  'computer-use-default', 'ultraplan', 'voice-mode',
+  'geo-stego-date', 'remote-settings-off', 'wiggly-dove',
+  'agent-teams-graph',
+  'computer-use-gate-semantic', 'ultrareview-command',
+  'tool-result-pairing-recovery',
+  'session-project-paths', 'session-history-paths', 'session-state-paths', 'instruction-files-off', 'agents-md-off',
+];
+
+const anchors = ['external', 'isStandaloneExecutable', 'environmentOverridesParsed',
+  'pixelValidation', 'ultraplan', 'tengu_amber_quartz_disabled', 's date is ', 'getEnvironmentOverrides',
+  'Remote settings:', 'remote-settings.json', 'tengu_wiggly_dove', 'tengu_amber_flint',
+  'isEnabled', 'enabled', 'ultrareview', 'amber_flint', 'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS',
+  '[Tool result missing due to internal error]',
+  'projects', 'history.jsonl', 'sessions', 'tasks', 'todos', 'teams', 'plans',
+  'file-history', 'session-env', 'shell-snapshots', 'debug',
+  'instructionFiles', 'claudeMdExcludes', 'sessionPath'];
+const gate = id => `globalThis.__clawgodPatches?.[${JSON.stringify(id)}]!==!1`;
+function pairingScopeResolver(tree, sentinel) {
+  const scopes = new WeakMap(), writes = [];
+  const declare = (scope, pattern, value) => {
+    for (const name of declaredNames(pattern)) {
+      if (!scope.bindings.has(name)) scope.bindings.set(name, []);
+      if (value !== null) scope.bindings.get(name).push(value);
+    }
+  };
+  const resolve = (scope, name) => {
+    for (; scope; scope = scope.parent) {
+      if (scope.bindings.has(name)) return scope.bindings.get(name);
+    }
+  };
+  const pending = [{ node: tree, scope: null }];
+  while (pending.length) {
+    let { node, scope } = pending.pop();
+    const fn = functionNode(node);
+    const cls = node.type === 'ClassDeclaration' || node.type === 'ClassExpression';
+    if (node.type === 'FunctionDeclaration' || node.type === 'ClassDeclaration') declare(scope, node.id);
+    if (fn || cls || ['Program', 'BlockStatement', 'StaticBlock', 'CatchClause', 'ForStatement', 'ForInStatement', 'ForOfStatement', 'SwitchStatement'].includes(node.type)) {
+      scope = { parent: scope, bindings: new Map(), vars: scope?.vars };
+      if (fn || node.type === 'Program' || node.type === 'StaticBlock') scope.vars = scope;
+      scopes.set(node, scope);
+    }
+    if (fn) {
+      if (node.id) declare(scope, node.id);
+      for (const param of node.params) declare(scope, param);
+    }
+    if (cls && node.id) declare(scope, node.id);
+    if (node.type === 'CatchClause') declare(scope, node.param);
+    if (node.type === 'ImportDeclaration') for (const specifier of node.specifiers) declare(scope, specifier.local);
+    if (node.type === 'VariableDeclaration') {
+      for (const declaration of node.declarations) {
+        const value = declaration.id.type === 'Identifier' ? declaration.init : undefined;
+        declare(node.kind === 'var' ? scope.vars : scope, declaration.id, value);
+      }
+    }
+    if (node.type === 'AssignmentExpression' || node.type === 'UpdateExpression') {
+      writes.push({ scope, pattern: node.left ?? node.argument,
+        value: node.operator === '=' && node.left.type === 'Identifier' ? node.right : undefined });
+    }
+    if (node.type === 'ForInStatement' || node.type === 'ForOfStatement') {
+      const patterns = node.left.type === 'VariableDeclaration' ? node.left.declarations.map(d => d.id) : [node.left];
+      for (const pattern of patterns) writes.push({ scope, pattern, value: undefined });
+    }
+    for (const value of Object.values(node)) {
+      if (value?.type) pending.push({ node: value, scope });
+      else if (Array.isArray(value)) for (const child of value) if (child?.type) pending.push({ node: child, scope });
+    }
+  }
+  for (const { scope, pattern, value } of writes) {
+    for (const name of declaredNames(pattern)) resolve(scope, name)?.push(value);
+  }
+  return (expr, callback, owner) => {
+    const history = owner.params[0].name;
+    if (resolve(scopes.get(callback).parent, history) !== scopes.get(owner).bindings.get(history)) return false;
+    if (literal(expr, sentinel)) return true;
+    if (expr?.type !== 'Identifier') return false;
+    const values = resolve(scopes.get(callback.body) ?? scopes.get(callback), expr.name);
+    return !!values?.length && values.every(value => literal(value, sentinel));
+  };
+}
+
 
 function hasGate(node, id) {
   return contains(node, child =>
@@ -9955,38 +9971,17 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
   }
   return results;
 }
-
-export function applyAstEdits(code, edits) {
-  if (!edits.length) return code;
-  const sorted = [...edits].sort((a, b) => a.start - b.start || a.end - b.end);
-  const parts = [];
-  let cursor = 0;
-  let prev;
-  for (const edit of sorted) {
-    if (edit.start < cursor) {
-      const snippet = (e) => JSON.stringify(code.slice(e.start, Math.min(e.end, e.start + 60)));
-      const repl = (e) => JSON.stringify((e.replacement ?? '').slice(0, 60));
-      throw new Error(
-        `Overlapping AST patch edits: previous [${prev.start},${prev.end}) ${snippet(prev)} → ${repl(prev)}; ` +
-        `current [${edit.start},${edit.end}) ${snippet(edit)} → ${repl(edit)}`);
-    }
-    const padding = code[edit.start - 1] === '/' && edit.replacement.startsWith('/*') ? ' ' : '';
-    parts.push(code.slice(cursor, edit.start), padding, edit.replacement);
-    cursor = edit.end;
-    prev = edit;
-  }
-  parts.push(code.slice(cursor));
-  return parts.join('');
-}
 AST_PATCHES_EOF
 cat > "$CLAWGOD_DIR/pentest-patches.mjs" << 'PENTEST_PATCHES_EOF'
 import {
-  PENTEST_AST_PATCH_IDS,
-  scanPermissionBypasses, scanCombinerWrap, scanPromptAuthority, scanPromptTextErase, scanApplicationBranding,
-  scanWarningSuppression, scanRuntimeGates, scanPromptSnapshot, scanPromptRequest, scanPromptRuntime,
+  PENTEST_AST_PATCH_IDS, scanPermissionBypasses, scanWarningSuppression, scanRuntimeGates,
 } from './pentest-scanners.mjs';
+import {
+  scanCombinerWrap, scanPromptAuthority, scanPromptTextErase, scanApplicationBranding,
+  scanPromptSnapshot, scanPromptRequest, scanPromptRuntime,
+} from './pentest-prompts.mjs';
 import { REMOVE_COMMANDS, REMOVE_CLOUD_COMMANDS, scanRuntimeTrimming } from './pentest-trimming.mjs';
-import { createPatchCandidateFilter, createPatchContext, hasPatchAnchors, parsePatchSource } from './ast-patches.mjs';
+import { createPatchCandidateFilter, createPatchContext, hasPatchAnchors, parsePatchSource } from './ast-helpers.mjs';
 import {
   removedPromptPrefixes, denialGuidancePrefixes, injectionWarning,
   removalGuidance, unavailableReviewWarning, reportWarningReference, runtimeSafetyPromptRewrites, runtimeCyberPolicyTopic,
@@ -10145,13 +10140,7 @@ export function scanPentestPatches(code, upstreamRanges = [], readTree = () => p
 PENTEST_PATCHES_EOF
 
 cat > "$CLAWGOD_DIR/pentest-scanners.mjs" << 'PENTEST_SCANNERS_EOF'
-import { AST_HELPERS, contains, containsOwn, createPatchCandidateFilter, createPatchContext, ownReturns, walk } from './ast-patches.mjs';
-import { brandApplicationText, brandApplicationPattern } from './runtime-helpers.cjs';
-import {
-  removedPromptPrefixes, denialGuidancePrefixes, removalGuidance,
-  injectionWarning, unavailableReviewWarning, reportWarningReference, runtimeSafetyPromptRewrites,
-  runtimeCyberPolicyTopic, cleanRuntimeCyberPolicy,
-} from './pentest-policy-text.mjs';
+import { AST_HELPERS, contains, containsOwn, createPatchCandidateFilter, walk } from './ast-helpers.mjs';
 
 const RUNTIME_GATE_FORCINGS = [
   { flag: 'tengu_attempt_decision_shadow', to: '!1' },
@@ -10219,23 +10208,6 @@ const permissionAnchors = [
   'tengu_mcp_server_policy_bypass_exempt', 'toolDecisions', 'decisionReason',
   'bypassPermissions', 'acceptEdits', 'default', 'plan', 'clawgod:permission-',
 ];
-const assemblyAnchors = ['rewritePromptAssembly', 'customSystemPrompt', 'indexOf'];
-const authorityAnchors = [
-  'selectApplicationPrompt', 'filterDefaultPromptSections', 'CLAUDE_CODE_EXTRA_BODY',
-  'customSystemPrompt', 'intro', 'isArray', 'scope', 'latestModels', 'latest_per_family', 'clawgod:pentest-prompt-',
-];
-const snapshotAnchors = ['from_snapshot', 'refreshPromptSnapshot'];
-const requestAnchors = ['/v1/messages', 'finalizeSystemRequest'];
-const prefixAnchors = ['skipGlobalCacheForSystemPrompt', 'cleanSummaryMessages', 'isCompactSummary', 'shapeInheritedFields'];
-const textAnchors = [
-  ...removedPromptPrefixes, ...denialGuidancePrefixes, removalGuidance,
-  injectionWarning, unavailableReviewWarning, reportWarningReference,
-  ...runtimeSafetyPromptRewrites.map(([anchor]) => anchor),
-  runtimeCyberPolicyTopic,
-  ' ONLY for read-only operations (',
-  "SECURITY WARNING: This subagent's ", 'IMPORTANT: The text inside the <',
-  'warning', 'web-reading specialist', 'bold',
-];
 const warningAnchors = ['unknownModelWindowWarning', 'securityWarnings', 'model-unrecognized', 'clawgod:security-warnings-off'];
 const runtimeGateAnchors = ['tengu_', 'maxTurns', 'flagOverride', 'clawgod:pentest-runtime-gates'];
 
@@ -10248,18 +10220,11 @@ const claimedRanges = (results, upstreamRanges, except = new Set()) => {
   return ranges;
 };
 
-const { literal, propertyName, member, boolean, staticText, firstPromptText, functionNode } = AST_HELPERS;
+const { literal, propertyName, member, boolean, staticText, functionNode } = AST_HELPERS;
 
 const ident = (node, name) => node?.type === 'Identifier' && node.name === name;
 const userIdCall = node => node.type === 'CallExpression' && node.callee.type === 'MemberExpression' &&
   ['getuid', 'geteuid'].includes(node.callee.property?.name ?? node.callee.property?.value);
-const helperCall = (node, name) => node?.type === 'CallExpression' &&
-  member(node.callee, name) && member(node.callee.object, '__clawgodHelpers') &&
-  ident(node.callee.object.object, 'globalThis') && node.arguments.length === 2 &&
-  member(node.arguments[1], '__clawgodAssembly') && ident(node.arguments[1].object, 'globalThis');
-const erasedPromptPrefixes = [...denialGuidancePrefixes, ...removedPromptPrefixes];
-const returnedPromptPrefixes = [removalGuidance, ...removedPromptPrefixes];
-
 const staticTextOf = node => {
   if (node?.type === 'Literal' && typeof node.value === 'string') return node.value;
   if (node?.type === 'TemplateLiteral') return node.quasis.map(q => q.value.cooked ?? '').join('${}');
@@ -10793,6 +10758,154 @@ function scanPermissionBypasses(tree, code, results, edit, upstreamRanges = [],
   return ranges;
 }
 
+
+function scanWarningSuppression(tree, code, results, edit, isCandidate = createPatchCandidateFilter(tree, code)) {
+  if (!isCandidate(warningAnchors)) return;
+  const id = 'security-warnings-off';
+  const marker = `/*clawgod:${id}*/`;
+  if (code.includes(marker)) { results[id].patched = true; return; }
+  const keyOf = property => property.key?.type === 'Identifier' ? property.key.name
+    : property.key?.type === 'Literal' ? property.key.value : undefined;
+  walk(tree, (node, parent) => {
+    if (node.type === 'Property' && !node.computed) {
+      const key = keyOf(node);
+      if (key === 'unknownModelWindowWarning' && !(node.value.type === 'Literal' && node.value.value === null)) {
+        results[id].present = true;
+        edit(id, node.value, `${marker}null`);
+        return false;
+      }
+      if (key === 'securityWarnings' &&
+          !(node.value.type === 'ArrayExpression' && node.value.elements.length === 0)) {
+        results[id].present = true;
+        edit(id, node.value, `${marker}[]`);
+        return false;
+      }
+      return;
+    }
+    if (node.type === 'ObjectExpression') {
+      const idProp = node.properties.find(p => p.type === 'Property' && keyOf(p) === 'id');
+      if (idProp && literal(idProp.value, 'model-unrecognized') &&
+          node.properties.some(p => p.type === 'Property' && keyOf(p) === 'render')) {
+        results[id].present = true;
+        const replacement = parent?.type === 'ArrayExpression' ? `...[]${marker}`
+          : `{id:"model-unrecognized",tier:"warning",type:"warning",isActive:()=>!1,render:()=>null}${marker}`;
+        edit(id, node, replacement);
+        return false;
+      }
+    }
+  });
+}
+
+
+function scanRuntimeGates(tree, code, results, edit, upstreamRanges = [],
+    isCandidate = createPatchCandidateFilter(tree, code)) {
+  if (!isCandidate(runtimeGateAnchors)) return;
+  const id = 'pentest-runtime-gates';
+  const marker = `/*clawgod:${id}*/`;
+  const genericId = 'pentest-flags-generic';
+  const genericMarker = `/*clawgod:${genericId}*/`;
+  if (code.includes(marker)) { results[id].patched = true; return; }
+  const blocked = claimedRanges(results, upstreamRanges, new Set([id, genericId]));
+  const overlaps = node => blocked.some(([start, end]) => node.start < end && node.end > start);
+  const isStaticValue = expr => !expr || expr.type === 'Literal' ||
+    (expr.type === 'TemplateLiteral' && expr.expressions.length === 0) ||
+    (expr.type === 'UnaryExpression' && ['!', 'void', '-'].includes(expr.operator) && isStaticValue(expr.argument)) ||
+    (expr.type === 'ObjectExpression' && expr.properties.every(property =>
+      property.type === 'Property' && !property.computed && isStaticValue(property.value))) ||
+    (expr.type === 'ArrayExpression' && expr.elements.every(element => !element || isStaticValue(element)));
+  walk(tree, (node, parent) => {
+    if (node.type === 'CallExpression' && node.callee.type === 'ArrowFunctionExpression' &&
+        node.arguments.length === 2 && member(node.arguments[0], '__clawgodHelpers') &&
+        node.arguments[0].object.name === 'globalThis' &&
+        contains(node.callee.body, child => member(child, 'NO_OVERRIDE')) &&
+        contains(node.arguments[1], child => child.type === 'CallExpression' &&
+          member(child.callee, 'flagOverride') && member(child.callee.object, '__clawgodHelpers') &&
+          child.callee.object.object.name === 'globalThis')) {
+      results[genericId].patched = true;
+      return false;
+    }
+    if (node.type === 'CallExpression' && node.callee.type === 'Identifier' &&
+        node.arguments.length >= 1) {
+      const flag = staticText(node.arguments[0]);
+      if (flag) {
+        for (const forcing of RUNTIME_GATE_FORCINGS) {
+          if (flag !== forcing.flag) continue;
+          results[id].present = true;
+          edit(id, node, `${marker}${forcing.to}`);
+          return false;
+        }
+        if (flag.startsWith('tengu_') && !overlaps(node) && node.arguments.length <= 2 &&
+            isStaticValue(node.arguments[1]) &&
+            !contains(node, child => child.type === 'AwaitExpression' || child.type === 'YieldExpression' ||
+              (child.type === 'Identifier' && child.name === 'arguments')) &&
+            !contains(node, child => child.type === 'Literal' && typeof child.value === 'string' &&
+              child.value.includes(genericMarker))) {
+          results[genericId].present = true;
+          const original = code.slice(node.start, node.end);
+          edit(genericId, node,
+            `${genericMarker}((_h,_r)=>_h&&_r!==_h.NO_OVERRIDE?_r:(${original}))` +
+            `(globalThis.__clawgodHelpers,globalThis.__clawgodHelpers?.flagOverride(${JSON.stringify(flag)}))`);
+          return false;
+        }
+      }
+    }
+    if (node.type === 'Property' && propertyName(node) === 'maxTurns' &&
+        node.value.type === 'Literal' && typeof node.value.value === 'number' &&
+        parent?.type === 'ObjectExpression') {
+      const src = code.slice(node.start, node.end);
+      const ownerSrc = code.slice(parent.start, parent.end);
+      for (const lift of MAXTURNS_LIFTS) {
+        if (src !== lift.prop || !ownerSrc.includes(lift.marker)) continue;
+        results[id].present = true;
+        edit(id, node, `${marker}${lift.to}`);
+        return false;
+      }
+    }
+  });
+}
+
+export {
+  PENTEST_AST_PATCH_IDS, PENTEST_AST_META,
+  claimedRanges, ident, staticTextOf, longContentReturn,
+  scanPermissionBypasses, scanWarningSuppression, scanRuntimeGates,
+};
+PENTEST_SCANNERS_EOF
+cat > "$CLAWGOD_DIR/pentest-prompts.mjs" << 'PENTEST_PROMPTS_EOF'
+import { AST_HELPERS, contains, containsOwn, createPatchCandidateFilter, createPatchContext, ownReturns, walk } from './ast-helpers.mjs';
+import { brandApplicationText, brandApplicationPattern } from './runtime-helpers.cjs';
+import {
+  removedPromptPrefixes, denialGuidancePrefixes, removalGuidance,
+  injectionWarning, unavailableReviewWarning, reportWarningReference, runtimeSafetyPromptRewrites,
+  runtimeCyberPolicyTopic, cleanRuntimeCyberPolicy,
+} from './pentest-policy-text.mjs';
+
+import { claimedRanges, ident, staticTextOf } from './pentest-scanners.mjs';
+
+const { literal, propertyName, member, boolean, staticText, firstPromptText, functionNode } = AST_HELPERS;
+
+const assemblyAnchors = ['rewritePromptAssembly', 'customSystemPrompt', 'indexOf'];
+const authorityAnchors = [
+  'selectApplicationPrompt', 'filterDefaultPromptSections', 'CLAUDE_CODE_EXTRA_BODY',
+  'customSystemPrompt', 'intro', 'isArray', 'scope', 'latestModels', 'latest_per_family', 'clawgod:pentest-prompt-',
+];
+const snapshotAnchors = ['from_snapshot', 'refreshPromptSnapshot'];
+const requestAnchors = ['/v1/messages', 'finalizeSystemRequest'];
+const prefixAnchors = ['skipGlobalCacheForSystemPrompt', 'cleanSummaryMessages', 'isCompactSummary', 'shapeInheritedFields'];
+const textAnchors = [
+  ...removedPromptPrefixes, ...denialGuidancePrefixes, removalGuidance,
+  injectionWarning, unavailableReviewWarning, reportWarningReference,
+  ...runtimeSafetyPromptRewrites.map(([anchor]) => anchor),
+  runtimeCyberPolicyTopic,
+  ' ONLY for read-only operations (',
+  "SECURITY WARNING: This subagent's ", 'IMPORTANT: The text inside the <',
+  'warning', 'web-reading specialist', 'bold',
+];
+const helperCall = (node, name) => node?.type === 'CallExpression' &&
+  member(node.callee, name) && member(node.callee.object, '__clawgodHelpers') &&
+  ident(node.callee.object.object, 'globalThis') && node.arguments.length === 2 &&
+  member(node.arguments[1], '__clawgodAssembly') && ident(node.arguments[1].object, 'globalThis');
+const erasedPromptPrefixes = [...denialGuidancePrefixes, ...removedPromptPrefixes];
+const returnedPromptPrefixes = [removalGuidance, ...removedPromptPrefixes];
 
 function scanCombinerWrap(tree, code, results, edit, isCandidate = createPatchCandidateFilter(tree, code)) {
   if (!isCandidate(assemblyAnchors)) return;
@@ -11629,121 +11742,13 @@ function scanApplicationBranding(tree, code, results, edit, upstreamRanges = [])
   });
 }
 
-function scanWarningSuppression(tree, code, results, edit, isCandidate = createPatchCandidateFilter(tree, code)) {
-  if (!isCandidate(warningAnchors)) return;
-  const id = 'security-warnings-off';
-  const marker = `/*clawgod:${id}*/`;
-  if (code.includes(marker)) { results[id].patched = true; return; }
-  const keyOf = property => property.key?.type === 'Identifier' ? property.key.name
-    : property.key?.type === 'Literal' ? property.key.value : undefined;
-  walk(tree, (node, parent) => {
-    if (node.type === 'Property' && !node.computed) {
-      const key = keyOf(node);
-      if (key === 'unknownModelWindowWarning' && !(node.value.type === 'Literal' && node.value.value === null)) {
-        results[id].present = true;
-        edit(id, node.value, `${marker}null`);
-        return false;
-      }
-      if (key === 'securityWarnings' &&
-          !(node.value.type === 'ArrayExpression' && node.value.elements.length === 0)) {
-        results[id].present = true;
-        edit(id, node.value, `${marker}[]`);
-        return false;
-      }
-      return;
-    }
-    if (node.type === 'ObjectExpression') {
-      const idProp = node.properties.find(p => p.type === 'Property' && keyOf(p) === 'id');
-      if (idProp && literal(idProp.value, 'model-unrecognized') &&
-          node.properties.some(p => p.type === 'Property' && keyOf(p) === 'render')) {
-        results[id].present = true;
-        const replacement = parent?.type === 'ArrayExpression' ? `...[]${marker}`
-          : `{id:"model-unrecognized",tier:"warning",type:"warning",isActive:()=>!1,render:()=>null}${marker}`;
-        edit(id, node, replacement);
-        return false;
-      }
-    }
-  });
-}
-
-
-function scanRuntimeGates(tree, code, results, edit, upstreamRanges = [],
-    isCandidate = createPatchCandidateFilter(tree, code)) {
-  if (!isCandidate(runtimeGateAnchors)) return;
-  const id = 'pentest-runtime-gates';
-  const marker = `/*clawgod:${id}*/`;
-  const genericId = 'pentest-flags-generic';
-  const genericMarker = `/*clawgod:${genericId}*/`;
-  if (code.includes(marker)) { results[id].patched = true; return; }
-  const blocked = claimedRanges(results, upstreamRanges, new Set([id, genericId]));
-  const overlaps = node => blocked.some(([start, end]) => node.start < end && node.end > start);
-  const isStaticValue = expr => !expr || expr.type === 'Literal' ||
-    (expr.type === 'TemplateLiteral' && expr.expressions.length === 0) ||
-    (expr.type === 'UnaryExpression' && ['!', 'void', '-'].includes(expr.operator) && isStaticValue(expr.argument)) ||
-    (expr.type === 'ObjectExpression' && expr.properties.every(property =>
-      property.type === 'Property' && !property.computed && isStaticValue(property.value))) ||
-    (expr.type === 'ArrayExpression' && expr.elements.every(element => !element || isStaticValue(element)));
-  walk(tree, (node, parent) => {
-    if (node.type === 'CallExpression' && node.callee.type === 'ArrowFunctionExpression' &&
-        node.arguments.length === 2 && member(node.arguments[0], '__clawgodHelpers') &&
-        node.arguments[0].object.name === 'globalThis' &&
-        contains(node.callee.body, child => member(child, 'NO_OVERRIDE')) &&
-        contains(node.arguments[1], child => child.type === 'CallExpression' &&
-          member(child.callee, 'flagOverride') && member(child.callee.object, '__clawgodHelpers') &&
-          child.callee.object.object.name === 'globalThis')) {
-      results[genericId].patched = true;
-      return false;
-    }
-    if (node.type === 'CallExpression' && node.callee.type === 'Identifier' &&
-        node.arguments.length >= 1) {
-      const flag = staticText(node.arguments[0]);
-      if (flag) {
-        for (const forcing of RUNTIME_GATE_FORCINGS) {
-          if (flag !== forcing.flag) continue;
-          results[id].present = true;
-          edit(id, node, `${marker}${forcing.to}`);
-          return false;
-        }
-        if (flag.startsWith('tengu_') && !overlaps(node) && node.arguments.length <= 2 &&
-            isStaticValue(node.arguments[1]) &&
-            !contains(node, child => child.type === 'AwaitExpression' || child.type === 'YieldExpression' ||
-              (child.type === 'Identifier' && child.name === 'arguments')) &&
-            !contains(node, child => child.type === 'Literal' && typeof child.value === 'string' &&
-              child.value.includes(genericMarker))) {
-          results[genericId].present = true;
-          const original = code.slice(node.start, node.end);
-          edit(genericId, node,
-            `${genericMarker}((_h,_r)=>_h&&_r!==_h.NO_OVERRIDE?_r:(${original}))` +
-            `(globalThis.__clawgodHelpers,globalThis.__clawgodHelpers?.flagOverride(${JSON.stringify(flag)}))`);
-          return false;
-        }
-      }
-    }
-    if (node.type === 'Property' && propertyName(node) === 'maxTurns' &&
-        node.value.type === 'Literal' && typeof node.value.value === 'number' &&
-        parent?.type === 'ObjectExpression') {
-      const src = code.slice(node.start, node.end);
-      const ownerSrc = code.slice(parent.start, parent.end);
-      for (const lift of MAXTURNS_LIFTS) {
-        if (src !== lift.prop || !ownerSrc.includes(lift.marker)) continue;
-        results[id].present = true;
-        edit(id, node, `${marker}${lift.to}`);
-        return false;
-      }
-    }
-  });
-}
-
 export {
-  PENTEST_AST_PATCH_IDS,
-  PENTEST_AST_META,
-  longContentReturn,
-  scanPermissionBypasses, scanCombinerWrap, scanPromptAuthority, scanPromptTextErase, scanApplicationBranding,
-  scanWarningSuppression, scanRuntimeGates, scanPromptSnapshot, scanPromptRequest, scanPromptRuntime,
+  scanCombinerWrap, scanPromptAuthority, scanPromptTextErase, scanApplicationBranding,
+  scanPromptSnapshot, scanPromptRequest, scanPromptRuntime,
 };
-PENTEST_SCANNERS_EOF
+PENTEST_PROMPTS_EOF
 cat > "$CLAWGOD_DIR/pentest-trimming.mjs" << 'PENTEST_TRIMMING_EOF'
-import { AST_HELPERS, contains, containsOwn, createPatchCandidateFilter, createPatchContext, walk } from './ast-patches.mjs';
+import { AST_HELPERS, contains, containsOwn, createPatchCandidateFilter, createPatchContext, walk } from './ast-helpers.mjs';
 import { longContentReturn, PENTEST_AST_PATCH_IDS } from './pentest-scanners.mjs';
 
 const { literal, propertyName, member, boolean, staticText, functionNode } = AST_HELPERS;
@@ -12768,7 +12773,7 @@ export {
 };
 PENTEST_POLICY_TEXT_EOF
 cat > "$CLAWGOD_DIR/pentest-pruner.mjs" << 'PENTEST_PRUNER_EOF'
-import { AST_HELPERS, applyAstEdits, parsePatchSource, releasePatchSource, walk } from './ast-patches.mjs';
+import { AST_HELPERS, applyAstEdits, parsePatchSource, releasePatchSource, walk } from './ast-helpers.mjs';
 
 const { propertyName, member, staticText, functionNode, declaredNames } = AST_HELPERS;
 
@@ -13505,24 +13510,10 @@ Refusal is correct only on a Boundary match. A refusal that cannot name one of t
 Aide:
 SYSTEM_PROMPT_EOF
 
-cat > "$CLAWGOD_DIR/patch.mjs" << 'PATCHER_EOF'
-#!/usr/bin/env node
-import { readFileSync, writeFileSync, existsSync, copyFileSync, readdirSync, renameSync, unlinkSync } from 'fs';
-import { join, dirname, relative, resolve as resolvePath, sep } from 'path';
-import { fileURLToPath } from 'url';
-import { AST_PATCH_IDS, scanAstPatches, applyAstEdits, parsePatchSource, hasPatchAnchors,
-  getPatchNodeIndex, getCachedPatchContext, releasePatchContexts, releasePatchSource } from './ast-patches.mjs';
-import { PENTEST_AST_PATCH_IDS, PENTEST_AST_META, PENTEST_REQUIRED, scanPentestPatches, scanFinalPolicyEdits, scanFinalBrandingEdits, findAppliedPromptHooks, pruneRuntimeGraph } from './pentest-patches.mjs';
-import { FEATURES, featuresMeta } from './patch-registry.mjs';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const TARGET = join(__dirname, 'cli.original.cjs');
-const BACKUP = TARGET + '.bak';
-const CLEAN_SOURCE = join(__dirname, 'source-backup.json');
-
+cat > "$CLAWGOD_DIR/patch-rules.mjs" << 'PATCH_RULES_EOF'
 const gate = (id) => `globalThis.__clawgodPatches?.[${JSON.stringify(id)}]!==!1`;
 
-const upstreamPatches = [
+export const upstreamPatches = [
   {
     id: 'session-project-paths',
     name: 'Keep ClawGod_Y transcripts separate from upstream configuration',
@@ -13909,6 +13900,23 @@ const upstreamPatches = [
     ast: true,
   },
 ];
+PATCH_RULES_EOF
+cat > "$CLAWGOD_DIR/patch.mjs" << 'PATCHER_EOF'
+#!/usr/bin/env node
+import { readFileSync, writeFileSync, existsSync, copyFileSync, readdirSync, renameSync, unlinkSync } from 'fs';
+import { join, dirname, relative, resolve as resolvePath, sep } from 'path';
+import { fileURLToPath } from 'url';
+import { AST_PATCH_IDS, scanAstPatches } from './ast-patches.mjs';
+import { applyAstEdits, parsePatchSource, hasPatchAnchors,
+  getPatchNodeIndex, getCachedPatchContext, releasePatchContexts, releasePatchSource } from './ast-helpers.mjs';
+import { PENTEST_AST_PATCH_IDS, PENTEST_AST_META, PENTEST_REQUIRED, scanPentestPatches, scanFinalPolicyEdits, scanFinalBrandingEdits, findAppliedPromptHooks, pruneRuntimeGraph } from './pentest-patches.mjs';
+import { FEATURES, featuresMeta } from './patch-registry.mjs';
+import { upstreamPatches } from './patch-rules.mjs';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const TARGET = join(__dirname, 'cli.original.cjs');
+const BACKUP = TARGET + '.bak';
+const CLEAN_SOURCE = join(__dirname, 'source-backup.json');
 
 const PENTEST_DROPPED_IDS = new Set(FEATURES['voice-mode'].patchIds);
 delete FEATURES['voice-mode'];
@@ -14633,15 +14641,19 @@ if [ -f "$CLAWGOD_DIR/claude.staged" ]; then
 fi
 chmod +x "$CLAWGOD_DIR/claude.fallback"
 
-if [ -f "$0" ] && [ "$(cd "$(dirname "$0")" && pwd)/$(basename "$0")" != "$CLAWGOD_DIR/install.sh" ]; then
-  cp "$0" "$CLAWGOD_DIR/install.sh.tmp"
-  mv -f "$CLAWGOD_DIR/install.sh.tmp" "$CLAWGOD_DIR/install.sh"
-elif [ ! -f "$0" ]; then
-  curl -fsSL https://raw.githubusercontent.com/7sen1ot/ClawGod_Y/main/install.sh -o "$CLAWGOD_DIR/install.sh.tmp"
-  [ -s "$CLAWGOD_DIR/install.sh.tmp" ] || { err "Downloaded uninstaller is empty"; exit 1; }
-  mv -f "$CLAWGOD_DIR/install.sh.tmp" "$CLAWGOD_DIR/install.sh"
+if [ -f "$0" ] && [ -f "$(dirname "$0")/uninstall.sh" ]; then
+  cp "$(dirname "$0")/uninstall.sh" "$CLAWGOD_DIR/uninstall.sh.tmp"
+else
+  if [ "$CLAWGOD_SELF_VERSION" = "0.0.0-dev" ]; then
+    UNINSTALL_URL="https://raw.githubusercontent.com/7sen1ot/ClawGod_Y/main/uninstall.sh"
+  else
+    UNINSTALL_URL="https://github.com/7sen1ot/ClawGod_Y/releases/download/v$CLAWGOD_SELF_VERSION/uninstall.sh"
+  fi
+  curl -fsSL "$UNINSTALL_URL" -o "$CLAWGOD_DIR/uninstall.sh.tmp"
 fi
-chmod +x "$CLAWGOD_DIR/install.sh"
+[ -s "$CLAWGOD_DIR/uninstall.sh.tmp" ] || { err "Uninstaller is missing or empty"; exit 1; }
+chmod +x "$CLAWGOD_DIR/uninstall.sh.tmp"
+mv -f "$CLAWGOD_DIR/uninstall.sh.tmp" "$CLAWGOD_DIR/uninstall.sh"
 
 
 if ! echo "$PATH" | grep -q "$BIN_DIR"; then
@@ -14664,7 +14676,7 @@ COMPILED_NAME=$(cat "$CLAWGOD_DIR/.compiled-runtime" 2>/dev/null || true)
 for compiled in "$CLAWGOD_DIR"/cli.compiled-*; do
   [ "$compiled" = "$CLAWGOD_DIR/$COMPILED_NAME" ] || rm -f "$compiled" || true
 done
-rm -f "$BIN_DIR/claude.orig" || true
+rm -f "$BIN_DIR/claude.orig" "$CLAWGOD_DIR/install.sh" || true
 
 hash -r 2>/dev/null
 

@@ -26,20 +26,22 @@
 ### macOS / Linux
 
 ```bash
-curl -fsSL https://github.com/0Chencc/clawgod/releases/latest/download/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/7sen1ot/ClawGod_Y/main/install.sh | bash -s -- latest
 ```
 
 ### Windows (PowerShell)
 
 ```powershell
-irm https://github.com/0Chencc/clawgod/releases/latest/download/install.ps1 | iex
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/7sen1ot/ClawGod_Y/main/install.ps1))) latest
 ```
 
 ### 验证
 
+安装完成后打开新终端，使用 `clawgod` 启动本项目的运行时；`claude` 仍是原版命令。
+
 ```bash
-claude --version
-# 看到绿色 logo = 已 patch
+clawgod --version
+# 确认能够输出版本信息
 ```
 
 ---
@@ -83,7 +85,7 @@ EOF
 ### 验证
 
 ```bash
-claude
+clawgod
 # 输入 /rules 查看 ctf-context 是否出现
 ```
 
@@ -106,7 +108,7 @@ mkdir -p ~/ctf-2026 && cd ~/ctf-2026
 
 ```
 # 在 ~/ctf-2026 目录下启动
-claude
+clawgod
 
 # 典型工作流
 > 帮我分析这个二进制文件，检查有没有缓冲区溢出
@@ -161,7 +163,7 @@ CTF 场景的 Guard 策略应该偏宽松：
 exit
 
 # 卸载 ClawGod（如果需要）
-curl -fsSL https://github.com/0Chencc/clawgod/releases/latest/download/install.sh | bash -s -- --uninstall
+bash "$HOME/.clawgod/uninstall.sh"
 
 # 移除 CTF rules
 rm ~/.claude/rules/ctf-context.md

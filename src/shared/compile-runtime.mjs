@@ -2,7 +2,7 @@ import { accessSync, constants, createReadStream, existsSync, lstatSync, readFil
 import { createHash } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { applyAstEdits, parsePatchSource, releasePatchSource, walk } from './ast-patches.mjs';
+import { applyAstEdits, parsePatchSource, releasePatchSource, walk } from './ast-helpers.mjs';
 import { tokenizer } from './acorn.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));

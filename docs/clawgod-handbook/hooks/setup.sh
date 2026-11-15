@@ -3,8 +3,8 @@
 # ClawGod Handbook — Hook 一键安装脚本
 #
 # 用法：
-#   bash setup.sh              # 安装 hook 脚本 + 配置 settings.json
-#   bash setup.sh --uninstall  # 移除 hook 配置
+#   bash setup.sh  # 安装 hook 脚本 + 配置 settings.json
+#   卸载请运行 bash uninstall.sh
 #
 # 前置条件：
 #   - Python 3 已安装
@@ -12,6 +12,11 @@
 # ═══════════════════════════════════════════════════════════
 
 set -e
+
+if [ "$#" -ne 0 ]; then
+    echo "用法：bash setup.sh（卸载请运行 bash uninstall.sh）" >&2
+    exit 2
+fi
 
 HOOKS_SRC="$(cd "$(dirname "$0")" && pwd)"
 HOOKS_DST="$HOME/.claude/hooks"
@@ -30,49 +35,6 @@ dim()   { echo -e "  ${DIM}$1${NC}"; }
 echo ""
 echo "  ClawGod Handbook — Hook 安装器"
 echo ""
-
-# ─── 卸载 ────────────────────────────────────────────────
-
-if [ "$1" = "--uninstall" ]; then
-    # 从 settings.json 移除 hook 配置
-    if [ -f "$SETTINGS" ]; then
-        python3 -c "
-import json, sys
-with open('$SETTINGS', 'r') as f:
-    s = json.load(f)
-changed = False
-for evt in ['UserPromptSubmit', 'PreToolUse']:
-    if 'hooks' in s and evt in s['hooks']:
-        s['hooks'][evt] = [h for h in s['hooks'][evt]
-                           if 'scene-router' not in h.get('command','')
-                           and 'tool-guard' not in h.get('command','')]
-        if not s['hooks'][evt]:
-            del s['hooks'][evt]
-        changed = True
-if 'hooks' in s and not s['hooks']:
-    del s['hooks']
-if changed:
-    with open('$SETTINGS', 'w') as f:
-        json.dump(s, f, indent=2, ensure_ascii=False)
-    print('cleaned')
-else:
-    print('no_change')
-" 2>/dev/null && info "Hook 配置已从 settings.json 移除" || dim "settings.json 未变更"
-    fi
-
-    # 移除 hook 脚本
-    for f in scene-router.py tool-guard.py; do
-        if [ -f "$HOOKS_DST/$f" ]; then
-            rm "$HOOKS_DST/$f"
-            info "已移除 $f"
-        fi
-    done
-
-    echo ""
-    info "卸载完成"
-    echo ""
-    exit 0
-fi
 
 # ─── 前置检查 ────────────────────────────────────────────
 

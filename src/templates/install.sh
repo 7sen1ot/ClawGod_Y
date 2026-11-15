@@ -7,21 +7,11 @@ BIN_DIR="$HOME/.local/bin"
 VERSION="2.1.322"
 CLAWGOD_SELF_VERSION="0.0.0-dev"
 
-VERSION_SELECTED=0
-while [[ $# -gt 0 ]]; do
-  case $1 in
-    --uninstall) UNINSTALL=1; shift ;;
-    *)
-      if [[ "$VERSION_SELECTED" = 1 || ! "$1" =~ ^(latest|stable|[0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-        printf 'Invalid installer argument: %s\nUsage: bash install.sh [latest|stable|<version>] [--uninstall]\n' "$1" >&2
-        exit 2
-      fi
-      VERSION="$1"
-      VERSION_SELECTED=1
-      shift
-      ;;
-  esac
-done
+if [[ $# -gt 1 || ( $# -eq 1 && ! "$1" =~ ^(latest|stable|[0-9]+\.[0-9]+\.[0-9]+)$ ) ]]; then
+  printf 'Invalid installer arguments: %s\nUsage: bash install.sh [latest|stable|<version>]\n' "$*" >&2
+  exit 2
+fi
+if [ $# -eq 1 ]; then VERSION="$1"; fi
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -37,27 +27,6 @@ dim()   { echo -e "  ${DIM}$1${NC}"; }
 echo ""
 echo -e "${BOLD}  ClawGod_Y Installer${NC}"
 echo ""
-
-if [ "$UNINSTALL" = "1" ]; then
-  CLAUDE_BIN=$(command -v claude 2>/dev/null || true)
-  for DIR in "${CLAUDE_BIN:+$(dirname "$CLAUDE_BIN")}" "$BIN_DIR"; do
-    [ -z "$DIR" ] && continue
-    if [ -f "$DIR/clawgod" ] && grep -q "clawgod" "$DIR/clawgod" 2>/dev/null; then
-      rm -f "$DIR/clawgod"
-      info "Removed ClawGod_Y launcher ($DIR/clawgod)"
-    fi
-  done
-  rm -rf "$CLAWGOD_DIR/node_modules" "$CLAWGOD_DIR/vendor" "$CLAWGOD_DIR/bun-runtime" "$CLAWGOD_DIR/cli.original.js" "$CLAWGOD_DIR/cli.original.js.bak" "$CLAWGOD_DIR/cli.original.cjs" "$CLAWGOD_DIR/cli.original.cjs.bak" "$CLAWGOD_DIR/source-backup.json" "$CLAWGOD_DIR/cli.js" "$CLAWGOD_DIR/cli.cjs" "$CLAWGOD_DIR/patch.mjs" "$CLAWGOD_DIR/ast-patches.mjs" "$CLAWGOD_DIR/pentest-patches.mjs" "$CLAWGOD_DIR/pentest-scanners.mjs" "$CLAWGOD_DIR/pentest-trimming.mjs" "$CLAWGOD_DIR/pentest-policy-text.mjs" "$CLAWGOD_DIR/pentest-pruner.mjs" "$CLAWGOD_DIR/lean-mode.cjs" "$CLAWGOD_DIR/lean-settings.json" "$CLAWGOD_DIR/.lean-disabled" "$CLAWGOD_DIR/.lean-max" "$CLAWGOD_DIR/acorn.mjs" "$CLAWGOD_DIR/acorn.LICENSE" "$CLAWGOD_DIR/patch.js" "$CLAWGOD_DIR/extract-natives.mjs" "$CLAWGOD_DIR/post-process.mjs" "$CLAWGOD_DIR/repatch.mjs" "$CLAWGOD_DIR/startup-check.cjs" "$CLAWGOD_DIR/startup-check.log" "$CLAWGOD_DIR/openai-proxy.cjs" "$CLAWGOD_DIR/feature-gates.cjs" "$CLAWGOD_DIR/runtime-helpers.cjs" "$CLAWGOD_DIR/bun-ant-shim.cjs" "$CLAWGOD_DIR/clawgod-import" "$CLAWGOD_DIR/claude.staged" "$CLAWGOD_DIR/claude.fallback" "$CLAWGOD_DIR/.source-version"
-  rm -rf "$CLAWGOD_DIR/bunfs" "$CLAWGOD_DIR/pathmap.json"
-  rm -f "$CLAWGOD_DIR/patch-registry.mjs" "$CLAWGOD_DIR/system-prompt.md" "$CLAWGOD_DIR/probe-tools.log" "$CLAWGOD_DIR/.clawgod-version" "$CLAWGOD_DIR/compile-runtime.mjs" "$CLAWGOD_DIR/.compiled-runtime" "$CLAWGOD_DIR/.compiled-runtime-cache.json" "$CLAWGOD_DIR"/cli.compiled-*
-  hash -r 2>/dev/null
-  info "ClawGod_Y uninstalled"
-  echo ""
-  warn "  Restart your terminal or run: hash -r"
-  echo ""
-  exit 0
-fi
-
 
 if ! command -v node &>/dev/null; then
   warn "Node.js is required (>= 18) for the patcher. Install from https://nodejs.org"
@@ -181,9 +150,9 @@ PREV_BACKUP_DIR=""
 ROLLBACK_FILES=(cli.original.cjs cli.original.cjs.bak cli.original.js .source-version
   source-backup.json bunfs vendor pathmap.json extract-natives.mjs post-process.mjs
   openai-proxy.cjs feature-gates.cjs cli.cjs .clawgod-version
-  startup-check.cjs compile-runtime.mjs .compiled-runtime .compiled-runtime-cache.json runtime-helpers.cjs bun-ant-shim.cjs system-prompt.md
-  claude.fallback install.sh lean-settings.json patches.json
-  patch.mjs patch-registry.mjs ast-patches.mjs pentest-patches.mjs pentest-scanners.mjs
+  startup-check.cjs compile-runtime.mjs .compiled-runtime .compiled-runtime-cache.json runtime-helpers.cjs prompt-runtime.cjs bun-ant-shim.cjs system-prompt.md
+  claude.fallback uninstall.sh lean-settings.json patches.json
+  patch.mjs patch-rules.mjs patch-registry.mjs ast-patches.mjs ast-helpers.mjs pentest-patches.mjs pentest-scanners.mjs pentest-prompts.mjs
   pentest-trimming.mjs pentest-policy-text.mjs pentest-pruner.mjs lean-mode.cjs acorn.mjs acorn.LICENSE)
 if [ -f "$CLAWGOD_DIR/cli.original.cjs" ] && [ -f "$CLAWGOD_DIR/.source-version" ]; then
   PREV_BACKUP_DIR=$(mktemp -d "${CLAWGOD_DIR}-rollback-XXXXXX")
@@ -220,7 +189,7 @@ rollback_install() {
   trap - EXIT
   if [ "$status" -ne 0 ]; then
     rm -f "$CLAWGOD_DIR/claude.staged"
-    rm -f "$CLAWGOD_DIR/install.sh.tmp" "$BIN_DIR/clawgod.clawgod-$$.tmp"
+    rm -f "$CLAWGOD_DIR/uninstall.sh.tmp" "$BIN_DIR/clawgod.clawgod-$$.tmp"
     if [ -n "$PREV_BACKUP_DIR" ]; then
       dim "Rolling back to previous working installation ..."
       for f in "${ROLLBACK_FILES[@]}"; do rm -rf "$CLAWGOD_DIR/$f"; done
@@ -287,6 +256,9 @@ COMPILE_EOF
 cat > "$CLAWGOD_DIR/runtime-helpers.cjs" << 'CFG_EOF'
 {{CLAWGOD:runtime-helpers.cjs}}
 CFG_EOF
+cat > "$CLAWGOD_DIR/prompt-runtime.cjs" << 'PROMPT_RUNTIME_EOF'
+{{CLAWGOD:prompt-runtime.cjs}}
+PROMPT_RUNTIME_EOF
 info "Classifier runtime helpers created (runtime-helpers.cjs)"
 
 cat > "$CLAWGOD_DIR/bun-ant-shim.cjs" << 'BUNANT_EOF'
@@ -317,6 +289,9 @@ fi
 
 info "cli.original.cjs ready ($NATIVE_BIN_LABEL)"
 
+cat > "$CLAWGOD_DIR/ast-helpers.mjs" << 'AST_HELPERS_EOF'
+{{CLAWGOD:ast-helpers.mjs}}
+AST_HELPERS_EOF
 cat > "$CLAWGOD_DIR/ast-patches.mjs" << 'AST_PATCHES_EOF'
 {{CLAWGOD:ast-patches.mjs}}
 AST_PATCHES_EOF
@@ -327,6 +302,9 @@ PENTEST_PATCHES_EOF
 cat > "$CLAWGOD_DIR/pentest-scanners.mjs" << 'PENTEST_SCANNERS_EOF'
 {{CLAWGOD:pentest-scanners.mjs}}
 PENTEST_SCANNERS_EOF
+cat > "$CLAWGOD_DIR/pentest-prompts.mjs" << 'PENTEST_PROMPTS_EOF'
+{{CLAWGOD:pentest-prompts.mjs}}
+PENTEST_PROMPTS_EOF
 cat > "$CLAWGOD_DIR/pentest-trimming.mjs" << 'PENTEST_TRIMMING_EOF'
 {{CLAWGOD:pentest-trimming.mjs}}
 PENTEST_TRIMMING_EOF
@@ -345,6 +323,9 @@ cat > "$CLAWGOD_DIR/system-prompt.md" << 'SYSTEM_PROMPT_EOF'
 {{CLAWGOD:system-prompt.md}}
 SYSTEM_PROMPT_EOF
 
+cat > "$CLAWGOD_DIR/patch-rules.mjs" << 'PATCH_RULES_EOF'
+{{CLAWGOD:patch-rules.mjs}}
+PATCH_RULES_EOF
 cat > "$CLAWGOD_DIR/patch.mjs" << 'PATCHER_EOF'
 {{CLAWGOD:patch.mjs}}
 
@@ -524,15 +505,19 @@ if [ -f "$CLAWGOD_DIR/claude.staged" ]; then
 fi
 chmod +x "$CLAWGOD_DIR/claude.fallback"
 
-if [ -f "$0" ] && [ "$(cd "$(dirname "$0")" && pwd)/$(basename "$0")" != "$CLAWGOD_DIR/install.sh" ]; then
-  cp "$0" "$CLAWGOD_DIR/install.sh.tmp"
-  mv -f "$CLAWGOD_DIR/install.sh.tmp" "$CLAWGOD_DIR/install.sh"
-elif [ ! -f "$0" ]; then
-  curl -fsSL https://raw.githubusercontent.com/7sen1ot/ClawGod_Y/main/install.sh -o "$CLAWGOD_DIR/install.sh.tmp"
-  [ -s "$CLAWGOD_DIR/install.sh.tmp" ] || { err "Downloaded uninstaller is empty"; exit 1; }
-  mv -f "$CLAWGOD_DIR/install.sh.tmp" "$CLAWGOD_DIR/install.sh"
+if [ -f "$0" ] && [ -f "$(dirname "$0")/uninstall.sh" ]; then
+  cp "$(dirname "$0")/uninstall.sh" "$CLAWGOD_DIR/uninstall.sh.tmp"
+else
+  if [ "$CLAWGOD_SELF_VERSION" = "0.0.0-dev" ]; then
+    UNINSTALL_URL="https://raw.githubusercontent.com/7sen1ot/ClawGod_Y/main/uninstall.sh"
+  else
+    UNINSTALL_URL="https://github.com/7sen1ot/ClawGod_Y/releases/download/v$CLAWGOD_SELF_VERSION/uninstall.sh"
+  fi
+  curl -fsSL "$UNINSTALL_URL" -o "$CLAWGOD_DIR/uninstall.sh.tmp"
 fi
-chmod +x "$CLAWGOD_DIR/install.sh"
+[ -s "$CLAWGOD_DIR/uninstall.sh.tmp" ] || { err "Uninstaller is missing or empty"; exit 1; }
+chmod +x "$CLAWGOD_DIR/uninstall.sh.tmp"
+mv -f "$CLAWGOD_DIR/uninstall.sh.tmp" "$CLAWGOD_DIR/uninstall.sh"
 
 
 if ! echo "$PATH" | grep -q "$BIN_DIR"; then
@@ -555,7 +540,7 @@ COMPILED_NAME=$(cat "$CLAWGOD_DIR/.compiled-runtime" 2>/dev/null || true)
 for compiled in "$CLAWGOD_DIR"/cli.compiled-*; do
   [ "$compiled" = "$CLAWGOD_DIR/$COMPILED_NAME" ] || rm -f "$compiled" || true
 done
-rm -f "$BIN_DIR/claude.orig" || true
+rm -f "$BIN_DIR/claude.orig" "$CLAWGOD_DIR/install.sh" || true
 
 hash -r 2>/dev/null
 
