@@ -1,6 +1,6 @@
 # Hooks — 可直接运行的脚本
 
-> 复制到 `~/.claude/hooks/` 即可使用，无需手写代码。
+> 脚本需复制到 `~/.claude/hooks/` 并注册到 `~/.claude/settings.json`。安装器会完成这两步。
 
 ---
 
@@ -19,36 +19,46 @@
 
 ## 快速安装
 
+需先安装 Claude Code 和 Python 3；macOS/Linux 需能运行 `python3`，Windows 需能运行 `python`。以下命令从本仓库根目录执行。
+
 ### macOS / Linux
 
 ```bash
-cd clawgod-handbook/hooks
+cd docs/clawgod-handbook/hooks
 bash setup.sh
 ```
 
 ### Windows (PowerShell)
 
 ```powershell
-cd clawgod-handbook\hooks
+cd docs\clawgod-handbook\hooks
 .\setup.ps1
 ```
 
 安装脚本会自动：
+
 1. 复制 hook 脚本到 `~/.claude/hooks/`
 2. 注册 hook 到 `~/.claude/settings.json`
 3. 安装 `security-research-context.md` rules（如果不存在）
 4. 创建审计日志目录 `~/.claude/audit/`
 
+安装完成后重启 Claude Code。
+
 ## 手动安装
 
-如果不想用安装脚本：
+以下示例适用于 macOS/Linux，从本仓库根目录开始。
+
+1. 复制脚本：
 
 ```bash
-# 1. 复制脚本
+cd docs/clawgod-handbook/hooks
 mkdir -p ~/.claude/hooks
 cp scene-router.py tool-guard.py ~/.claude/hooks/
+```
 
-# 2. 编辑 ~/.claude/settings.json，添加：
+2. 将以下 Hook 注册项合并到 `~/.claude/settings.json`，保留已有配置：
+
+```json
 {
   "hooks": {
     "UserPromptSubmit": [
@@ -59,9 +69,9 @@ cp scene-router.py tool-guard.py ~/.claude/hooks/
     ]
   }
 }
-
-# 3. 重启 Claude Code
 ```
+
+3. 重启 Claude Code。
 
 ## 卸载
 

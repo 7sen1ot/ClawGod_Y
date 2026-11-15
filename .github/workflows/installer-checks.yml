@@ -40,9 +40,23 @@ jobs:
         run: node build.js --check
       - name: Check installation, rollback and standalone uninstall
         run: node src/shared/installer-lifecycle.test.mjs
+      - name: Check downloader failures and corrupt archives with a local registry
+        run: node src/windows/npm-fetch.test.mjs
+      - name: Check native binary formats and corrupt payloads
+        run: node src/shared/extract-natives.test.mjs
       - name: Check compiled startup and source fallback
         run: node src/shared/compile-runtime.test.mjs
       - name: Check final generated installer with an injected release version
         run: |
           node -e "require('./.github/scripts/release-assets.cjs').prepareInstallers(process.cwd(), 'v0.0.0-ci')"
           node src/shared/installer-lifecycle.test.mjs ${{ runner.os == 'Windows' && 'install.ps1' || 'install.sh' }}
+      - name: Check Unix native subprocess version and official binary isolation
+        if: runner.os != 'Windows'
+        run: node src/shared/native-refresh.test.mjs
+      - name: Check Windows native isolation and recovery
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          ./src/windows/launchers.test.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./src/windows/source-recovery.test.ps1

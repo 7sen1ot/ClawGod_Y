@@ -24,6 +24,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
+      - name: Check inactivity policy tests
+        run: node .github/scripts/close-inactive-issues.test.cjs
       - name: Close issues without a reply for at least 30 days
         uses: actions/github-script@v8
         env:

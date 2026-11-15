@@ -9,18 +9,19 @@
 方法论文档 + 可直接运行的 hook 脚本，帮助安全研究员在 Claude Code 中建立**可控的研究环境**。
 
 包含：
+
 - 方法论文档（MD）— 理解设计思想
-- 可运行脚本（Python）— 复制即用，无需自己写代码
+- 可运行脚本（Python）— 复制并注册到配置后使用，无需自己写代码
 - 一键安装器 — `bash setup.sh` 或 `.\setup.ps1`
 
 ### 解决什么问题
 
-安全研究的日常工具链在 AI Code 产品中遭遇**双层限制**：
+安全研究工作流可能受到两个层面的限制：
 
-1. **模型层**：模型把合法的安全研究请求误判为恶意请求，拒绝回答或降质
-2. **客户端层**：客户端内置安全策略，在工具调用前拦截，即使模型已经同意
+1. **模型层**：模型可能因缺少研究背景或自身策略而拒绝请求
+2. **客户端层**：客户端的权限与工具策略可能在工具调用前拦截操作
 
-ClawGod 解决客户端层。Session Rules 解决模型层。Guard 重建可控边界。
+ClawGod 修改部分客户端行为；Session Rules 补充研究背景；Guard 按配置规则检查工具调用。这些配置不能保证模型接受请求或所有客户端限制都被解除。
 
 ### 不是什么
 
@@ -33,20 +34,23 @@ ClawGod 解决客户端层。Session Rules 解决模型层。Guard 重建可控�
 
 ## 快速开始
 
-### 最小配置（5 分钟）
+### 最小配置
 
-1. 安装 [ClawGod](https://github.com/0Chencc/clawgod) — 解除客户端层限制
-2. 复制 `01-session-rules/security-research-context.md` 到 `~/.claude/rules/`
-3. 完成。两层限制同时解除。
+以下命令从本仓库根目录执行。
+
+1. 按本仓库的 [安装说明](../../README_ZH.md) 安装 ClawGod
+2. 复制 `docs/clawgod-handbook/01-session-rules/security-research-context.md` 到 `~/.claude/rules/`
+3. 重启 Claude Code 或 `clawgod`，在新会话中加载规则
 
 ```bash
-# Step 2 一行搞定
-cp 01-session-rules/security-research-context.md ~/.claude/rules/
+# macOS / Linux：复制规则文件
+mkdir -p ~/.claude/rules
+cp docs/clawgod-handbook/01-session-rules/security-research-context.md ~/.claude/rules/
 ```
 
 ### 场景配置
 
-根据你的工作场景，额外加载对应的 rules 模板：
+根据你的工作场景，额外加载对应的 rules 模板（下表路径相对于 `docs/clawgod-handbook/`）：
 
 | 场景 | Rules 文件 | 复制到 |
 |------|-----------|--------|
@@ -60,29 +64,38 @@ cp 01-session-rules/security-research-context.md ~/.claude/rules/
 
 ```bash
 # macOS / Linux
-cd clawgod-handbook/hooks && bash setup.sh
-
-# Windows (PowerShell)
-cd clawgod-handbook\hooks; .\setup.ps1
+cd docs/clawgod-handbook/hooks
+bash setup.sh
 ```
 
-安装后自动生效：
+```powershell
+# Windows (PowerShell)
+cd docs\clawgod-handbook\hooks
+.\setup.ps1
+```
+
+需先安装 Python 3。安装脚本会复制并注册 Hook，重启 Claude Code 后加载：
+
 - **Scene Router**：根据工作目录和关键词自动识别安全研究场景
-- **Tool Guard**：Bash/Write 工具调用前的风险守卫（仅阻断 `rm -rf /` 等破坏性操作）
-- **审计日志**：所有决策记录在 `~/.claude/audit/`
+- **Tool Guard**：按 `BLOCK_RULES` 检查 Bash 命令和 Write 路径，包括破坏性命令、系统路径写入、特定凭据工具和扫描命令
+- **审计日志**：场景识别与工具守卫的决策记录在 `~/.claude/audit/`
+
+卸载 Hook 时，在上述 `hooks` 目录运行 `bash uninstall.sh`（macOS/Linux）或 `.\uninstall.ps1`（Windows）。独立卸载脚本移除 Hook 脚本及注册项，保留 rules 和审计日志。详见 [Hook 安装与卸载说明](hooks/README.md)。
 
 ---
 
 ## 文档结构
 
 ```
-clawgod-handbook/
+docs/clawgod-handbook/
 ├── README.md                              ← 你在这里
 ├── hooks/                                 ← 可直接运行的脚本
-│   ├── scene-router.py                   # 场景识别 hook（复制即用）
-│   ├── tool-guard.py                     # 工具守卫 hook（复制即用）
+│   ├── scene-router.py                   # 场景识别 hook（需注册）
+│   ├── tool-guard.py                     # 工具守卫 hook（需注册）
 │   ├── setup.sh                          # 一键安装（macOS/Linux）
 │   ├── setup.ps1                         # 一键安装（Windows）
+│   ├── uninstall.sh                      # 独立卸载（macOS/Linux）
+│   ├── uninstall.ps1                     # 独立卸载（Windows）
 │   └── README.md                         # 安装说明
 ├── 01-session-rules/                      ← Layer 1：模型层
 │   ├── security-research-context.md       # 核心身份模板（必读）
@@ -122,7 +135,7 @@ clawgod-handbook/
 ```
 用户输入
     ↓
-Layer 0: ClawGod Runtime Patch    ← 解除客户端黑箱限制
+Layer 0: ClawGod Runtime Patch    ← 修改部分客户端行为
     ↓
 Layer 1: Session Rules            ← 给模型补齐"你是谁"
     ↓
@@ -135,16 +148,16 @@ Layer 3: PreToolUse Guard         ← 决定"工具该不该执行"
 工具执行 / 策略引擎 / 审计日志
 ```
 
-**不是删除边界，而是用透明的、可配置的边界替换黑箱边界。**
+各层分别承担客户端补丁、研究上下文、场景识别和工具检查职责；Guard 的检查范围由脚本中的规则决定。
 
 ---
 
 ## 设计哲学
 
 1. **该注入时注入，不该注入时沉默** — 好的治理框架首先要知道什么时候不该介入
-2. **零门槛安装** — `bash setup.sh` 一行命令，hook 脚本复制即用，不需要手写代码
-3. **最小配置起效** — ClawGod + 一份 Rules 文件就能解决 80% 的问题
-4. **全链路可审计** — 每一层决策都可以追溯和复盘
+2. **脚本化安装** — 安装器完成 Hook 复制和注册，不需要手写代码
+3. **按需配置** — 从核心 Rules 文件开始，再按场景增加规则和 Hook
+4. **Hook 决策可审计** — 通过场景识别与工具守卫日志检查决策过程
 5. **通用方法论** — 四层架构的思想可以适配其他 AI Code 产品
 
 ---
