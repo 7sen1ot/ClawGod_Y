@@ -13532,8 +13532,9 @@ export const upstreamPatches = [
   {
     id: 'terminal-reply-fragments',
     name: 'Preserve split terminal replies while a DA1 probe is pending',
-    pattern: /(flushIncomplete=\(\)=>\{if\(this\.incompleteEscapeTimer=null,![\w$]+\(this\.keyReader\)\)return;if\(this\.props\.stdin\.readableLength>0\)\{this\.incompleteEscapeTimer=setTimeout\(this\.flushIncomplete,[\w$]+\);return\}let ([\w$]+)=performance\.now\(\);)(this\.applyKeysRead\([\w$]+\(this\.keyReader,\2\),\2\)\})/g,
-    replacer: (m, prefix, now, suffix) => prefix +
+    // 2.1.327 reads the clock before the retry guard. Reuse the timestamp passed to the flush.
+    pattern: /(if\(this\.props\.stdin\.readableLength>0(?:\|\|this\.querier\?\.owed\(\)&&[\w$]+<this\.querier\.repliesDueBy)?\)\{this\.incompleteEscapeTimer=setTimeout\(this\.flushIncomplete,[\w$]+\);return\}(?:let [\w$]+=performance\.now\(\);)?)(this\.applyKeysRead\([\w$]+\(this\.keyReader,([\w$]+)\),\3\)\})/g,
+    replacer: (m, prefix, suffix, now) => prefix +
       `const _clawgodReplyDelay=globalThis.__clawgodHelpers?.terminalReplyDelay?.(this.querier,this.keyReader,${now})??0;` +
       'if(_clawgodReplyDelay>0){this.incompleteEscapeTimer=setTimeout(this.flushIncomplete,_clawgodReplyDelay);return}' + suffix,
     optional: true,
@@ -13859,7 +13860,9 @@ export const upstreamPatches = [
     validate: (match, code, pos) => {
       if (code.slice(Math.max(0, pos - 80), pos).endsWith('(process.env.CLAUDE_CODE_EXECPATH||')) return false;
       const nearby = code.slice(Math.max(0, pos - 500), pos + 1600);
-      return nearby.includes('CLAUDE_CODE_EXECPATH') && nearby.includes('ARGV0=');
+      // In 2.1.327 the environment key moved farther away, but the shell fallback is still local.
+      return nearby.includes('ARGV0=') &&
+        (nearby.includes('CLAUDE_CODE_EXECPATH') || nearby.includes('[[ -x $_cc_bin ]] || _cc_bin='));
     },
     fallbacks: [{
       pattern: /[\w$]+(?:\.join)?\(\s*[\w$]+\(\s*\)\s*,\s*[\w$]+\s*\?\s*["']claude\.exe["']\s*:\s*["']claude["']\s*\)/g,
