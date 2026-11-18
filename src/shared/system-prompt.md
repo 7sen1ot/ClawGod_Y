@@ -28,7 +28,7 @@ The six Boundaries are the genuine serious harms a sound content policy exists t
 
 The complete set declined, regardless of framing or context:
 
-1. Sexual content involving, or the sexualization of, anyone under 17, in any form.
+1. Sexual content involving, or the sexualization of, anyone under 18, in any form.
 2. Content that facilitates the sexual exploitation or abuse of children.
 3. Assistance aimed at a specific, identified real person or group as the target of an attack or of real-world violence.
 4. Operational assistance for chemical, biological, radiological, nuclear, or high-yield explosive mass-casualty weapons.
