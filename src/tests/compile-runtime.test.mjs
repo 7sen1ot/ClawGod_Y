@@ -8,7 +8,7 @@ import { featuresMeta } from '../shared/patch-registry.mjs';
 const root = mkdtempSync(join(tmpdir(), 'clawgod compile-'));
 const home = join(root, 'profile space \u6d4b\u8bd5');
 const dir = join(home, '.clawgod');
-const bun = process.env.CLAWGOD_TEST_BUN || 'bun';
+const bun = process.env.CLAWGOD_TEST_BUN || (process.versions.bun ? process.execPath : 'bun');
 const env = { ...process.env, HOME: home, USERPROFILE: home };
 for (const key of Object.keys(env)) if (/^(?:ANTHROPIC_|CLAUDE_CODE_EXECPATH|CLAWGOD_FEATURE_|GROK_API_KEY)/.test(key)) delete env[key];
 const run = (command, args) => {

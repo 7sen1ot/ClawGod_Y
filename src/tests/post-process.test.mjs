@@ -1,18 +1,11 @@
 import assert from 'node:assert/strict';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const root = mkdtempSync(join(tmpdir(), 'clawgod text assets-'));
-const defaultBun = process.platform === 'win32' && !process.env.CLAWGOD_TEST_BUN
-  ? (() => {
-      const candidates = [process.env.APPDATA, process.env.LOCALAPPDATA]
-        .filter(Boolean).map(base => join(base, 'npm', 'node_modules', 'bun', 'bin', 'bun.exe'));
-      return candidates.find(existsSync) || 'bun';
-    })()
-  : 'bun';
-const bun = process.env.CLAWGOD_TEST_BUN || defaultBun;
+const bun = process.env.CLAWGOD_TEST_BUN || (process.versions.bun ? process.execPath : 'bun');
 const run = (command, args) => {
   const result = spawnSync(command, args, { encoding: 'utf8', timeout: 15000 });
   assert.equal(result.status, 0, result.error?.message || result.stderr + result.stdout);

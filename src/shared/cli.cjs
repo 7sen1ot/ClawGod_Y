@@ -27,23 +27,18 @@ const versionOnly = process.argv.length === 3 && ['--version', '-v'].includes(pr
 const probeTools = process.argv.length === 3 && process.argv[2] === '--probe-tools';
 
 // Share Claude configuration; redirect session files through the direct-file backend.
-const stateDir = join(clawgodDir, 'state');
 process.env.CLAUDE_CODE_HOVER_REST = '0';
-if (!versionOnly && !probeTools) mkdirSync(stateDir, { recursive: true });
-
-const configFile = join(clawgodDir, 'provider.json');
-
 const { defaultProviderConfig: defaultConfig, resolveProviderConfig } = require('./runtime-helpers.cjs');
 
-let config = { ...defaultConfig };
-if (!versionOnly && !probeTools && existsSync(configFile)) {
-  try {
-    const raw = JSON.parse(readFileSync(configFile, 'utf8'));
-    config = { ...defaultConfig, ...raw, protocol: raw?.protocol };
-  } catch {}
-} else if (!versionOnly && !probeTools) {
-  mkdirSync(clawgodDir, { recursive: true });
-  writeFileSync(configFile, JSON.stringify(defaultConfig, null, 2) + '\n');
+let config = defaultConfig;
+if (!versionOnly && !probeTools) {
+  mkdirSync(join(clawgodDir, 'state'), { recursive: true });
+  const configFile = join(clawgodDir, 'provider.json');
+  if (existsSync(configFile)) {
+    try { config = JSON.parse(readFileSync(configFile, 'utf8')); } catch {}
+  } else {
+    writeFileSync(configFile, JSON.stringify(defaultConfig, null, 2) + '\n');
+  }
 }
 
 const resolved = resolveProviderConfig(config);

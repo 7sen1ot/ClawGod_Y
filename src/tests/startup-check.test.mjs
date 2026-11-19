@@ -149,9 +149,8 @@ try {
   }
   console.log('[startup-check.test] standalone version skips provider side effects and still loads runtime helpers/bundle');
 
-  const bun = process.env.CLAWGOD_TEST_BUN || 'bun';
-  const available = spawnSync(bun, ['--version'], { timeout: 5000, encoding: 'utf8' });
-  if (available.status === 0) {
+  const bun = process.env.CLAWGOD_TEST_BUN || (process.versions.bun ? process.execPath : 'bun');
+  if (process.versions.bun || spawnSync(bun, ['--version'], { timeout: 5000 }).status === 0) {
     fs.writeFileSync(cli, wrapper);
     fs.copyFileSync(join(sourceDir, 'openai-proxy.cjs'), join(dir, 'openai-proxy.cjs'));
     for (const name of ['feature-gates.cjs', 'bun-ant-shim.cjs']) fs.writeFileSync(join(dir, name), '');

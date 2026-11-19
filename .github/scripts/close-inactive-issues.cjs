@@ -3,13 +3,9 @@
 const DAYS = 30;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
-function lastReplyAt(issue) {
-  return Date.parse(issue.comments.nodes.at(-1)?.createdAt ?? issue.createdAt);
-}
-
 function inactive(issue, cutoff) {
-  const last = lastReplyAt(issue);
-  return !issue.closed && Number.isFinite(last) && last <= cutoff;
+  const last = Date.parse(issue.comments.nodes.at(-1)?.createdAt ?? issue.createdAt);
+  return !issue.closed && last <= cutoff;
 }
 
 module.exports = async function closeInactiveIssues({ github, context, core, dryRun, now = Date.now() }) {
@@ -21,7 +17,7 @@ module.exports = async function closeInactiveIssues({ github, context, core, dry
     const result = await github.graphql(`query($owner:String!, $name:String!, $cursor:String) {
       repository(owner:$owner, name:$name) {
         issues(first:100, after:$cursor, states:OPEN, orderBy:{field:CREATED_AT,direction:ASC}) {
-          nodes { number title createdAt closed comments(last:1) { nodes { createdAt } } }
+          nodes { number createdAt closed comments(last:1) { nodes { createdAt } } }
           pageInfo { hasNextPage endCursor }
         }
       }
@@ -62,5 +58,4 @@ module.exports = async function closeInactiveIssues({ github, context, core, dry
     .write();
   return { eligible: confirmed, closed };
 };
-module.exports.lastReplyAt = lastReplyAt;
 module.exports.inactive = inactive;

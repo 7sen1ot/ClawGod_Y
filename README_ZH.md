@@ -41,13 +41,13 @@ ClawGod_Y 是针对官方 [Claude Code](https://docs.anthropic.com/en/docs/claud
 **macOS / Linux / WSL：**
 
 ```bash
-curl -fsSL https://github.com/7sen1ot/ClawGod_Y/releases/latest/download/install.sh | bash -s --
+curl -fsSL https://github.com/7sen1ot/ClawGod_Y/releases/latest/download/install.sh|bash
 ```
 
 **Windows PowerShell：**
 
 ```powershell
-& ([scriptblock]::Create((irm https://github.com/7sen1ot/ClawGod_Y/releases/latest/download/install.ps1)))
+irm https://github.com/7sen1ot/ClawGod_Y/releases/latest/download/install.ps1|iex
 ```
 
 默认安装 Claude Code `2.1.322`。如需选择其他版本，在上述命令末尾追加 `latest`、`stable` 或具体版本号。

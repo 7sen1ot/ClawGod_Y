@@ -63,8 +63,6 @@ jobs:
       - name: Check source fixtures for startup and text assets
         if: matrix.bun == ''
         shell: bash
-        env:
-          CLAWGOD_TEST_BUN: bun
         run: |
           bun src/tests/startup-check.test.mjs
           bun src/tests/post-process.test.mjs
