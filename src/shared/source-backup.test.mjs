@@ -99,10 +99,10 @@ try {
     }
   }
   if (process.platform !== 'win32') {
-    const template = readFileSync(new URL('../templates/install.sh', import.meta.url), 'utf8');
+    const template = readFileSync(new URL('../../install.sh', import.meta.url), 'utf8');
     const dir = join(root, 'shell');
     mkdirSync(dir);
-    const env = { ...process.env, CLAWGOD_DIR: dir, BIN_DIR: join(dir, 'bin'), VERSION: '2.1.312' };
+    const env = { ...process.env, CLAWGOD_DIR: dir, BIN_DIR: join(dir, 'bin'), VERSION: '2.1.312', BUN_BIN: process.execPath };
     const shell = (body, extraEnv = {}) => spawnSync('bash', ['-c', 'set -e\ninfo() { echo "$*"; }; warn() { echo "$*"; }; dim() { :; };\n' + body], { env: { ...env, ...extraEnv }, encoding: 'utf8' });
     writeFileSync(join(dir, 'patch.mjs'), "if(process.argv.includes('--capture-clean-source'))process.exit(0);process.exit(7)");
     const applyStart = template.indexOf('dim "Applying patches ..."');
@@ -133,7 +133,7 @@ try {
     writeFileSync(join(rollbackDir, 'broken-patch.mjs'), "if(process.argv.includes('--capture-clean-source')) process.exit(0); process.exit(9);");
     const rollbackEnv = { ...env, CLAWGOD_DIR: rollbackDir, TMPDIR: rollbackTmp, NATIVE_BIN_LABEL: '2.1.299', NATIVE_BIN: 'missing' };
     const rollbackShell = body => spawnSync('bash', ['-c', 'set -e\ninfo() { echo "$*"; }; warn() { echo "$*"; }; dim() { :; }; err() { echo "$*"; };\n' + body], { env: rollbackEnv, encoding: 'utf8' });
-    result = rollbackShell(snapshotInstall + '\nnode() { return 17; }\n' + extract);
+    result = rollbackShell(snapshotInstall + '\nBUN_BIN="/nonexistent/bun"\n' + extract);
     assert.equal(result.status, 1);
     assert.match(result.stdout, /Restored previous working installation \(2.1.280\)/);
     assert.equal(readFileSync(join(graphDir, 'commands.js'), 'utf8'), '// old graph');

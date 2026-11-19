@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 $template = Get-Content (Join-Path $PSScriptRoot '..\templates\install.ps1') -Raw
-$uninstaller = Get-Content (Join-Path $PSScriptRoot '..\templates\uninstall.ps1') -Raw
+$uninstaller = Get-Content (Join-Path $PSScriptRoot '..\..\uninstall.ps1') -Raw
 $section = [regex]::Match($template, '(?s)\$cliPathInCmd =.*').Value
 if (-not $section) { throw 'Installer launcher section not found' }
 $install = [ScriptBlock]::Create($section)

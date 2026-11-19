@@ -9,36 +9,39 @@ on:
   push:
     branches: [main]
     paths:
+      - .bun-version
       - build.js
       - install.sh
       - install.ps1
       - uninstall.sh
       - uninstall.ps1
       - src/**
+      - '!src/tests/openai-proxy*.test.mjs'
       - .github/workflows/compat-daily.yml
       - .github/workflows/installer-checks.yml
       - .github/workflows/platform-compat.yml
       - .github/workflows/release.yml
-      - .github/workflows/close-inactive-issues.yml
       - .github/scripts/**
+      - '!.github/scripts/close-inactive-issues*.cjs'
   pull_request:
     paths:
+      - .bun-version
       - build.js
       - install.sh
       - install.ps1
       - uninstall.sh
       - uninstall.ps1
       - src/**
+      - '!src/tests/openai-proxy*.test.mjs'
       - .github/workflows/compat-daily.yml
       - .github/workflows/installer-checks.yml
       - .github/workflows/platform-compat.yml
       - .github/workflows/release.yml
-      - .github/workflows/close-inactive-issues.yml
       - .github/scripts/**
+      - '!.github/scripts/close-inactive-issues*.cjs'
 
 permissions:
-  contents: write
-  issues: write
+  contents: read
 
 jobs:
   resolve-versions:
@@ -48,14 +51,10 @@ jobs:
       versions: ${{ steps.resolve.outputs.versions }}
       default: ${{ steps.resolve.outputs.default }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          package-manager-cache: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Resolve and deduplicate Claude versions
         id: resolve
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
             const fs = require('fs');
@@ -72,68 +71,57 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - name: Set up Node.js 24
-        uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          package-manager-cache: false
 
       - name: Verify generated installers
-        run: node build.js --check
+        run: bun build.js --check
 
       - name: Run AST patch regression tests
-        run: node src/shared/ast-patches.test.mjs
+        run: bun src/shared/ast-patches.test.mjs
 
       - name: Run patch semantic tests
-        run: node src/shared/patch.test.mjs
+        run: bun src/shared/patch.test.mjs
 
       - name: Run pentest patch regression tests
-        run: node src/shared/pentest-patches.test.mjs
+        run: bun src/shared/pentest-patches.test.mjs
 
       - name: Run pentest graph pruning regression tests
-        run: node src/shared/pentest-pruner.test.mjs
+        run: bun src/shared/pentest-pruner.test.mjs
 
       - name: Run clean source and repatch regression tests
-        run: node src/shared/source-backup.test.mjs
-
-      - name: Test inactive issue policy
-        run: node .github/scripts/close-inactive-issues.test.cjs
+        run: bun src/shared/source-backup.test.mjs
 
       - name: Run terminal reply regression tests
-        run: node src/shared/terminal-reply.test.mjs
+        run: bun src/shared/terminal-reply.test.mjs
 
       - name: Run Lean mode regression tests
-        run: node src/shared/lean.test.mjs
+        run: bun src/shared/lean.test.mjs
 
       - name: Run updater environment regression tests
-        run: node src/shared/updater.test.mjs
+        run: bun src/shared/updater.test.mjs
 
       - name: Run bounded startup verification regression tests
-        run: node src/shared/startup-check.test.mjs
+        run: bun src/shared/startup-check.test.mjs
 
       - name: Run provider auth and proxy effort regression tests
-        run: node src/shared/provider.test.mjs
+        run: bun src/shared/provider.test.mjs
 
       - name: Run prompt assembly regression tests
-        run: node src/shared/prompt-assembly.test.mjs
-
-      - name: Run Chat Completions protocol regression tests
-        run: node --test src/shared/openai-proxy.test.mjs
+        run: bun src/shared/prompt-assembly.test.mjs
 
       - name: Run Bun.ant shim tests
-        run: node src/shared/bun-ant-shim.test.mjs
+        run: bun src/shared/bun-ant-shim.test.mjs
 
       - name: Check CI version resolution, coverage gates and release assets
-        run: node .github/scripts/ci-gates.test.cjs
+        run: bun .github/scripts/ci-gates.test.cjs
 
       - name: Check embedded JavaScript syntax
         shell: bash
         run: |
           set -euo pipefail
           for file in src/shared/*.mjs src/shared/*.cjs src/windows/*.mjs src/windows/*.cjs src/ci/*.cjs .github/scripts/*.cjs; do
-            node --check "$file"
+            bun --check "$file"
           done
 
   smoke:
@@ -157,26 +145,20 @@ jobs:
     timeout-minutes: 30
     env:
       SMOKE_PLATFORM: ${{ matrix.platform }}
-      SMOKE_RUNNER: ${{ matrix.os }}
       EXPECTED_ARCH: ${{ matrix.arch }}
       CLAUDE_CHANNEL: ${{ matrix.claude.channels }}
       CLAUDE_VERSION: ${{ matrix.claude.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - name: Set up Node.js 24
-        uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          package-manager-cache: false
 
-      - name: Set up Bun (canary)
-        uses: oven-sh/setup-bun@v2
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: canary
+          bun-version-file: .bun-version
 
       - name: Cache ~/.npm (claude-code-<plat> tarball)
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ~/.npm
           key: npm-claude-v2-${{ runner.os }}-${{ runner.arch }}-${{ matrix.claude.version }}
@@ -207,7 +189,6 @@ jobs:
         shell: bash
         run: |
           bun --version
-          node --version
           uname -a
           [[ "$(uname -m)" == "$EXPECTED_ARCH" ]] || { echo "::error::unexpected runner architecture"; exit 1; }
           if [[ "$RUNNER_OS" == "macOS" ]]; then
@@ -215,7 +196,7 @@ jobs:
           fi
 
       - name: Configure a provider before fresh installation
-        run: node src/ci/provider-startup-fixture.cjs seed
+        run: bun src/ci/provider-startup-fixture.cjs seed
 
       - name: Run install.sh (npm-fallback path)
         shell: bash
@@ -273,29 +254,13 @@ jobs:
             console.log("bun-ant shim: OK");
           '
 
-      - name: Run Bun.ant shim suite under Bun
-        shell: bash
-        run: bun src/shared/bun-ant-shim.test.mjs
-
-      - name: Run Chat Completions protocol and HTTP integration tests under Bun
-        shell: bash
-        run: bun test src/shared/openai-proxy.test.mjs src/shared/openai-proxy.integration.test.mjs
-
-      - name: Verify version-only startup with a configured provider
-        shell: bash
-        run: CLAWGOD_TEST_BUN="$(command -v bun)" node src/shared/startup-check.test.mjs
-
-      - name: Verify extracted text assets under Bun
-        shell: bash
-        run: CLAWGOD_TEST_BUN="$(command -v bun)" node src/shared/post-process.test.mjs
-
       - name: Check patch coverage against the known baseline
         shell: bash
         run: |
-          node src/ci/check-patch-coverage.cjs /tmp/install.log "$SMOKE_PLATFORM"
+          bun src/ci/check-patch-coverage.cjs /tmp/install.log "$SMOKE_PLATFORM"
 
       - name: Verify configured provider was preserved
-        run: node src/ci/provider-startup-fixture.cjs verify /tmp/install.log
+        run: bun src/ci/provider-startup-fixture.cjs verify /tmp/install.log
 
       - name: Verify lean settings applied
         shell: bash
@@ -348,7 +313,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          out=$(node "$HOME/.clawgod/startup-check.cjs" "$(command -v bun)" "$HOME/.clawgod/cli.cjs" --probe-tools 2>&1)
+          out=$(bun "$HOME/.clawgod/startup-check.cjs" "$(command -v bun)" "$HOME/.clawgod/cli.cjs" --probe-tools 2>&1)
           rc=$?
           set -e
           echo "$out"
@@ -396,56 +361,9 @@ jobs:
 
           echo "── All functional checks passed ──"
 
-      - name: Open / update issue on scheduled failure
-        if: failure() && github.event_name == 'schedule'
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const fs = require('fs');
-            const path = require('path');
-            const stamp = path.join(process.env.HOME, '.clawgod', '.source-version');
-            const claudeVersion = fs.existsSync(stamp)
-              ? fs.readFileSync(stamp, 'utf8').trim()
-              : process.env.CLAUDE_VERSION || 'unknown';
-            const prefix = process.env.SMOKE_PLATFORM === 'linux'
-              ? 'compat-daily'
-              : `compat-daily/${process.env.SMOKE_PLATFORM}`;
-            const title = `${prefix}/${process.env.CLAUDE_CHANNEL}: broke (claude ${claudeVersion})`;
-            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-            const { data: open } = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-              labels: 'compat-broken',
-              per_page: 100,
-            });
-            const dup = open.find(i => i.title === title);
-            if (dup) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: dup.number,
-                body: `Re-failed ${new Date().toISOString().slice(0,10)} — ${runUrl}`,
-              });
-            } else {
-              await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title,
-                labels: ['compat-broken', 'bug'],
-                body: [
-                  `Daily compatibility run failed on \`${process.env.SMOKE_RUNNER}\`.`,
-                  ``,
-                  `- Requested version: \`${process.env.CLAUDE_CHANNEL}\``,
-                  `- Claude binary: \`${claudeVersion}\``,
-                  `- Run: ${runUrl}`,
-                  ``,
-                  `Auto-opened by \`.github/workflows/compat-daily.yml\`.`,
-                ].join('\n'),
-              });
-            }
-
   publish-badge:
+    permissions:
+      contents: write
     needs: [resolve-versions, build-sources, installer-checks, smoke, windows-smoke]
     if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
@@ -475,6 +393,41 @@ jobs:
           git push -fq "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:badges
           echo "Published badge: claude $version"
 
+  report-failures:
+    needs: [resolve-versions, smoke, windows-smoke]
+    if: ${{ !cancelled() && github.event_name == 'schedule' && (needs.smoke.result == 'failure' || needs.windows-smoke.result == 'failure') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          VERSIONS: ${{ needs.resolve-versions.outputs.versions }}
+        with:
+          script: |
+            const repo = context.repo;
+            const versions = new Map(JSON.parse(process.env.VERSIONS).map(row => [row.channels, row.version]));
+            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRunAttempt, {
+              ...repo, run_id: context.runId, attempt_number: Number(process.env.GITHUB_RUN_ATTEMPT),
+            });
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              ...repo, labels: 'compat-broken', state: 'open', per_page: 100,
+            });
+            for (const job of jobs) {
+              if (!['failure', 'timed_out'].includes(job.conclusion)) continue;
+              const match = /^(Linux|macOS|Windows) smoke .*?\bClaude ([^)]+)\)$/.exec(job.name);
+              if (!match || !versions.has(match[2])) continue;
+              const [, platform, channels] = match;
+              const prefix = platform === 'Linux' ? 'compat-daily' : 'compat-daily/' + platform.toLowerCase();
+              const title = `${prefix}/${channels}: broke (claude ${versions.get(channels)})`;
+              const body = `${job.name} failed. [View job log](${job.html_url})`;
+              const issue = open.find(item => !item.pull_request && item.title === title);
+              if (issue) await github.rest.issues.createComment({ ...repo, issue_number: issue.number, body });
+              else await github.rest.issues.create({ ...repo, title, body, labels: ['compat-broken', 'bug'] });
+            }
+
   windows-smoke:
     name: Windows smoke (PowerShell 5.1, Claude ${{ matrix.claude.channels }})
     needs: resolve-versions
@@ -484,37 +437,23 @@ jobs:
       fail-fast: false
       matrix:
         claude: ${{ fromJSON(needs.resolve-versions.outputs.versions) }}
-        bun: [canary]
     env:
       NPM_CONFIG_CACHE: ${{ github.workspace }}\.npm-cache
       CLAUDE_CHANNEL: ${{ matrix.claude.channels }}
       CLAUDE_VERSION: ${{ matrix.claude.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - name: Set up Node.js 24
-        uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          package-manager-cache: false
 
       - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: ${{ matrix.bun }}
+          bun-version-file: .bun-version
 
       - name: Set up Python for ConPTY tests
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: '3.12'
-
-      - name: Test bounded startup verification and configured-provider version queries
-        shell: powershell
-        run: |
-          $env:CLAWGOD_TEST_BUN = (Get-Command bun).Source
-          node src/shared/startup-check.test.mjs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ./src/windows/startup-check.test.ps1
 
       - name: Install terminal test dependencies
         shell: powershell
@@ -523,7 +462,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Cache npm downloads
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ${{ github.workspace }}\.npm-cache
           key: npm-claude-v2-${{ runner.os }}-${{ runner.arch }}-${{ matrix.claude.version }}
@@ -550,32 +489,14 @@ jobs:
         shell: powershell
         run: |
           Write-Host "PowerShell $($PSVersionTable.PSVersion)"
-          node --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           bun --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           rg --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Verify generated installers on Windows
-        shell: powershell
-        run: node build.js --check
-
-      - name: Verify Windows installer encoding
-        shell: powershell
-        run: |
-          $bytes = [System.IO.File]::ReadAllBytes("$env:GITHUB_WORKSPACE\install.ps1")
-          $nonAscii = $bytes | Where-Object { $_ -gt 0x7F } | Select-Object -First 1
-          if ($null -ne $nonAscii) {
-            Write-Error 'install.ps1 must be BOM-free ASCII for Windows PowerShell 5.1 and irm | iex'
-          }
-          $content = [System.Text.Encoding]::ASCII.GetString($bytes)
-          if (-not $content.StartsWith('#Requires')) {
-            Write-Error 'install.ps1 must start directly with #Requires'
-          }
-
       - name: Configure a provider before fresh installation
-        run: node src/ci/provider-startup-fixture.cjs seed
+        run: bun src/ci/provider-startup-fixture.cjs seed
 
       - name: Run install.ps1 with version argument (npm-fallback path)
         shell: powershell
@@ -668,30 +589,17 @@ jobs:
             Write-Error 'bun-ant shim check failed'
           }
 
-      - name: Run Chat Completions protocol and HTTP integration tests under Bun
-        shell: powershell
-        run: |
-          bun test src/shared/openai-proxy.test.mjs src/shared/openai-proxy.integration.test.mjs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Verify extracted text assets under Bun
-        shell: powershell
-        run: |
-          $env:CLAWGOD_TEST_BUN = (Get-Command bun).Source
-          node src/shared/post-process.test.mjs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
       - name: Check patch coverage against the known baseline
         shell: powershell
         run: |
           $log = Join-Path $env:RUNNER_TEMP 'install-windows.log'
-          node src/ci/check-patch-coverage.cjs $log windows
+          bun src/ci/check-patch-coverage.cjs $log windows
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify configured provider was preserved
         shell: powershell
         run: |
-          node src/ci/provider-startup-fixture.cjs verify (Join-Path $env:RUNNER_TEMP 'install-windows.log')
+          bun src/ci/provider-startup-fixture.cjs verify (Join-Path $env:RUNNER_TEMP 'install-windows.log')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Smoke test - clawgod --version
@@ -723,7 +631,7 @@ jobs:
           $previousErrorAction = $ErrorActionPreference
           try {
             $ErrorActionPreference = 'Continue'
-            $out = & node (Join-Path $env:USERPROFILE '.clawgod\startup-check.cjs') `
+            $out = & bun (Join-Path $env:USERPROFILE '.clawgod\startup-check.cjs') `
               (Get-Command bun).Source (Join-Path $env:USERPROFILE '.clawgod\cli.cjs') --probe-tools 2>&1 | Out-String
             $rc = $LASTEXITCODE
           } finally {
@@ -741,7 +649,7 @@ jobs:
           $clawDir = Join-Path $env:USERPROFILE '.clawgod'
           $version = (Get-Content (Join-Path $clawDir '.source-version') -Raw).Trim()
           $fixture = Join-Path $env:RUNNER_TEMP 'tui-native'
-          node src/windows/npm-fetch.mjs "@anthropic-ai/claude-code-win32-x64@$version" $fixture
+          bun src/shared/npm-fetch.mjs "@anthropic-ai/claude-code-win32-x64@$version" $fixture
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $testArgs = @(
             'src/ci/tui-smoke.py',
@@ -756,7 +664,7 @@ jobs:
 
       - name: Upload terminal regression evidence
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: windows-tui-${{ matrix.claude.version }}
           if-no-files-found: ignore
@@ -764,49 +672,3 @@ jobs:
             ${{ runner.temp }}/tui-artifacts/*.log
             ${{ runner.temp }}/tui-artifacts/*.txt
             ${{ runner.temp }}/tui-artifacts/*.json
-
-      - name: Open or update issue on scheduled failure
-        if: failure() && github.event_name == 'schedule'
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const fs = require('fs');
-            const path = require('path');
-            const stamp = path.join(process.env.USERPROFILE, '.clawgod', '.source-version');
-            const claudeVersion = fs.existsSync(stamp)
-              ? fs.readFileSync(stamp, 'utf8').trim()
-              : process.env.CLAUDE_VERSION || 'unknown';
-            const title = `compat-daily/windows/${process.env.CLAUDE_CHANNEL}: broke (claude ${claudeVersion})`;
-            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-            const { data: open } = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-              labels: 'compat-broken',
-              per_page: 100,
-            });
-            const dup = open.find(i => i.title === title);
-            if (dup) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: dup.number,
-                body: `Re-failed ${new Date().toISOString().slice(0,10)} - ${runUrl}`,
-              });
-            } else {
-              await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title,
-                labels: ['compat-broken', 'bug'],
-                body: [
-                  `Daily compatibility run failed on \`windows-latest\`.`,
-                  ``,
-                  `- Requested version: \`${process.env.CLAUDE_CHANNEL}\``,
-                  `- Claude binary: \`${claudeVersion}\``,
-                  `- Run: ${runUrl}`,
-                  ``,
-                  `Auto-opened by \`.github/workflows/compat-daily.yml\`.`,
-                ].join('\n'),
-              });
-            }

@@ -21,18 +21,6 @@ Write-Host "  ClawGod_Y Installer" -ForegroundColor White -NoNewline
 Write-Host " (Windows)" -ForegroundColor DarkGray
 Write-Host ""
 
-try { $null = Get-Command node -ErrorAction Stop }
-catch {
-    Write-Err "Node.js is required (>= 18) for the patcher. Install from https://nodejs.org"
-    exit 1
-}
-
-$nodeVer = [int](node -e "console.log(process.versions.node.split('.')[0])")
-if ($nodeVer -lt 18) {
-    Write-Err "Node.js >= 18 required (found v$nodeVer)"
-    exit 1
-}
-
 $BunBin = $null
 try { $BunBin = (Get-Command bun -ErrorAction Stop).Source } catch {}
 if (-not $BunBin) {
@@ -40,7 +28,7 @@ if (-not $BunBin) {
     if (Test-Path $homeBun) { $BunBin = $homeBun }
 }
 if (-not $BunBin) {
-    Write-Dim "Installing Bun (required runtime for v2.1.113+ cli.js) ..."
+    Write-Dim "Installing Bun (sole runtime: patcher and CLI) ..."
     try {
         Invoke-Expression "$(Invoke-RestMethod https://bun.sh/install.ps1)" 2>$null | Out-Null
     } catch {}
@@ -142,81 +130,41 @@ Write-Dim "Fetching $npmPkg@$Version from npm registry ..."
 $NativeBinTmpDir = Join-Path $env:TEMP "clawgod-binary-$([Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Force -Path $NativeBinTmpDir | Out-Null
 $fetchScript = Join-Path $NativeBinTmpDir "fetch.mjs"
-$useNpmFetch = $false
-$noProxy = $env:NO_PROXY
-if ($env:HTTPS_PROXY -or $env:HTTP_PROXY) {
-    if ($noProxy -match '(?i)npmjs\.org') {
-        Write-Dim "NO_PROXY includes npmjs.org -- using direct fetch"
-    } elseif (Get-Command npm -ErrorAction SilentlyContinue) {
-        $useNpmFetch = $true
-    } else {
-        Write-Warn "HTTP proxy detected but npm not found. fetch.mjs may not work through your proxy."
-        Write-Warn "Install npm or set NO_PROXY=registry.npmjs.org to bypass."
-    }
-}
-if ($useNpmFetch) {
-    Push-Location $NativeBinTmpDir
-    try {
-        $npmOut = npm pack "$npmPkg@$Version" --silent 2>&1
-        $tarball = Get-ChildItem $NativeBinTmpDir -Filter "*.tgz" | Select-Object -First 1
-        if ($tarball) {
-            tar xzf $tarball.FullName 2>$null
-            $cand = Join-Path $NativeBinTmpDir "package\claude.exe"
-            if ((Test-Path $cand) -and (Get-Item $cand).Length -gt 10MB) {
-                $NativeBin = $cand
-                $pkgJson = Join-Path $NativeBinTmpDir "package\package.json"
-                if (Test-Path $pkgJson) {
-                    $NativeBinLabel = (Get-Content $pkgJson -Raw | ConvertFrom-Json).version
-                } else { $NativeBinLabel = "npm-latest" }
-                Write-OK "Downloaded $npmPkg@$NativeBinLabel (via npm)"
-            }
-        }
-    } finally { Pop-Location }
-    if (-not $NativeBin) {
-        Remove-Item -Recurse -Force $NativeBinTmpDir -ErrorAction SilentlyContinue
-        Write-Err "npm pack failed. Output:"
-        Write-Dim ($npmOut -join "`n")
-        exit 1
-    }
-} else {
 @'
 {{CLAWGOD:npm-fetch.mjs}}
 '@ | Set-Content $fetchScript -Encoding UTF8
 
-    $output = & node $fetchScript "$npmPkg@$Version" $NativeBinTmpDir 2>&1
-    $exitCode = $LASTEXITCODE
-    $output | ForEach-Object { Write-Host "  $_" }
-    Remove-Item -Force $fetchScript -ErrorAction SilentlyContinue
+$output = & $BunBin $fetchScript "$npmPkg@$Version" $NativeBinTmpDir 2>&1
+$exitCode = $LASTEXITCODE
+$output | ForEach-Object { Write-Host "  $_" }
+Remove-Item -Force $fetchScript -ErrorAction SilentlyContinue
 
-    if ($exitCode -ne 0) {
-        Remove-Item -Recurse -Force $NativeBinTmpDir -ErrorAction SilentlyContinue
-        Write-Err "Fetch failed (node exit $exitCode). Install the official binary manually:"
-        Write-Err "    irm https://claude.ai/install.ps1 | iex"
-        exit 1
-    }
-
-    $cand = Join-Path $NativeBinTmpDir "package\claude.exe"
-    if ((Test-Path $cand) -and (Get-Item $cand).Length -gt 10MB) {
-        $NativeBin = $cand
-        $verLine = $output | Where-Object { $_ -match '^VERSION=' } | Select-Object -First 1
-        if ($verLine) { $NativeBinLabel = ($verLine -replace '^VERSION=', '').Trim() }
-        else { $NativeBinLabel = "npm-latest" }
-    } else {
-        Remove-Item -Recurse -Force $NativeBinTmpDir -ErrorAction SilentlyContinue
-        Write-Err "Tarball downloaded but expected package\claude.exe was missing or too small."
-        Write-Err "  Tempdir kept for inspection: $NativeBinTmpDir"
-        exit 1
-    }
-    Write-OK "Downloaded $npmPkg@$NativeBinLabel"
+if ($exitCode -ne 0) {
+    Remove-Item -Recurse -Force $NativeBinTmpDir -ErrorAction SilentlyContinue
+    Write-Err "Fetch failed (bun exit $exitCode). Install the official binary manually:"
+    Write-Err "    irm https://claude.ai/install.ps1 | iex"
+    exit 1
 }
+
+$cand = Join-Path $NativeBinTmpDir "package\claude.exe"
+if ((Test-Path $cand) -and (Get-Item $cand).Length -gt 10MB) {
+    $NativeBin = $cand
+    $verLine = $output | Where-Object { $_ -match '^VERSION=' } | Select-Object -First 1
+    if ($verLine) { $NativeBinLabel = ($verLine -replace '^VERSION=', '').Trim() }
+    else { $NativeBinLabel = "npm-latest" }
+} else {
+    Remove-Item -Recurse -Force $NativeBinTmpDir -ErrorAction SilentlyContinue
+    Write-Err "Tarball downloaded but expected package\claude.exe was missing or too small."
+    Write-Err "  Tempdir kept for inspection: $NativeBinTmpDir"
+    exit 1
+}
+Write-OK "Downloaded $npmPkg@$NativeBinLabel"
 
 $RollbackDir = $null
 $script:RollbackPending = $false
-$RollbackFiles = @("cli.original.cjs","cli.original.cjs.bak","cli.original.js",".source-version",
-    "ast-helpers.mjs","patch-rules.mjs","pentest-prompts.mjs","prompt-runtime.cjs",
-    "source-backup.json","bunfs","vendor","pathmap.json","extract-natives.mjs","post-process.mjs",
-    "openai-proxy.cjs","feature-gates.cjs","cli.cjs",".clawgod-version","claude.fallback.exe","uninstall.ps1","lean-settings.json","patches.json",
-    "startup-check.cjs","compile-runtime.mjs",".compiled-runtime",".compiled-runtime-cache.json","runtime-helpers.cjs","bun-ant-shim.cjs","system-prompt.md","patch.mjs","patch-registry.mjs","ast-patches.mjs","pentest-patches.mjs","pentest-scanners.mjs","pentest-trimming.mjs","pentest-policy-text.mjs","pentest-pruner.mjs","lean-mode.cjs","acorn.mjs","acorn.LICENSE")
+$RollbackFiles = @(
+{{CLAWGOD:rollback-files}}
+)
 $origCjs = Join-Path $ClawDir "cli.original.cjs"
 $sourceVerFile = Join-Path $ClawDir ".source-version"
 if ((Test-Path $origCjs) -and (Test-Path $sourceVerFile)) {
@@ -289,7 +237,7 @@ $dstCli = Join-Path $ClawDir "cli.original.js"
 if (Test-Path $dstCli) { Remove-Item -Force $dstCli }
 
 Write-Dim "Extracting cli.js + napi modules from $NativeBinLabel ..."
-& node $extractorPath $NativeBin $ClawDir 2>&1 | ForEach-Object { Write-Host "  $_" }
+& $BunBin $extractorPath $NativeBin $ClawDir 2>&1 | ForEach-Object { Write-Host "  $_" }
 if (($LASTEXITCODE -ne 0) -or -not (Test-Path $dstCli)) {
     Write-Err "Failed to extract cli.js from native binary"
     Restore-Install
@@ -354,7 +302,7 @@ Write-OK "Bun.ant runtime shim created (bun-ant-shim.cjs)"
 {{CLAWGOD:ast-helpers.mjs}}
 '@ | Set-Content (Join-Path $ClawDir "ast-helpers.mjs") -Encoding UTF8
 
-& node $postProc 2>&1 | ForEach-Object { Write-Host "  $_" }
+& $BunBin $postProc 2>&1 | ForEach-Object { Write-Host "  $_" }
 if (($LASTEXITCODE -ne 0) -or -not (Test-Path (Join-Path $ClawDir "cli.original.cjs"))) {
     Write-Err "Post-process failed"
     Restore-Install
@@ -423,12 +371,12 @@ Write-OK "Patcher created (patch.mjs)"
 Write-Dim "Applying patches ..."
 $patchExitCode = & {
     $ErrorActionPreference = 'Continue'
-    node (Join-Path $ClawDir "patch.mjs") --capture-and-apply 2>&1 | ForEach-Object { Write-Host "  $_" }
+    & $BunBin (Join-Path $ClawDir "patch.mjs") --capture-and-apply 2>&1 | ForEach-Object { Write-Host "  $_" }
     $LASTEXITCODE
 }
 if ($patchExitCode -ne 0) {
     $exitCode = $patchExitCode
-    Write-Err "Patching failed (node exit $exitCode). Installation aborted."
+    Write-Err "Patching failed (bun exit $exitCode). Installation aborted."
     Restore-Install
     if (-not $RollbackDir) {
         Write-Err "No previous working installation found to roll back."
@@ -507,7 +455,7 @@ $leanApplyScript = @'
 {{CLAWGOD:lean-apply.cjs}}
 '@
 try {
-    node -e $leanApplyScript "$leanSettings" (Join-Path $ClawDir "patches.json") 2>$null
+    & $BunBin -e $leanApplyScript (Join-Path $ClawDir "lean-mode.cjs") "$leanSettings" (Join-Path $ClawDir "patches.json") 2>$null
     Write-OK "Lean settings applied (strictest, clawgod-scoped): ~\.clawgod\lean-settings.json"
 } catch {}
 
@@ -516,7 +464,7 @@ $sanityCli = Join-Path $ClawDir "cli.cjs"
 function Invoke-StartupProbe {
     $ErrorActionPreference = 'Continue'
     try {
-        $output = (& node (Join-Path $ClawDir "startup-check.cjs") $BunBin $sanityCli @args 2>&1 | Out-String)
+        $output = (& $BunBin (Join-Path $ClawDir "startup-check.cjs") $BunBin $sanityCli @args 2>&1 | Out-String)
         return @{ Output = $output; ExitCode = $LASTEXITCODE }
     } catch {
         return @{ Output = "$_"; ExitCode = 1 }

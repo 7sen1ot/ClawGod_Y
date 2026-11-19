@@ -9,15 +9,15 @@ const require = createRequire(import.meta.url);
 const read = path => fs.readFileSync(new URL(path, import.meta.url), 'utf8');
 const wrapper = read('./cli.cjs');
 const unix = read('../templates/install.sh');
-const unixApply = unix.match(/node -e '\n(const \{leanApply\}[^']*)\n' "\$CLAWGOD_DIR\/lean-settings\.json" "\$CLAWGOD_DIR\/lean-mode\.cjs" "\$CLAWGOD_DIR\/patches\.json"/)?.[1];
+const unixApply = unix.match(/"\$BUN_BIN" -e '\n(const \{leanApply\}[^']*)\n' "\$CLAWGOD_DIR\/lean-mode\.cjs" "\$CLAWGOD_DIR\/lean-settings\.json" "\$CLAWGOD_DIR\/patches\.json"/)?.[1];
 assert.ok(unixApply, 'install.sh must apply Lean via lean-mode.cjs into the clawgod-scoped file');
 for (const name of ['uninstall.sh', 'uninstall.ps1']) {
-  const uninstall = read(`../templates/${name}`);
+  const uninstall = read(`../../${name}`);
   assert.ok(uninstall.includes('lean-settings.json'), `${name} must remove the clawgod-scoped Lean settings`);
   assert.ok(!uninstall.replace(/lean-settings\.json/g, '').includes('settings.json'), `${name} must not touch ~/.claude/settings.json`);
 }
 const winApply = read('../windows/lean-apply.cjs');
-assert.ok(winApply.includes('leanApply(process.argv[1], undefined, process.argv[2])'), 'lean-apply must leave shared settings untouched');
+assert.ok(winApply.includes('.leanApply(process.argv[2], undefined, process.argv[3])'), 'lean-apply must leave shared settings untouched');
 const home = fs.mkdtempSync(join(tmpdir(), 'clawgod-lean-test-'));
 const bundleDir = join(home, 'installation');
 const dir = join(home, '.clawgod');
@@ -103,11 +103,11 @@ try {
 
   const patches = join(dir, 'patches.json');
   for (const [code, args] of [
-    [winApply, [leanSettings, patches]],
-    [unixApply, [leanSettings, require.resolve('./lean-mode.cjs'), patches]],
+    [winApply, [require.resolve('./lean-mode.cjs'), leanSettings, patches]],
+    [unixApply, [require.resolve('./lean-mode.cjs'), leanSettings, patches]],
   ]) {
     reset();
-    runInNewContext(code, { require, process: { argv: ['node', ...args] } });
+    runInNewContext(code, { require, process: { argv: ['bun', ...args] } });
     checkStrict(loadLean());
     assert.deepEqual(loadSettings(), originalSettings, 'installers must preserve Claude Code settings');
     assert.equal(JSON.parse(fs.readFileSync(patches, 'utf8'))['agent-teams'], true);

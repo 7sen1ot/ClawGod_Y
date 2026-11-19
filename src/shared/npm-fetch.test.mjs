@@ -40,10 +40,13 @@ const server = createServer((req, res) => {
 try {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const preload = join(root, 'registry.cjs');
-  // Redirect the production HTTPS registry request to this test's loopback server.
-  writeFileSync(preload, `const https=require('node:https'),http=require('node:http');
-https.request=(options,...args)=>http.request({...options,hostname:'127.0.0.1',port:${server.address().port}},...args);
-require('node:module').syncBuiltinESMExports();`);
+  // Redirect the production registry fetch to this test's loopback server.
+  writeFileSync(preload, `const port = ${server.address().port};
+const realFetch = fetch;
+globalThis.fetch = (input, init = {}) => {
+  const url = String(input).replace('https://registry.npmjs.org', 'http://127.0.0.1:' + port);
+  return realFetch(url, { ...init, redirect: 'manual' });
+};`);
   const run = out => new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ['--require', preload, fileURLToPath(new URL('./npm-fetch.mjs', import.meta.url)), '@anthropic-ai/claude-code-win32-x64@2.1.316', out], { timeout: 10000 });
     let output = '';

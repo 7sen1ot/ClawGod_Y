@@ -28,9 +28,13 @@ function userPart(block) {
   if (block.type === 'document') {
     if (block.citations && block.citations.enabled) throw new Error('Document citations are not supported by openai-chat');
     if (source.type === 'text') return { type: 'text', text: textValue(source.data) };
+    if (source.type === 'url' && source.url) {
+      // OpenAI-compatible providers fetch URL documents themselves; forward the URL.
+      return { type: 'text', text: 'Document (' + (block.title || 'document') + '): ' + source.url };
+    }
     if (source.type === 'base64' && source.media_type === 'application/pdf' && source.data)
       return { type: 'file', file: { filename: block.title || 'document.pdf', file_data: 'data:application/pdf;base64,' + source.data } };
-    throw new Error('Unsupported document source; use base64 PDF (requires upstream file support) or text');
+    throw new Error('Unsupported document source; use base64 PDF, a URL, or text');
   }
   throw new Error('Unsupported user content block: ' + block.type);
 }
@@ -92,27 +96,51 @@ function translateRequest(body, configuredEffort) {
     else throw new Error('Unsupported tool_choice');
     if (choice.disable_parallel_tool_use !== undefined) result.parallel_tool_calls = !choice.disable_parallel_tool_use;
   }
-  if (body.output_config && body.output_config.format) throw new Error('Structured output format is not supported by openai-chat');
+  if (body.output_config && body.output_config.format) {
+    var format = body.output_config.format;
+    if (format.type === 'json_schema' && format.json_schema && typeof format.json_schema.schema === 'object') {
+      result.response_format = { type: 'json_schema', json_schema: {
+        name: format.json_schema.name || 'output',
+        schema: format.json_schema.schema,
+        strict: format.json_schema.strict === true,
+      } };
+    } else if (format.type === 'json_object') {
+      result.response_format = { type: 'json_object' };
+    }
+  }
   if (body.stream) result.stream_options = { include_usage: true };
   return result;
 }
 
 function estimateTokens(request) {
-  var bytes = 0, mediaTokens = 0;
+  var mediaTokens = 0;
   function visit(value) {
-    if (typeof value === 'string') bytes += encoder.encode(value).length;
-    else if (Array.isArray(value)) value.forEach(visit);
+    if (Array.isArray(value)) value.forEach(visit);
     else if (value && typeof value === 'object') {
       if (value.type === 'image_url' && value.image_url) { mediaTokens += 1600; return; }
       if (value.type === 'file' && value.file && typeof value.file.file_data === 'string' && value.file.file_data.startsWith('data:application/pdf;base64,')) {
         mediaTokens += Math.ceil(value.file.file_data.split(',')[1].length / 4); return;
       }
-      for (var key of Object.keys(value)) { bytes += key.length; visit(value[key]); }
+      for (var key of Object.keys(value)) visit(value[key]);
     }
   }
   visit(request.messages);
   visit(request.tools);
-  return Math.max(1, Math.ceil(bytes / 3) + mediaTokens + request.messages.length * 4);
+  // ~3.5 characters per token for English/code; CJK-heavy text runs closer to
+  // one character per token, so count those separately.
+  var cjk = 0, ascii = 0;
+  function countText(value) {
+    if (typeof value === 'string') {
+      for (var i = 0; i < value.length; i++) {
+        if (value.charCodeAt(i) > 0x2e7f) cjk++;
+        else ascii++;
+      }
+    } else if (Array.isArray(value)) value.forEach(countText);
+    else if (value && typeof value === 'object') { for (var key of Object.keys(value)) countText(value[key]); }
+  }
+  countText(request.messages);
+  countText(request.tools);
+  return Math.max(1, Math.ceil(ascii / 3.5) + cjk + mediaTokens + request.messages.length * 4);
 }
 
 function mapFinishReason(reason, hasToolCalls) {

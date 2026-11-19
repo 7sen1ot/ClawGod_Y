@@ -21,18 +21,6 @@ Write-Host "  ClawGod_Y Installer" -ForegroundColor White -NoNewline
 Write-Host " (Windows)" -ForegroundColor DarkGray
 Write-Host ""
 
-try { $null = Get-Command node -ErrorAction Stop }
-catch {
-    Write-Err "Node.js is required (>= 18) for the patcher. Install from https://nodejs.org"
-    exit 1
-}
-
-$nodeVer = [int](node -e "console.log(process.versions.node.split('.')[0])")
-if ($nodeVer -lt 18) {
-    Write-Err "Node.js >= 18 required (found v$nodeVer)"
-    exit 1
-}
-
 $BunBin = $null
 try { $BunBin = (Get-Command bun -ErrorAction Stop).Source } catch {}
 if (-not $BunBin) {
@@ -40,7 +28,7 @@ if (-not $BunBin) {
     if (Test-Path $homeBun) { $BunBin = $homeBun }
 }
 if (-not $BunBin) {
-    Write-Dim "Installing Bun (required runtime for v2.1.113+ cli.js) ..."
+    Write-Dim "Installing Bun (sole runtime: patcher and CLI) ..."
     try {
         Invoke-Expression "$(Invoke-RestMethod https://bun.sh/install.ps1)" 2>$null | Out-Null
     } catch {}
@@ -142,46 +130,7 @@ Write-Dim "Fetching $npmPkg@$Version from npm registry ..."
 $NativeBinTmpDir = Join-Path $env:TEMP "clawgod-binary-$([Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Force -Path $NativeBinTmpDir | Out-Null
 $fetchScript = Join-Path $NativeBinTmpDir "fetch.mjs"
-$useNpmFetch = $false
-$noProxy = $env:NO_PROXY
-if ($env:HTTPS_PROXY -or $env:HTTP_PROXY) {
-    if ($noProxy -match '(?i)npmjs\.org') {
-        Write-Dim "NO_PROXY includes npmjs.org -- using direct fetch"
-    } elseif (Get-Command npm -ErrorAction SilentlyContinue) {
-        $useNpmFetch = $true
-    } else {
-        Write-Warn "HTTP proxy detected but npm not found. fetch.mjs may not work through your proxy."
-        Write-Warn "Install npm or set NO_PROXY=registry.npmjs.org to bypass."
-    }
-}
-if ($useNpmFetch) {
-    Push-Location $NativeBinTmpDir
-    try {
-        $npmOut = npm pack "$npmPkg@$Version" --silent 2>&1
-        $tarball = Get-ChildItem $NativeBinTmpDir -Filter "*.tgz" | Select-Object -First 1
-        if ($tarball) {
-            tar xzf $tarball.FullName 2>$null
-            $cand = Join-Path $NativeBinTmpDir "package\claude.exe"
-            if ((Test-Path $cand) -and (Get-Item $cand).Length -gt 10MB) {
-                $NativeBin = $cand
-                $pkgJson = Join-Path $NativeBinTmpDir "package\package.json"
-                if (Test-Path $pkgJson) {
-                    $NativeBinLabel = (Get-Content $pkgJson -Raw | ConvertFrom-Json).version
-                } else { $NativeBinLabel = "npm-latest" }
-                Write-OK "Downloaded $npmPkg@$NativeBinLabel (via npm)"
-            }
-        }
-    } finally { Pop-Location }
-    if (-not $NativeBin) {
-        Remove-Item -Recurse -Force $NativeBinTmpDir -ErrorAction SilentlyContinue
-        Write-Err "npm pack failed. Output:"
-        Write-Dim ($npmOut -join "`n")
-        exit 1
-    }
-} else {
 @'
-import { request as httpsRequest } from 'node:https';
-import { request as httpRequest } from 'node:http';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { gunzipSync } from 'node:zlib';
@@ -192,27 +141,14 @@ const last = pkgSpec.lastIndexOf('@');
 const pkg = last > 0 ? pkgSpec.slice(0, last) : pkgSpec;
 const ver = last > 0 ? pkgSpec.slice(last + 1) : 'latest';
 
-function get(url, redirects = 0) {
-  return new Promise((resolve, reject) => {
-    if (redirects > 5) return reject(new Error(`Too many redirects`));
-    const parsed = new URL(url);
-    const reqMod = parsed.protocol === 'https:' ? httpsRequest : httpRequest;
-    const opts = { method: 'GET', hostname: parsed.hostname, port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80), path: parsed.pathname + parsed.search };
-    reqMod(opts, (res) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        res.resume();
-        return get(new URL(res.headers.location, parsed).href, redirects + 1).then(resolve, reject);
-      }
-      if (res.statusCode !== 200) {
-        res.resume();
-        return reject(new Error(`HTTP ${res.statusCode} for ${url}`));
-      }
-      const chunks = [];
-      res.on('data', (c) => chunks.push(c));
-      res.on('end', () => resolve(Buffer.concat(chunks)));
-      res.on('error', reject);
-    }).on('error', reject).end();
-  });
+async function get(url, redirects = 0) {
+  if (redirects > 5) throw new Error('Too many redirects');
+  const response = await fetch(url, { redirect: 'manual' });
+  if (response.status >= 300 && response.status < 400 && response.headers.get('location')) {
+    return get(new URL(response.headers.get('location'), url).href, redirects + 1);
+  }
+  if (response.status !== 200) throw new Error(`HTTP ${response.status} for ${url}`);
+  return Buffer.from(await response.arrayBuffer());
 }
 
 const metaBuf = await get(`https://registry.npmjs.org/${pkg}/${ver}`);
@@ -246,40 +182,77 @@ console.log(`Extracted ${files} files`);
 console.log(`VERSION=${meta.version}`);
 '@ | Set-Content $fetchScript -Encoding UTF8
 
-    $output = & node $fetchScript "$npmPkg@$Version" $NativeBinTmpDir 2>&1
-    $exitCode = $LASTEXITCODE
-    $output | ForEach-Object { Write-Host "  $_" }
-    Remove-Item -Force $fetchScript -ErrorAction SilentlyContinue
+$output = & $BunBin $fetchScript "$npmPkg@$Version" $NativeBinTmpDir 2>&1
+$exitCode = $LASTEXITCODE
+$output | ForEach-Object { Write-Host "  $_" }
+Remove-Item -Force $fetchScript -ErrorAction SilentlyContinue
 
-    if ($exitCode -ne 0) {
-        Remove-Item -Recurse -Force $NativeBinTmpDir -ErrorAction SilentlyContinue
-        Write-Err "Fetch failed (node exit $exitCode). Install the official binary manually:"
-        Write-Err "    irm https://claude.ai/install.ps1 | iex"
-        exit 1
-    }
-
-    $cand = Join-Path $NativeBinTmpDir "package\claude.exe"
-    if ((Test-Path $cand) -and (Get-Item $cand).Length -gt 10MB) {
-        $NativeBin = $cand
-        $verLine = $output | Where-Object { $_ -match '^VERSION=' } | Select-Object -First 1
-        if ($verLine) { $NativeBinLabel = ($verLine -replace '^VERSION=', '').Trim() }
-        else { $NativeBinLabel = "npm-latest" }
-    } else {
-        Remove-Item -Recurse -Force $NativeBinTmpDir -ErrorAction SilentlyContinue
-        Write-Err "Tarball downloaded but expected package\claude.exe was missing or too small."
-        Write-Err "  Tempdir kept for inspection: $NativeBinTmpDir"
-        exit 1
-    }
-    Write-OK "Downloaded $npmPkg@$NativeBinLabel"
+if ($exitCode -ne 0) {
+    Remove-Item -Recurse -Force $NativeBinTmpDir -ErrorAction SilentlyContinue
+    Write-Err "Fetch failed (bun exit $exitCode). Install the official binary manually:"
+    Write-Err "    irm https://claude.ai/install.ps1 | iex"
+    exit 1
 }
+
+$cand = Join-Path $NativeBinTmpDir "package\claude.exe"
+if ((Test-Path $cand) -and (Get-Item $cand).Length -gt 10MB) {
+    $NativeBin = $cand
+    $verLine = $output | Where-Object { $_ -match '^VERSION=' } | Select-Object -First 1
+    if ($verLine) { $NativeBinLabel = ($verLine -replace '^VERSION=', '').Trim() }
+    else { $NativeBinLabel = "npm-latest" }
+} else {
+    Remove-Item -Recurse -Force $NativeBinTmpDir -ErrorAction SilentlyContinue
+    Write-Err "Tarball downloaded but expected package\claude.exe was missing or too small."
+    Write-Err "  Tempdir kept for inspection: $NativeBinTmpDir"
+    exit 1
+}
+Write-OK "Downloaded $npmPkg@$NativeBinLabel"
 
 $RollbackDir = $null
 $script:RollbackPending = $false
-$RollbackFiles = @("cli.original.cjs","cli.original.cjs.bak","cli.original.js",".source-version",
-    "ast-helpers.mjs","patch-rules.mjs","pentest-prompts.mjs","prompt-runtime.cjs",
-    "source-backup.json","bunfs","vendor","pathmap.json","extract-natives.mjs","post-process.mjs",
-    "openai-proxy.cjs","feature-gates.cjs","cli.cjs",".clawgod-version","claude.fallback.exe","uninstall.ps1","lean-settings.json","patches.json",
-    "startup-check.cjs","compile-runtime.mjs",".compiled-runtime",".compiled-runtime-cache.json","runtime-helpers.cjs","bun-ant-shim.cjs","system-prompt.md","patch.mjs","patch-registry.mjs","ast-patches.mjs","pentest-patches.mjs","pentest-scanners.mjs","pentest-trimming.mjs","pentest-policy-text.mjs","pentest-pruner.mjs","lean-mode.cjs","acorn.mjs","acorn.LICENSE")
+$RollbackFiles = @(
+    'extract-natives.mjs'
+    'post-process.mjs'
+    'openai-proxy.cjs'
+    'cli.cjs'
+    'startup-check.cjs'
+    'runtime-helpers.cjs'
+    'prompt-runtime.cjs'
+    'bun-ant-shim.cjs'
+    'feature-gates.cjs'
+    'patch.mjs'
+    'patch-rules.mjs'
+    'ast-patches.mjs'
+    'ast-helpers.mjs'
+    'pentest-patches.mjs'
+    'pentest-scanners.mjs'
+    'pentest-prompts.mjs'
+    'pentest-trimming.mjs'
+    'pentest-policy-text.mjs'
+    'pentest-pruner.mjs'
+    'lean-mode.cjs'
+    'npm-fetch.mjs'
+    'acorn.mjs'
+    'acorn.LICENSE'
+    'cli.original.cjs'
+    'cli.original.cjs.bak'
+    'cli.original.js'
+    '.source-version'
+    'source-backup.json'
+    'pathmap.json'
+    'lean-settings.json'
+    'claude.fallback.exe'
+    'compile-runtime.mjs'
+    'patch-registry.mjs'
+    'system-prompt.md'
+    '.clawgod-version'
+    '.compiled-runtime'
+    '.compiled-runtime-cache.json'
+    'bunfs'
+    'vendor'
+    'patches.json'
+    'uninstall.ps1'
+)
 $origCjs = Join-Path $ClawDir "cli.original.cjs"
 $sourceVerFile = Join-Path $ClawDir ".source-version"
 if ((Test-Path $origCjs) -and (Test-Path $sourceVerFile)) {
@@ -337,8 +310,6 @@ trap { Restore-Install; break }
 
 $extractorPath = Join-Path $ClawDir "extract-natives.mjs"
 @'
-#!/usr/bin/env node
-
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -694,7 +665,7 @@ $dstCli = Join-Path $ClawDir "cli.original.js"
 if (Test-Path $dstCli) { Remove-Item -Force $dstCli }
 
 Write-Dim "Extracting cli.js + napi modules from $NativeBinLabel ..."
-& node $extractorPath $NativeBin $ClawDir 2>&1 | ForEach-Object { Write-Host "  $_" }
+& $BunBin $extractorPath $NativeBin $ClawDir 2>&1 | ForEach-Object { Write-Host "  $_" }
 if (($LASTEXITCODE -ne 0) -or -not (Test-Path $dstCli)) {
     Write-Err "Failed to extract cli.js from native binary"
     Restore-Install
@@ -854,9 +825,13 @@ function userPart(block) {
   if (block.type === 'document') {
     if (block.citations && block.citations.enabled) throw new Error('Document citations are not supported by openai-chat');
     if (source.type === 'text') return { type: 'text', text: textValue(source.data) };
+    if (source.type === 'url' && source.url) {
+      // OpenAI-compatible providers fetch URL documents themselves; forward the URL.
+      return { type: 'text', text: 'Document (' + (block.title || 'document') + '): ' + source.url };
+    }
     if (source.type === 'base64' && source.media_type === 'application/pdf' && source.data)
       return { type: 'file', file: { filename: block.title || 'document.pdf', file_data: 'data:application/pdf;base64,' + source.data } };
-    throw new Error('Unsupported document source; use base64 PDF (requires upstream file support) or text');
+    throw new Error('Unsupported document source; use base64 PDF, a URL, or text');
   }
   throw new Error('Unsupported user content block: ' + block.type);
 }
@@ -918,27 +893,51 @@ function translateRequest(body, configuredEffort) {
     else throw new Error('Unsupported tool_choice');
     if (choice.disable_parallel_tool_use !== undefined) result.parallel_tool_calls = !choice.disable_parallel_tool_use;
   }
-  if (body.output_config && body.output_config.format) throw new Error('Structured output format is not supported by openai-chat');
+  if (body.output_config && body.output_config.format) {
+    var format = body.output_config.format;
+    if (format.type === 'json_schema' && format.json_schema && typeof format.json_schema.schema === 'object') {
+      result.response_format = { type: 'json_schema', json_schema: {
+        name: format.json_schema.name || 'output',
+        schema: format.json_schema.schema,
+        strict: format.json_schema.strict === true,
+      } };
+    } else if (format.type === 'json_object') {
+      result.response_format = { type: 'json_object' };
+    }
+  }
   if (body.stream) result.stream_options = { include_usage: true };
   return result;
 }
 
 function estimateTokens(request) {
-  var bytes = 0, mediaTokens = 0;
+  var mediaTokens = 0;
   function visit(value) {
-    if (typeof value === 'string') bytes += encoder.encode(value).length;
-    else if (Array.isArray(value)) value.forEach(visit);
+    if (Array.isArray(value)) value.forEach(visit);
     else if (value && typeof value === 'object') {
       if (value.type === 'image_url' && value.image_url) { mediaTokens += 1600; return; }
       if (value.type === 'file' && value.file && typeof value.file.file_data === 'string' && value.file.file_data.startsWith('data:application/pdf;base64,')) {
         mediaTokens += Math.ceil(value.file.file_data.split(',')[1].length / 4); return;
       }
-      for (var key of Object.keys(value)) { bytes += key.length; visit(value[key]); }
+      for (var key of Object.keys(value)) visit(value[key]);
     }
   }
   visit(request.messages);
   visit(request.tools);
-  return Math.max(1, Math.ceil(bytes / 3) + mediaTokens + request.messages.length * 4);
+  // ~3.5 characters per token for English/code; CJK-heavy text runs closer to
+  // one character per token, so count those separately.
+  var cjk = 0, ascii = 0;
+  function countText(value) {
+    if (typeof value === 'string') {
+      for (var i = 0; i < value.length; i++) {
+        if (value.charCodeAt(i) > 0x2e7f) cjk++;
+        else ascii++;
+      }
+    } else if (Array.isArray(value)) value.forEach(countText);
+    else if (value && typeof value === 'object') { for (var key of Object.keys(value)) countText(value[key]); }
+  }
+  countText(request.messages);
+  countText(request.tools);
+  return Math.max(1, Math.ceil(ascii / 3.5) + cjk + mediaTokens + request.messages.length * 4);
 }
 
 function mapFinishReason(reason, hasToolCalls) {
@@ -9489,7 +9488,7 @@ export function applyAstEdits(code, edits) {
 }
 '@ | Set-Content (Join-Path $ClawDir "ast-helpers.mjs") -Encoding UTF8
 
-& node $postProc 2>&1 | ForEach-Object { Write-Host "  $_" }
+& $BunBin $postProc 2>&1 | ForEach-Object { Write-Host "  $_" }
 if (($LASTEXITCODE -ne 0) -or -not (Test-Path (Join-Path $ClawDir "cli.original.cjs"))) {
     Write-Err "Post-process failed"
     Restore-Install
@@ -14029,7 +14028,6 @@ export const upstreamPatches = [
 ];
 '@ | Set-Content (Join-Path $ClawDir "patch-rules.mjs") -Encoding UTF8
 $patcherCode = @'
-#!/usr/bin/env node
 import { readFileSync, writeFileSync, existsSync, copyFileSync, readdirSync, renameSync, unlinkSync } from 'fs';
 import { join, dirname, relative, resolve as resolvePath, sep } from 'path';
 import { fileURLToPath } from 'url';
@@ -14531,36 +14529,53 @@ console.log(`${'\u2550'.repeat(55)}\n`);
 '@
 $patchRegistryCode = @'
 
+// Review impact is scoped to each feature. Low affects display, medium changes
+// data handling or exposes a command, high changes policy or autonomous actions.
 export const FEATURES = {
-  'agent-teams':    { desc: 'Agent Teams always enabled',
+  'agent-teams':    { category: 'automation', risk: 'high',
+                      desc: 'Agent Teams always enabled',
                       patchIds: ['agent-teams', 'agent-teams-graph'] },
-  'computer-use':   { desc: 'Computer Use unlock',
+  'computer-use':   { category: 'automation', risk: 'high',
+                      desc: 'Computer Use unlock',
                       patchIds: ['computer-use-sub', 'computer-use-default', 'computer-use-gate', 'computer-use-gate-semantic'] },
-  'ultraplan':      { desc: 'Ultraplan slash command',
+  'ultraplan':      { category: 'interface', risk: 'medium',
+                      desc: 'Ultraplan slash command',
                       patchIds: ['ultraplan'] },
-  'ultrareview':    { desc: 'Ultrareview slash command',
+  'ultrareview':    { category: 'interface', risk: 'medium',
+                      desc: 'Ultrareview slash command',
                       patchIds: ['ultrareview-gate', 'ultrareview-direct', 'ultrareview-command'] },
-  'voice-mode':     { desc: 'Voice Mode',
+  'voice-mode':     { category: 'interface', risk: 'medium',
+                      desc: 'Voice Mode',
                       patchIds: ['voice-mode'] },
-  'auto-mode':      { desc: 'Auto-mode model selection on third-party APIs',
+  'auto-mode':      { category: 'automation', risk: 'high',
+                      desc: 'Auto-mode model selection on third-party APIs',
                       patchIds: ['auto-mode-helper-gate', 'auto-mode-inline-gate'] },
-  'classifier-tuning': { desc: 'Auto-mode classifier overrides (timeout/model/retries env vars)',
+  'classifier-tuning': { category: 'security-policy', risk: 'high',
+                      desc: 'Auto-mode classifier overrides (timeout/model/retries env vars)',
                       patchIds: ['classifier-timeout', 'classifier-model', 'classifier-retries'] },
-  'geo-neutralize': { desc: 'Neutralize geo/proxy steganography in system prompt',
+  'geo-neutralize': { category: 'privacy', risk: 'medium',
+                      desc: 'Neutralize geo/proxy steganography in system prompt',
                       patchIds: ['geo-stego-date', 'geo-detect-probe', 'geo-apostrophe-stego'] },
-  'wiggly-dove':    { desc: 'Block automatic Git/environment collection in x-claude-code-wiggly-dove',
+  'wiggly-dove':    { category: 'privacy', risk: 'medium',
+                      desc: 'Block automatic Git/environment collection in x-claude-code-wiggly-dove',
                       patchIds: ['wiggly-dove'] },
-  'cyber-risk':     { desc: 'Remove CYBER_RISK_INSTRUCTION from system prompt',
+  'cyber-risk':     { category: 'safety-prompt', risk: 'high',
+                      desc: 'Remove CYBER_RISK_INSTRUCTION from system prompt',
                       patchIds: ['remove-cyber-risk'] },
-  'url-restriction':{ desc: 'Remove URL generation restriction from system prompt',
+  'url-restriction':{ category: 'safety-prompt', risk: 'high',
+                      desc: 'Remove URL generation restriction from system prompt',
                       patchIds: ['remove-url-restriction'] },
-  'cautious-actions':{ desc: 'Remove "Executing actions with care" section from system prompt',
+  'cautious-actions':{ category: 'safety-prompt', risk: 'high',
+                      desc: 'Remove "Executing actions with care" section from system prompt',
                       patchIds: ['remove-cautious-actions'] },
-  'not-logged-in':  { desc: 'Remove "Not logged in" notice',
+  'not-logged-in':  { category: 'interface', risk: 'low',
+                      desc: 'Remove "Not logged in" notice',
                       patchIds: ['remove-not-logged-in'] },
-  'message-filter': { desc: 'Bypass non-ant message/attachment filters',
+  'message-filter': { category: 'security-policy', risk: 'high',
+                      desc: 'Bypass non-ant message/attachment filters',
                       patchIds: ['attachment-filter-bypass', 'message-filter-legacy', 'message-filter-s8'] },
-  'remote-settings': { desc: 'Ignore enterprise-managed remote settings',
+  'remote-settings': { category: 'security-policy', risk: 'high',
+                      desc: 'Ignore enterprise-managed remote settings',
                       patchIds: ['remote-settings-off'] },
 };
 
@@ -14583,12 +14598,12 @@ Write-OK "Patcher created (patch.mjs)"
 Write-Dim "Applying patches ..."
 $patchExitCode = & {
     $ErrorActionPreference = 'Continue'
-    node (Join-Path $ClawDir "patch.mjs") --capture-and-apply 2>&1 | ForEach-Object { Write-Host "  $_" }
+    & $BunBin (Join-Path $ClawDir "patch.mjs") --capture-and-apply 2>&1 | ForEach-Object { Write-Host "  $_" }
     $LASTEXITCODE
 }
 if ($patchExitCode -ne 0) {
     $exitCode = $patchExitCode
-    Write-Err "Patching failed (node exit $exitCode). Installation aborted."
+    Write-Err "Patching failed (bun exit $exitCode). Installation aborted."
     Restore-Install
     if (-not $RollbackDir) {
         Write-Err "No previous working installation found to roll back."
@@ -14685,13 +14700,12 @@ foreach ($legacyFlag in @(".lean-disabled", ".lean-max")) {
 }
 
 $leanApplyScript = @'
-const { existsSync } = require('fs');
-const { dirname, join } = require('path');
-const local = join(dirname(process.argv[1]), 'lean-mode.cjs');
-require(existsSync(local) ? local : './lean-mode.cjs').leanApply(process.argv[1], undefined, process.argv[2]);
+// bun -e eval mode: argv[1]=lean-mode.cjs path, argv[2]=settings, argv[3]=patches.
+// require in eval mode resolves from CWD, so lean-mode must be loaded by absolute path.
+require(process.argv[1]).leanApply(process.argv[2], undefined, process.argv[3]);
 '@
 try {
-    node -e $leanApplyScript "$leanSettings" (Join-Path $ClawDir "patches.json") 2>$null
+    & $BunBin -e $leanApplyScript (Join-Path $ClawDir "lean-mode.cjs") "$leanSettings" (Join-Path $ClawDir "patches.json") 2>$null
     Write-OK "Lean settings applied (strictest, clawgod-scoped): ~\.clawgod\lean-settings.json"
 } catch {}
 
@@ -14700,7 +14714,7 @@ $sanityCli = Join-Path $ClawDir "cli.cjs"
 function Invoke-StartupProbe {
     $ErrorActionPreference = 'Continue'
     try {
-        $output = (& node (Join-Path $ClawDir "startup-check.cjs") $BunBin $sanityCli @args 2>&1 | Out-String)
+        $output = (& $BunBin (Join-Path $ClawDir "startup-check.cjs") $BunBin $sanityCli @args 2>&1 | Out-String)
         return @{ Output = $output; ExitCode = $LASTEXITCODE }
     } catch {
         return @{ Output = "$_"; ExitCode = 1 }

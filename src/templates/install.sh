@@ -28,23 +28,12 @@ echo ""
 echo -e "${BOLD}  ClawGod_Y Installer${NC}"
 echo ""
 
-if ! command -v node &>/dev/null; then
-  warn "Node.js is required (>= 18) for the patcher. Install from https://nodejs.org"
-  exit 1
-fi
-
-NODE_VERSION=$(node -e "console.log(process.versions.node.split('.')[0])")
-if [ "$NODE_VERSION" -lt 18 ]; then
-  warn "Node.js >= 18 required (found v$NODE_VERSION)"
-  exit 1
-fi
-
 if command -v bun &>/dev/null; then
   BUN_BIN=$(command -v bun)
 elif [ -x "$HOME/.bun/bin/bun" ]; then
   BUN_BIN="$HOME/.bun/bin/bun"
 else
-  dim "Installing Bun (required runtime for v2.1.113+ cli.js) ..."
+  dim "Installing Bun (sole runtime: patcher and CLI) ..."
   curl -fsSL https://bun.sh/install | bash >/dev/null 2>&1 || true
   BUN_BIN="$HOME/.bun/bin/bun"
   if [ ! -x "$BUN_BIN" ]; then
@@ -112,10 +101,6 @@ else
   PLATFORM="${os}-${arch}"
 fi
 
-if ! command -v npm &>/dev/null; then
-  warn "npm is required to download the ClawGod_Y upstream runtime from the registry."
-  exit 1
-fi
 if [ -z "$os" ] || [ -z "$arch" ]; then
   warn "Unsupported platform: $(uname -s) $(uname -m)"
   exit 1
@@ -123,17 +108,15 @@ fi
 NPM_PKG="@anthropic-ai/claude-code-${PLATFORM}"
 dim "Fetching $NPM_PKG@$VERSION from npm registry ..."
 NATIVE_BIN_TMPDIR=$(mktemp -d)
-if ( cd "$NATIVE_BIN_TMPDIR" && npm pack "$NPM_PKG@$VERSION" --silent >/dev/null 2>&1 ); then
-  TARBALL=$(ls "$NATIVE_BIN_TMPDIR"/*.tgz 2>/dev/null | head -1)
-  if [ -n "$TARBALL" ]; then
-    ( cd "$NATIVE_BIN_TMPDIR" && tar xzf "$TARBALL" )
-    cand="$NATIVE_BIN_TMPDIR/package/claude"
-    if [ -f "$cand" ]; then
-      sz=$(stat -f%z "$cand" 2>/dev/null || stat -c%s "$cand" 2>/dev/null || echo 0)
-      if [ "$sz" -gt 10000000 ]; then
-        NATIVE_BIN="$cand"
-        NATIVE_BIN_LABEL=$(node -e "console.log(require('$NATIVE_BIN_TMPDIR/package/package.json').version)" 2>/dev/null || echo "npm-latest")
-      fi
+cat > "$NATIVE_BIN_TMPDIR/fetch.mjs" << 'FETCH_EOF'
+{{CLAWGOD:npm-fetch.mjs}}
+FETCH_EOF
+if "$BUN_BIN" "$NATIVE_BIN_TMPDIR/fetch.mjs" "$NPM_PKG@$VERSION" "$NATIVE_BIN_TMPDIR" 2>&1 | while IFS= read -r line; do echo "  $line"; done; then
+  if [ -f "$NATIVE_BIN_TMPDIR/package/claude" ]; then
+    sz=$(stat -f%z "$NATIVE_BIN_TMPDIR/package/claude" 2>/dev/null || stat -c%s "$NATIVE_BIN_TMPDIR/package/claude" 2>/dev/null || echo 0)
+    if [ "$sz" -gt 10000000 ]; then
+      NATIVE_BIN="$NATIVE_BIN_TMPDIR/package/claude"
+      NATIVE_BIN_LABEL=$("$BUN_BIN" -e "console.log(require(process.argv[1]).version)" "$NATIVE_BIN_TMPDIR/package/package.json" 2>/dev/null || echo "npm-latest")
     fi
   fi
 fi
@@ -147,13 +130,9 @@ fi
 info "Downloaded $NPM_PKG@$NATIVE_BIN_LABEL"
 
 PREV_BACKUP_DIR=""
-ROLLBACK_FILES=(cli.original.cjs cli.original.cjs.bak cli.original.js .source-version
-  source-backup.json bunfs vendor pathmap.json extract-natives.mjs post-process.mjs
-  openai-proxy.cjs feature-gates.cjs cli.cjs .clawgod-version
-  startup-check.cjs compile-runtime.mjs .compiled-runtime .compiled-runtime-cache.json runtime-helpers.cjs prompt-runtime.cjs bun-ant-shim.cjs system-prompt.md
-  claude.fallback uninstall.sh lean-settings.json patches.json
-  patch.mjs patch-rules.mjs patch-registry.mjs ast-patches.mjs ast-helpers.mjs pentest-patches.mjs pentest-scanners.mjs pentest-prompts.mjs
-  pentest-trimming.mjs pentest-policy-text.mjs pentest-pruner.mjs lean-mode.cjs acorn.mjs acorn.LICENSE)
+ROLLBACK_FILES=(
+{{CLAWGOD:rollback-files}}
+)
 if [ -f "$CLAWGOD_DIR/cli.original.cjs" ] && [ -f "$CLAWGOD_DIR/.source-version" ]; then
   PREV_BACKUP_DIR=$(mktemp -d "${CLAWGOD_DIR}-rollback-XXXXXX")
   MOVED_ROLLBACK_FILES=()
@@ -216,7 +195,7 @@ rm -rf "$CLAWGOD_DIR/vendor" "$CLAWGOD_DIR/bunfs" "$CLAWGOD_DIR/pathmap.json" \
   "$CLAWGOD_DIR/cli.original.js" 2>/dev/null
 
 dim "Extracting cli.js + modules from $NATIVE_BIN_LABEL ..."
-node "$CLAWGOD_DIR/extract-natives.mjs" "$NATIVE_BIN" "$CLAWGOD_DIR" 2>&1 | while IFS= read -r line; do echo "  $line"; done
+"$BUN_BIN" "$CLAWGOD_DIR/extract-natives.mjs" "$NATIVE_BIN" "$CLAWGOD_DIR" 2>&1 | while IFS= read -r line; do echo "  $line"; done
 if [ "${PIPESTATUS[0]}" -ne 0 ]; then
   err "Failed to extract from native binary"
   exit 1
@@ -277,7 +256,7 @@ cat > "$CLAWGOD_DIR/ast-helpers.mjs" << 'AST_HELPERS_EOF'
 {{CLAWGOD:ast-helpers.mjs}}
 AST_HELPERS_EOF
 
-node "$CLAWGOD_DIR/post-process.mjs" 2>&1 | while IFS= read -r line; do echo "  $line"; done
+"$BUN_BIN" "$CLAWGOD_DIR/post-process.mjs" 2>&1 | while IFS= read -r line; do echo "  $line"; done
 if [ "${PIPESTATUS[0]}" -ne 0 ]; then err "Post-process failed"; exit 1; fi
 [ -f "$CLAWGOD_DIR/cli.original.cjs" ] || { err "Post-process failed"; exit 1; }
 
@@ -339,10 +318,10 @@ info "Patcher created (patch.mjs)"
 
 
 dim "Applying patches ..."
-node --max-old-space-size=4096 "$CLAWGOD_DIR/patch.mjs" --capture-and-apply 2>&1 | while IFS= read -r line; do echo "  $line"; done
+"$BUN_BIN" "$CLAWGOD_DIR/patch.mjs" --capture-and-apply 2>&1 | while IFS= read -r line; do echo "  $line"; done
 patch_status=${PIPESTATUS[0]}
 if [ "$patch_status" -ne 0 ]; then
-  warn "Patching failed (node exit $patch_status). Installation aborted."
+  warn "Patching failed (bun exit $patch_status). Installation aborted."
   if [ -z "$PREV_BACKUP_DIR" ]; then
     warn "No previous working installation found to roll back."
   fi
@@ -391,15 +370,15 @@ fi
 
 rm -f "$CLAWGOD_DIR/.lean-disabled" "$CLAWGOD_DIR/.lean-max"
 
-node -e '
-const {leanApply}=require(process.argv[2]);
-try{leanApply(process.argv[1],undefined,process.argv[3])}catch{}
-' "$CLAWGOD_DIR/lean-settings.json" "$CLAWGOD_DIR/lean-mode.cjs" "$CLAWGOD_DIR/patches.json" 2>/dev/null || true
+"$BUN_BIN" -e '
+const {leanApply}=require(process.argv[1]);
+try{leanApply(process.argv[2],undefined,process.argv[3])}catch{}
+' "$CLAWGOD_DIR/lean-mode.cjs" "$CLAWGOD_DIR/lean-settings.json" "$CLAWGOD_DIR/patches.json" 2>/dev/null || true
 info "Lean settings applied (strictest, clawgod-scoped): ~/.clawgod/lean-settings.json"
 
 dim "Verifying Bun can load patched cli.original.cjs (bounded startup check) ..."
 sanity_rc=0
-sanity_out=$(node "$CLAWGOD_DIR/startup-check.cjs" "$BUN_BIN" "$CLAWGOD_DIR/cli.cjs" 2>&1) || sanity_rc=$?
+sanity_out=$("$BUN_BIN" "$CLAWGOD_DIR/startup-check.cjs" "$BUN_BIN" "$CLAWGOD_DIR/cli.cjs" 2>&1) || sanity_rc=$?
 if echo "$sanity_out" | grep -q "Expected CommonJS module to have a function wrapper"; then
   echo ""
   warn "The selected Bun runtime cannot load Anthropic's cli.original.cjs."
@@ -430,7 +409,7 @@ fi
 info "Bun loads cli.original.cjs"
 dim "Verifying tool/command tables load (bounded probe) ..."
 probe_rc=0
-probe_out=$(node "$CLAWGOD_DIR/startup-check.cjs" "$BUN_BIN" "$CLAWGOD_DIR/cli.cjs" --probe-tools 2>&1) || probe_rc=$?
+probe_out=$("$BUN_BIN" "$CLAWGOD_DIR/startup-check.cjs" "$BUN_BIN" "$CLAWGOD_DIR/cli.cjs" --probe-tools 2>&1) || probe_rc=$?
 if [ "$probe_rc" -ne 0 ]; then
   warn "Patched Claude failed its tool-table probe (exit $probe_rc):"
   printf '%s\n' "$probe_out"

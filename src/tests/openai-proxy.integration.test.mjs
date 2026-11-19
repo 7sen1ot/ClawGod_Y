@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createRequire } from 'node:module';
 
-const { startProxy } = createRequire(import.meta.url)('./openai-proxy.cjs');
+const { startProxy } = createRequire(import.meta.url)('../shared/openai-proxy.cjs');
 
 test('Bun HTTP integration: tool round trip, streaming usage, errors, count and timeout', { skip: typeof Bun === 'undefined' }, async () => {
   const calls = [];

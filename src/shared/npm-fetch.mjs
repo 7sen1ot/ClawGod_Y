@@ -1,5 +1,3 @@
-import { request as httpsRequest } from 'node:https';
-import { request as httpRequest } from 'node:http';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { gunzipSync } from 'node:zlib';
@@ -10,27 +8,14 @@ const last = pkgSpec.lastIndexOf('@');
 const pkg = last > 0 ? pkgSpec.slice(0, last) : pkgSpec;
 const ver = last > 0 ? pkgSpec.slice(last + 1) : 'latest';
 
-function get(url, redirects = 0) {
-  return new Promise((resolve, reject) => {
-    if (redirects > 5) return reject(new Error(`Too many redirects`));
-    const parsed = new URL(url);
-    const reqMod = parsed.protocol === 'https:' ? httpsRequest : httpRequest;
-    const opts = { method: 'GET', hostname: parsed.hostname, port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80), path: parsed.pathname + parsed.search };
-    reqMod(opts, (res) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        res.resume();
-        return get(new URL(res.headers.location, parsed).href, redirects + 1).then(resolve, reject);
-      }
-      if (res.statusCode !== 200) {
-        res.resume();
-        return reject(new Error(`HTTP ${res.statusCode} for ${url}`));
-      }
-      const chunks = [];
-      res.on('data', (c) => chunks.push(c));
-      res.on('end', () => resolve(Buffer.concat(chunks)));
-      res.on('error', reject);
-    }).on('error', reject).end();
-  });
+async function get(url, redirects = 0) {
+  if (redirects > 5) throw new Error('Too many redirects');
+  const response = await fetch(url, { redirect: 'manual' });
+  if (response.status >= 300 && response.status < 400 && response.headers.get('location')) {
+    return get(new URL(response.headers.get('location'), url).href, redirects + 1);
+  }
+  if (response.status !== 200) throw new Error(`HTTP ${response.status} for ${url}`);
+  return Buffer.from(await response.arrayBuffer());
 }
 
 const metaBuf = await get(`https://registry.npmjs.org/${pkg}/${ver}`);

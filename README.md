@@ -4,8 +4,7 @@
 
 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) god mode.
 
-[![Node.js](https://img.shields.io/badge/Node.js-18%2B-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
-[![Bun](https://img.shields.io/badge/Bun-1.3.14%2B-000000?logo=bun&logoColor=white)](https://bun.sh/)
+[![Bun](https://img.shields.io/badge/Bun-1.3.14%2B%20(sole%20runtime)-000000?logo=bun&logoColor=white)](https://bun.sh/)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-555)](#usage)
 [![License](https://img.shields.io/badge/License-GPL_v3-orange)](./LICENSE)
 
@@ -33,10 +32,9 @@ The patch implementation draws on [0Chencc/clawgod](https://github.com/0Chencc/c
 | Item | Requirement |
 | --- | --- |
 | Host | Windows, macOS, or Linux/WSL |
-| Installer | Node.js 18 or later, including npm; run in an interactive terminal |
-| Local runtime | Bun 1.3.14 or later (installed automatically if missing) and ripgrep (`rg`) |
-| Windows | PowerShell 5.1 or later, with `tar` available |
-| macOS / Linux / WSL | Bash, `curl`, and `tar`; automatic Bun installation also requires `unzip` |
+| Runtime | Bun 1.3.14 or later (sole runtime; installed automatically if missing) and ripgrep (`rg`) |
+| Windows | PowerShell 5.1 or later |
+| macOS / Linux / WSL | Bash and `curl`. Automatic Bun installation also requires `unzip`. |
 
 ### Installation
 
@@ -82,7 +80,7 @@ clawgod --uninstall
 
 If `clawgod` cannot start, on **macOS / Linux / WSL** run `bash "$HOME/.clawgod/uninstall.sh"`; in **Windows PowerShell** run `powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.clawgod\uninstall.ps1"`.
 
-Uninstallation removes the `clawgod` launcher, the main runtime files, and the separate `~/.clawgod/lean-settings.json` file without modifying `~/.claude/settings.json`. Configuration such as `provider.json` and `features.json`, along with some other files, is retained; the entire `~/.clawgod` directory is not deleted.
+Uninstallation removes the `clawgod` launcher, its runtime files, and `~/.clawgod/lean-settings.json`. It keeps the cached uninstaller and existing user configuration in `~/.clawgod`, including `provider.json`, `features.json`, `patches.json`, `assembly.json`, and `flags.json`. Official Claude settings in `~/.claude/settings.json` are preserved.
 
 ## Usage Limits and Security
 

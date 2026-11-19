@@ -4,8 +4,7 @@
 
 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) ゴッドモード。
 
-[![Node.js](https://img.shields.io/badge/Node.js-18%2B-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
-[![Bun](https://img.shields.io/badge/Bun-1.3.14%2B-000000?logo=bun&logoColor=white)](https://bun.sh/)
+[![Bun](https://img.shields.io/badge/Bun-1.3.14%2B%20(%E5%94%B1%E4%B8%80%E3%83%A9%E3%83%B3%E3%82%BF%E3%82%A4%E3%83%A0)-000000?logo=bun&logoColor=white)](https://bun.sh/)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-555)](#使用方法)
 [![License](https://img.shields.io/badge/License-GPL_v3-orange)](./LICENSE)
 
@@ -33,10 +32,9 @@ ClawGod_Y は公式 [Claude Code](https://docs.anthropic.com/en/docs/claude-code
 | 項目 | 要件 |
 | --- | --- |
 | ホスト | Windows、macOS、または Linux/WSL |
-| インストーラ | Node.js 18 以降（npm を含む）。対話型ターミナルで実行 |
-| ローカルランタイム | Bun 1.3.14 以降（未検出時は自動インストール）と ripgrep（`rg`） |
-| Windows | PowerShell 5.1 以降、`tar` が利用可能であること |
-| macOS / Linux / WSL | Bash、`curl`、`tar`。Bun の自動インストールには `unzip` も必要 |
+| ランタイム | Bun 1.3.14 以降（唯一のランタイム。未検出時は自動インストール）と ripgrep（`rg`） |
+| Windows | PowerShell 5.1 以降 |
+| macOS / Linux / WSL | Bash と `curl`。Bun の自動インストールには `unzip` も必要です。 |
 
 ### インストール
 
@@ -82,7 +80,7 @@ clawgod --uninstall
 
 `clawgod` を起動できない場合、**macOS / Linux / WSL** では `bash "$HOME/.clawgod/uninstall.sh"`、**Windows PowerShell** では `powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.clawgod\uninstall.ps1"` を実行してください。
 
-アンインストールでは `clawgod` ランチャ、主要なランタイムファイル、独立した `~/.clawgod/lean-settings.json` を削除し、`~/.claude/settings.json` は変更しません。`provider.json` や `features.json` などの設定と一部のファイルは保持され、`~/.clawgod` ディレクトリ全体は削除されません。
+アンインストールでは `clawgod` ランチャ、ランタイムファイル、`~/.clawgod/lean-settings.json` を削除します。`~/.clawgod` に保存したアンインストーラと、既存の `provider.json`、`features.json`、`patches.json`、`assembly.json`、`flags.json` は保持されます。公式 Claude の設定ファイル `~/.claude/settings.json` も保持されます。
 
 ## 利用範囲とセキュリティ
 

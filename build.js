@@ -8,6 +8,7 @@ const {
 } = require('node:fs');
 const { join } = require('node:path');
 const { pathToFileURL } = require('node:url');
+const { sharedSources, windowsSources, fileListsFor } = require('./src/install-files.cjs');
 
 const ROOT = __dirname;
 const SOURCE_ROOT = join(ROOT, 'src');
@@ -28,31 +29,18 @@ function weaveFeaturesMeta(content, meta) {
   return content.replace(FEATURES_META_MARKER, () => rendered);
 }
 
-const SHARED_SOURCES = Object.fromEntries([
-  'extract-natives.mjs', 'post-process.mjs', 'openai-proxy.cjs', 'cli.cjs',
-  'startup-check.cjs', 'compile-runtime.mjs', 'runtime-helpers.cjs', 'prompt-runtime.cjs', 'bun-ant-shim.cjs',
-  'feature-gates.cjs', 'patch.mjs', 'patch-rules.mjs', 'patch-registry.mjs', 'ast-patches.mjs', 'ast-helpers.mjs',
-  'pentest-patches.mjs', 'pentest-scanners.mjs', 'pentest-prompts.mjs', 'pentest-trimming.mjs',
-  'pentest-policy-text.mjs', 'pentest-pruner.mjs', 'lean-mode.cjs',
-  'system-prompt.md', 'acorn.mjs', 'acorn.LICENSE', 'features.json',
-].map(name => [name, `shared/${name}`]));
-
 const TARGETS = [
   {
     name: 'install.sh',
     template: 'templates/install.sh',
     mode: 0o755,
-    sources: SHARED_SOURCES,
+    sources: sharedSources,
   },
   {
     name: 'install.ps1',
     template: 'templates/install.ps1',
     asciiOnly: true,
-    sources: {
-      'npm-fetch.mjs': 'windows/npm-fetch.mjs',
-      ...SHARED_SOURCES,
-      'lean-apply.cjs': 'windows/lean-apply.cjs',
-    },
+    sources: windowsSources,
   },
   {
     name: 'uninstall.sh',
@@ -85,17 +73,20 @@ function readSource(relativePath) {
 function render(target, meta) {
   const templatePath = join(SOURCE_ROOT, target.template);
   if (!existsSync(templatePath)) throw new Error(`Missing template: ${target.template}`);
+  const lists = fileListsFor(target.name);
+  const names = new Set([...Object.keys(target.sources), ...Object.keys(lists)]);
   const used = new Set();
   const output = readFileSync(templatePath, 'utf8').replace(/^\uFEFF/, '').replace(PLACEHOLDER_RE, placeholder => {
     const name = placeholder.slice('{{CLAWGOD:'.length, -2);
-    if (!Object.hasOwn(target.sources, name)) throw new Error(`${target.template}: unknown placeholder: ${placeholder}`);
+    if (!names.has(name)) throw new Error(`${target.template}: unknown placeholder: ${placeholder}`);
     if (used.has(name)) throw new Error(`${target.template}: duplicate placeholder: ${placeholder}`);
     used.add(name);
+    if (Object.hasOwn(lists, name)) return lists[name];
     let content = readSource(target.sources[name]);
     if (name === 'feature-gates.cjs') content = weaveFeaturesMeta(content, meta);
     return target.asciiOnly ? escapeNonAscii(content) : content;
   });
-  for (const name of Object.keys(target.sources)) {
+  for (const name of names) {
     if (!used.has(name)) throw new Error(`${target.template}: missing placeholder: {{CLAWGOD:${name}}}`);
   }
 

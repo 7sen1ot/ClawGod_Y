@@ -1,5 +1,5 @@
 $ErrorActionPreference = 'Stop'
-$template = Get-Content (Join-Path $PSScriptRoot '..\templates\install.ps1') -Raw
+$template = Get-Content (Join-Path $PSScriptRoot '..\..\install.ps1') -Raw
 $ClawDir = Join-Path ([IO.Path]::GetTempPath()) ('clawgod-source-recovery-' + [Guid]::NewGuid().ToString('N'))
 $BinDir = Join-Path $ClawDir 'bin'
 function Write-OK($message) {}
@@ -44,6 +44,7 @@ try {
     $failureScript = @"
 `$ErrorActionPreference = 'Stop'
 `$ClawDir = '$clawDirLiteral'
+`$BunBin = (Get-Command bun.exe -ErrorAction Stop).Source
 function Write-Dim(`$message) {}
 function Write-Err(`$message) {}
 `$script:restored = 0

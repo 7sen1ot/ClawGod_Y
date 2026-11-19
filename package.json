@@ -1,0 +1,13 @@
+{
+  "name": "clawgod-dev",
+  "private": true,
+  "packageManager": "bun@1.4.3",
+  "scripts": {
+    "build": "bun build.js",
+    "build:check": "bun build.js --check",
+    "test": "bun run test:unit && bun run test:proxy && bun run test:issues",
+    "test:unit": "bun src/shared/ast-patches.test.mjs && bun src/shared/patch.test.mjs && bun src/shared/pentest-patches.test.mjs && bun src/shared/pentest-pruner.test.mjs && bun src/shared/source-backup.test.mjs && bun src/shared/terminal-reply.test.mjs && bun src/shared/lean.test.mjs && bun src/shared/updater.test.mjs && bun src/shared/startup-check.test.mjs && bun src/shared/provider.test.mjs && bun src/shared/prompt-assembly.test.mjs && bun src/shared/bun-ant-shim.test.mjs && bun src/shared/post-process.test.mjs && bun src/shared/compile-runtime.test.mjs && bun src/shared/extract-natives.test.mjs && bun src/shared/npm-fetch.test.mjs && bun src/shared/installer-lifecycle.test.mjs && bun src/shared/native-refresh.test.mjs && bun .github/scripts/ci-gates.test.cjs",
+    "test:proxy": "bun test ./src/tests/openai-proxy.test.mjs ./src/tests/openai-proxy.integration.test.mjs",
+    "test:issues": "bun .github/scripts/close-inactive-issues.test.cjs"
+  }
+}

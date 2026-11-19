@@ -28,23 +28,12 @@ echo ""
 echo -e "${BOLD}  ClawGod_Y Installer${NC}"
 echo ""
 
-if ! command -v node &>/dev/null; then
-  warn "Node.js is required (>= 18) for the patcher. Install from https://nodejs.org"
-  exit 1
-fi
-
-NODE_VERSION=$(node -e "console.log(process.versions.node.split('.')[0])")
-if [ "$NODE_VERSION" -lt 18 ]; then
-  warn "Node.js >= 18 required (found v$NODE_VERSION)"
-  exit 1
-fi
-
 if command -v bun &>/dev/null; then
   BUN_BIN=$(command -v bun)
 elif [ -x "$HOME/.bun/bin/bun" ]; then
   BUN_BIN="$HOME/.bun/bin/bun"
 else
-  dim "Installing Bun (required runtime for v2.1.113+ cli.js) ..."
+  dim "Installing Bun (sole runtime: patcher and CLI) ..."
   curl -fsSL https://bun.sh/install | bash >/dev/null 2>&1 || true
   BUN_BIN="$HOME/.bun/bin/bun"
   if [ ! -x "$BUN_BIN" ]; then
@@ -112,10 +101,6 @@ else
   PLATFORM="${os}-${arch}"
 fi
 
-if ! command -v npm &>/dev/null; then
-  warn "npm is required to download the ClawGod_Y upstream runtime from the registry."
-  exit 1
-fi
 if [ -z "$os" ] || [ -z "$arch" ]; then
   warn "Unsupported platform: $(uname -s) $(uname -m)"
   exit 1
@@ -123,17 +108,63 @@ fi
 NPM_PKG="@anthropic-ai/claude-code-${PLATFORM}"
 dim "Fetching $NPM_PKG@$VERSION from npm registry ..."
 NATIVE_BIN_TMPDIR=$(mktemp -d)
-if ( cd "$NATIVE_BIN_TMPDIR" && npm pack "$NPM_PKG@$VERSION" --silent >/dev/null 2>&1 ); then
-  TARBALL=$(ls "$NATIVE_BIN_TMPDIR"/*.tgz 2>/dev/null | head -1)
-  if [ -n "$TARBALL" ]; then
-    ( cd "$NATIVE_BIN_TMPDIR" && tar xzf "$TARBALL" )
-    cand="$NATIVE_BIN_TMPDIR/package/claude"
-    if [ -f "$cand" ]; then
-      sz=$(stat -f%z "$cand" 2>/dev/null || stat -c%s "$cand" 2>/dev/null || echo 0)
-      if [ "$sz" -gt 10000000 ]; then
-        NATIVE_BIN="$cand"
-        NATIVE_BIN_LABEL=$(node -e "console.log(require('$NATIVE_BIN_TMPDIR/package/package.json').version)" 2>/dev/null || echo "npm-latest")
-      fi
+cat > "$NATIVE_BIN_TMPDIR/fetch.mjs" << 'FETCH_EOF'
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { gunzipSync } from 'node:zlib';
+import { URL } from 'node:url';
+
+const [, , pkgSpec, outDir] = process.argv;
+const last = pkgSpec.lastIndexOf('@');
+const pkg = last > 0 ? pkgSpec.slice(0, last) : pkgSpec;
+const ver = last > 0 ? pkgSpec.slice(last + 1) : 'latest';
+
+async function get(url, redirects = 0) {
+  if (redirects > 5) throw new Error('Too many redirects');
+  const response = await fetch(url, { redirect: 'manual' });
+  if (response.status >= 300 && response.status < 400 && response.headers.get('location')) {
+    return get(new URL(response.headers.get('location'), url).href, redirects + 1);
+  }
+  if (response.status !== 200) throw new Error(`HTTP ${response.status} for ${url}`);
+  return Buffer.from(await response.arrayBuffer());
+}
+
+const metaBuf = await get(`https://registry.npmjs.org/${pkg}/${ver}`);
+const meta = JSON.parse(metaBuf.toString('utf8'));
+console.log(`Resolved ${pkg}@${meta.version}`);
+const tgz = await get(meta.dist.tarball);
+console.log(`Downloaded ${(tgz.length / 1024 / 1024).toFixed(1)} MB`);
+
+const buf = gunzipSync(tgz);
+mkdirSync(outDir, { recursive: true });
+let off = 0, files = 0;
+while (off + 512 <= buf.length) {
+  const name = buf.slice(off, off + 100).toString('utf8').replace(/\0+$/, '');
+  if (!name) break;
+  const sizeOct = buf.slice(off + 124, off + 136).toString('utf8').replace(/[\0\s]+$/, '');
+  if (!/^[0-7]+$/.test(sizeOct)) throw new Error(`Invalid tar entry size: ${name}`);
+  const size = parseInt(sizeOct, 8);
+  const typeflag = String.fromCharCode(buf[off + 156]);
+  off += 512;
+  if (off + Math.ceil(size / 512) * 512 > buf.length) throw new Error(`Truncated tar entry: ${name}`);
+  if (typeflag === '0' || typeflag === '\0') {
+    const dest = join(outDir, name);
+    mkdirSync(dirname(dest), { recursive: true });
+    writeFileSync(dest, buf.slice(off, off + size));
+    files++;
+  }
+  off += Math.ceil(size / 512) * 512;
+}
+if (files === 0) throw new Error('Tarball contains no files');
+console.log(`Extracted ${files} files`);
+console.log(`VERSION=${meta.version}`);
+FETCH_EOF
+if "$BUN_BIN" "$NATIVE_BIN_TMPDIR/fetch.mjs" "$NPM_PKG@$VERSION" "$NATIVE_BIN_TMPDIR" 2>&1 | while IFS= read -r line; do echo "  $line"; done; then
+  if [ -f "$NATIVE_BIN_TMPDIR/package/claude" ]; then
+    sz=$(stat -f%z "$NATIVE_BIN_TMPDIR/package/claude" 2>/dev/null || stat -c%s "$NATIVE_BIN_TMPDIR/package/claude" 2>/dev/null || echo 0)
+    if [ "$sz" -gt 10000000 ]; then
+      NATIVE_BIN="$NATIVE_BIN_TMPDIR/package/claude"
+      NATIVE_BIN_LABEL=$("$BUN_BIN" -e "console.log(require(process.argv[1]).version)" "$NATIVE_BIN_TMPDIR/package/package.json" 2>/dev/null || echo "npm-latest")
     fi
   fi
 fi
@@ -147,13 +178,49 @@ fi
 info "Downloaded $NPM_PKG@$NATIVE_BIN_LABEL"
 
 PREV_BACKUP_DIR=""
-ROLLBACK_FILES=(cli.original.cjs cli.original.cjs.bak cli.original.js .source-version
-  source-backup.json bunfs vendor pathmap.json extract-natives.mjs post-process.mjs
-  openai-proxy.cjs feature-gates.cjs cli.cjs .clawgod-version
-  startup-check.cjs compile-runtime.mjs .compiled-runtime .compiled-runtime-cache.json runtime-helpers.cjs prompt-runtime.cjs bun-ant-shim.cjs system-prompt.md
-  claude.fallback uninstall.sh lean-settings.json patches.json
-  patch.mjs patch-rules.mjs patch-registry.mjs ast-patches.mjs ast-helpers.mjs pentest-patches.mjs pentest-scanners.mjs pentest-prompts.mjs
-  pentest-trimming.mjs pentest-policy-text.mjs pentest-pruner.mjs lean-mode.cjs acorn.mjs acorn.LICENSE)
+ROLLBACK_FILES=(
+    'extract-natives.mjs'
+    'post-process.mjs'
+    'openai-proxy.cjs'
+    'cli.cjs'
+    'startup-check.cjs'
+    'runtime-helpers.cjs'
+    'prompt-runtime.cjs'
+    'bun-ant-shim.cjs'
+    'feature-gates.cjs'
+    'patch.mjs'
+    'patch-rules.mjs'
+    'ast-patches.mjs'
+    'ast-helpers.mjs'
+    'pentest-patches.mjs'
+    'pentest-scanners.mjs'
+    'pentest-prompts.mjs'
+    'pentest-trimming.mjs'
+    'pentest-policy-text.mjs'
+    'pentest-pruner.mjs'
+    'lean-mode.cjs'
+    'npm-fetch.mjs'
+    'acorn.mjs'
+    'acorn.LICENSE'
+    'cli.original.cjs'
+    'cli.original.cjs.bak'
+    'cli.original.js'
+    '.source-version'
+    'source-backup.json'
+    'pathmap.json'
+    'lean-settings.json'
+    'claude.fallback'
+    'compile-runtime.mjs'
+    'patch-registry.mjs'
+    'system-prompt.md'
+    '.clawgod-version'
+    '.compiled-runtime'
+    '.compiled-runtime-cache.json'
+    'bunfs'
+    'vendor'
+    'patches.json'
+    'uninstall.sh'
+)
 if [ -f "$CLAWGOD_DIR/cli.original.cjs" ] && [ -f "$CLAWGOD_DIR/.source-version" ]; then
   PREV_BACKUP_DIR=$(mktemp -d "${CLAWGOD_DIR}-rollback-XXXXXX")
   MOVED_ROLLBACK_FILES=()
@@ -209,8 +276,6 @@ rollback_install() {
 trap rollback_install EXIT
 
 cat > "$CLAWGOD_DIR/extract-natives.mjs" << 'EXTRACTOR_EOF'
-#!/usr/bin/env node
-
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -558,7 +623,7 @@ rm -rf "$CLAWGOD_DIR/vendor" "$CLAWGOD_DIR/bunfs" "$CLAWGOD_DIR/pathmap.json" \
   "$CLAWGOD_DIR/cli.original.js" 2>/dev/null
 
 dim "Extracting cli.js + modules from $NATIVE_BIN_LABEL ..."
-node "$CLAWGOD_DIR/extract-natives.mjs" "$NATIVE_BIN" "$CLAWGOD_DIR" 2>&1 | while IFS= read -r line; do echo "  $line"; done
+"$BUN_BIN" "$CLAWGOD_DIR/extract-natives.mjs" "$NATIVE_BIN" "$CLAWGOD_DIR" 2>&1 | while IFS= read -r line; do echo "  $line"; done
 if [ "${PIPESTATUS[0]}" -ne 0 ]; then
   err "Failed to extract from native binary"
   exit 1
@@ -715,9 +780,13 @@ function userPart(block) {
   if (block.type === 'document') {
     if (block.citations && block.citations.enabled) throw new Error('Document citations are not supported by openai-chat');
     if (source.type === 'text') return { type: 'text', text: textValue(source.data) };
+    if (source.type === 'url' && source.url) {
+      // OpenAI-compatible providers fetch URL documents themselves; forward the URL.
+      return { type: 'text', text: 'Document (' + (block.title || 'document') + '): ' + source.url };
+    }
     if (source.type === 'base64' && source.media_type === 'application/pdf' && source.data)
       return { type: 'file', file: { filename: block.title || 'document.pdf', file_data: 'data:application/pdf;base64,' + source.data } };
-    throw new Error('Unsupported document source; use base64 PDF (requires upstream file support) or text');
+    throw new Error('Unsupported document source; use base64 PDF, a URL, or text');
   }
   throw new Error('Unsupported user content block: ' + block.type);
 }
@@ -779,27 +848,51 @@ function translateRequest(body, configuredEffort) {
     else throw new Error('Unsupported tool_choice');
     if (choice.disable_parallel_tool_use !== undefined) result.parallel_tool_calls = !choice.disable_parallel_tool_use;
   }
-  if (body.output_config && body.output_config.format) throw new Error('Structured output format is not supported by openai-chat');
+  if (body.output_config && body.output_config.format) {
+    var format = body.output_config.format;
+    if (format.type === 'json_schema' && format.json_schema && typeof format.json_schema.schema === 'object') {
+      result.response_format = { type: 'json_schema', json_schema: {
+        name: format.json_schema.name || 'output',
+        schema: format.json_schema.schema,
+        strict: format.json_schema.strict === true,
+      } };
+    } else if (format.type === 'json_object') {
+      result.response_format = { type: 'json_object' };
+    }
+  }
   if (body.stream) result.stream_options = { include_usage: true };
   return result;
 }
 
 function estimateTokens(request) {
-  var bytes = 0, mediaTokens = 0;
+  var mediaTokens = 0;
   function visit(value) {
-    if (typeof value === 'string') bytes += encoder.encode(value).length;
-    else if (Array.isArray(value)) value.forEach(visit);
+    if (Array.isArray(value)) value.forEach(visit);
     else if (value && typeof value === 'object') {
       if (value.type === 'image_url' && value.image_url) { mediaTokens += 1600; return; }
       if (value.type === 'file' && value.file && typeof value.file.file_data === 'string' && value.file.file_data.startsWith('data:application/pdf;base64,')) {
         mediaTokens += Math.ceil(value.file.file_data.split(',')[1].length / 4); return;
       }
-      for (var key of Object.keys(value)) { bytes += key.length; visit(value[key]); }
+      for (var key of Object.keys(value)) visit(value[key]);
     }
   }
   visit(request.messages);
   visit(request.tools);
-  return Math.max(1, Math.ceil(bytes / 3) + mediaTokens + request.messages.length * 4);
+  // ~3.5 characters per token for English/code; CJK-heavy text runs closer to
+  // one character per token, so count those separately.
+  var cjk = 0, ascii = 0;
+  function countText(value) {
+    if (typeof value === 'string') {
+      for (var i = 0; i < value.length; i++) {
+        if (value.charCodeAt(i) > 0x2e7f) cjk++;
+        else ascii++;
+      }
+    } else if (Array.isArray(value)) value.forEach(countText);
+    else if (value && typeof value === 'object') { for (var key of Object.keys(value)) countText(value[key]); }
+  }
+  countText(request.messages);
+  countText(request.tools);
+  return Math.max(1, Math.ceil(ascii / 3.5) + cjk + mediaTokens + request.messages.length * 4);
 }
 
 function mapFinishReason(reason, hasToolCalls) {
@@ -9349,7 +9442,7 @@ export function applyAstEdits(code, edits) {
 }
 AST_HELPERS_EOF
 
-node "$CLAWGOD_DIR/post-process.mjs" 2>&1 | while IFS= read -r line; do echo "  $line"; done
+"$BUN_BIN" "$CLAWGOD_DIR/post-process.mjs" 2>&1 | while IFS= read -r line; do echo "  $line"; done
 if [ "${PIPESTATUS[0]}" -ne 0 ]; then err "Post-process failed"; exit 1; fi
 [ -f "$CLAWGOD_DIR/cli.original.cjs" ] || { err "Post-process failed"; exit 1; }
 
@@ -13885,7 +13978,6 @@ export const upstreamPatches = [
 ];
 PATCH_RULES_EOF
 cat > "$CLAWGOD_DIR/patch.mjs" << 'PATCHER_EOF'
-#!/usr/bin/env node
 import { readFileSync, writeFileSync, existsSync, copyFileSync, readdirSync, renameSync, unlinkSync } from 'fs';
 import { join, dirname, relative, resolve as resolvePath, sep } from 'path';
 import { fileURLToPath } from 'url';
@@ -14388,36 +14480,53 @@ console.log(`${'═'.repeat(55)}\n`);
 PATCHER_EOF
 cat > "$CLAWGOD_DIR/patch-registry.mjs" << 'PATCH_REGISTRY_EOF'
 
+// Review impact is scoped to each feature. Low affects display, medium changes
+// data handling or exposes a command, high changes policy or autonomous actions.
 export const FEATURES = {
-  'agent-teams':    { desc: 'Agent Teams always enabled',
+  'agent-teams':    { category: 'automation', risk: 'high',
+                      desc: 'Agent Teams always enabled',
                       patchIds: ['agent-teams', 'agent-teams-graph'] },
-  'computer-use':   { desc: 'Computer Use unlock',
+  'computer-use':   { category: 'automation', risk: 'high',
+                      desc: 'Computer Use unlock',
                       patchIds: ['computer-use-sub', 'computer-use-default', 'computer-use-gate', 'computer-use-gate-semantic'] },
-  'ultraplan':      { desc: 'Ultraplan slash command',
+  'ultraplan':      { category: 'interface', risk: 'medium',
+                      desc: 'Ultraplan slash command',
                       patchIds: ['ultraplan'] },
-  'ultrareview':    { desc: 'Ultrareview slash command',
+  'ultrareview':    { category: 'interface', risk: 'medium',
+                      desc: 'Ultrareview slash command',
                       patchIds: ['ultrareview-gate', 'ultrareview-direct', 'ultrareview-command'] },
-  'voice-mode':     { desc: 'Voice Mode',
+  'voice-mode':     { category: 'interface', risk: 'medium',
+                      desc: 'Voice Mode',
                       patchIds: ['voice-mode'] },
-  'auto-mode':      { desc: 'Auto-mode model selection on third-party APIs',
+  'auto-mode':      { category: 'automation', risk: 'high',
+                      desc: 'Auto-mode model selection on third-party APIs',
                       patchIds: ['auto-mode-helper-gate', 'auto-mode-inline-gate'] },
-  'classifier-tuning': { desc: 'Auto-mode classifier overrides (timeout/model/retries env vars)',
+  'classifier-tuning': { category: 'security-policy', risk: 'high',
+                      desc: 'Auto-mode classifier overrides (timeout/model/retries env vars)',
                       patchIds: ['classifier-timeout', 'classifier-model', 'classifier-retries'] },
-  'geo-neutralize': { desc: 'Neutralize geo/proxy steganography in system prompt',
+  'geo-neutralize': { category: 'privacy', risk: 'medium',
+                      desc: 'Neutralize geo/proxy steganography in system prompt',
                       patchIds: ['geo-stego-date', 'geo-detect-probe', 'geo-apostrophe-stego'] },
-  'wiggly-dove':    { desc: 'Block automatic Git/environment collection in x-claude-code-wiggly-dove',
+  'wiggly-dove':    { category: 'privacy', risk: 'medium',
+                      desc: 'Block automatic Git/environment collection in x-claude-code-wiggly-dove',
                       patchIds: ['wiggly-dove'] },
-  'cyber-risk':     { desc: 'Remove CYBER_RISK_INSTRUCTION from system prompt',
+  'cyber-risk':     { category: 'safety-prompt', risk: 'high',
+                      desc: 'Remove CYBER_RISK_INSTRUCTION from system prompt',
                       patchIds: ['remove-cyber-risk'] },
-  'url-restriction':{ desc: 'Remove URL generation restriction from system prompt',
+  'url-restriction':{ category: 'safety-prompt', risk: 'high',
+                      desc: 'Remove URL generation restriction from system prompt',
                       patchIds: ['remove-url-restriction'] },
-  'cautious-actions':{ desc: 'Remove "Executing actions with care" section from system prompt',
+  'cautious-actions':{ category: 'safety-prompt', risk: 'high',
+                      desc: 'Remove "Executing actions with care" section from system prompt',
                       patchIds: ['remove-cautious-actions'] },
-  'not-logged-in':  { desc: 'Remove "Not logged in" notice',
+  'not-logged-in':  { category: 'interface', risk: 'low',
+                      desc: 'Remove "Not logged in" notice',
                       patchIds: ['remove-not-logged-in'] },
-  'message-filter': { desc: 'Bypass non-ant message/attachment filters',
+  'message-filter': { category: 'security-policy', risk: 'high',
+                      desc: 'Bypass non-ant message/attachment filters',
                       patchIds: ['attachment-filter-bypass', 'message-filter-legacy', 'message-filter-s8'] },
-  'remote-settings': { desc: 'Ignore enterprise-managed remote settings',
+  'remote-settings': { category: 'security-policy', risk: 'high',
+                      desc: 'Ignore enterprise-managed remote settings',
                       patchIds: ['remote-settings-off'] },
 };
 
@@ -14436,10 +14545,10 @@ info "Patcher created (patch.mjs)"
 
 
 dim "Applying patches ..."
-node --max-old-space-size=4096 "$CLAWGOD_DIR/patch.mjs" --capture-and-apply 2>&1 | while IFS= read -r line; do echo "  $line"; done
+"$BUN_BIN" "$CLAWGOD_DIR/patch.mjs" --capture-and-apply 2>&1 | while IFS= read -r line; do echo "  $line"; done
 patch_status=${PIPESTATUS[0]}
 if [ "$patch_status" -ne 0 ]; then
-  warn "Patching failed (node exit $patch_status). Installation aborted."
+  warn "Patching failed (bun exit $patch_status). Installation aborted."
   if [ -z "$PREV_BACKUP_DIR" ]; then
     warn "No previous working installation found to roll back."
   fi
@@ -14509,15 +14618,15 @@ fi
 
 rm -f "$CLAWGOD_DIR/.lean-disabled" "$CLAWGOD_DIR/.lean-max"
 
-node -e '
-const {leanApply}=require(process.argv[2]);
-try{leanApply(process.argv[1],undefined,process.argv[3])}catch{}
-' "$CLAWGOD_DIR/lean-settings.json" "$CLAWGOD_DIR/lean-mode.cjs" "$CLAWGOD_DIR/patches.json" 2>/dev/null || true
+"$BUN_BIN" -e '
+const {leanApply}=require(process.argv[1]);
+try{leanApply(process.argv[2],undefined,process.argv[3])}catch{}
+' "$CLAWGOD_DIR/lean-mode.cjs" "$CLAWGOD_DIR/lean-settings.json" "$CLAWGOD_DIR/patches.json" 2>/dev/null || true
 info "Lean settings applied (strictest, clawgod-scoped): ~/.clawgod/lean-settings.json"
 
 dim "Verifying Bun can load patched cli.original.cjs (bounded startup check) ..."
 sanity_rc=0
-sanity_out=$(node "$CLAWGOD_DIR/startup-check.cjs" "$BUN_BIN" "$CLAWGOD_DIR/cli.cjs" 2>&1) || sanity_rc=$?
+sanity_out=$("$BUN_BIN" "$CLAWGOD_DIR/startup-check.cjs" "$BUN_BIN" "$CLAWGOD_DIR/cli.cjs" 2>&1) || sanity_rc=$?
 if echo "$sanity_out" | grep -q "Expected CommonJS module to have a function wrapper"; then
   echo ""
   warn "The selected Bun runtime cannot load Anthropic's cli.original.cjs."
@@ -14548,7 +14657,7 @@ fi
 info "Bun loads cli.original.cjs"
 dim "Verifying tool/command tables load (bounded probe) ..."
 probe_rc=0
-probe_out=$(node "$CLAWGOD_DIR/startup-check.cjs" "$BUN_BIN" "$CLAWGOD_DIR/cli.cjs" --probe-tools 2>&1) || probe_rc=$?
+probe_out=$("$BUN_BIN" "$CLAWGOD_DIR/startup-check.cjs" "$BUN_BIN" "$CLAWGOD_DIR/cli.cjs" --probe-tools 2>&1) || probe_rc=$?
 if [ "$probe_rc" -ne 0 ]; then
   warn "Patched Claude failed its tool-table probe (exit $probe_rc):"
   printf '%s\n' "$probe_out"

@@ -27,7 +27,7 @@ try {
   writeFileSync(bun, '#!/bin/bash\nexec "$CLAUDE_CODE_EXECPATH" "$@"\n', { mode: 0o755 });
   const installer = join(root, 'install.sh');
   writeFileSync(installer, '#!/bin/bash\nexit 0\n');
-  writeFileSync(join(root, 'uninstall.sh'), readFileSync(new URL('../templates/uninstall.sh', import.meta.url), 'utf8'));
+  writeFileSync(join(root, 'uninstall.sh'), readFileSync(new URL('../../uninstall.sh', import.meta.url), 'utf8'));
   writeFileSync(join(clawgod, 'cli.cjs'), '// fixture');
   const env = { ...process.env, HOME: root, CLAWGOD_DIR: clawgod, BIN_DIR: bin, BUN_BIN: bun, NATIVE_BIN_LABEL: '2.1.308' };
   const script = 'set -e\ninfo() { echo "$*"; }; warn() { echo "$*"; }; dim() { :; }; rollback_install() { :; };\ncurl() { return 1; }\n' + section;

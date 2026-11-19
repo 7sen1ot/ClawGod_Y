@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { test } from 'node:test';
 
-const source = readFileSync(new URL('./openai-proxy.cjs', import.meta.url), 'utf8');
+const source = readFileSync(new URL('../shared/openai-proxy.cjs', import.meta.url), 'utf8');
 const success = (extra = {}) => ({ id: 'chat-fixture', model: 'upstream-model', choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }], usage: { prompt_tokens: 123, completion_tokens: 7 }, ...extra });
 const jsonResponse = (body = success(), options) => new Response(JSON.stringify(body), options);
 const chunk = (delta = {}, finish_reason = null) => ({ id: 'chat-fixture', choices: [{ index: 0, delta, finish_reason }] });
@@ -146,25 +146,39 @@ test('tool_choice and parallel constraints map without changing omitted defaults
   assert.equal(p.calls[0].body.tool_choice, undefined);
 });
 
-test('base64/URL images, PDF files and text documents retain their content', async () => {
+test('base64/URL images, PDF files, URL documents and text documents retain their content', async () => {
   const p = setup();
   await p.send({ messages: [{ role: 'user', content: [
     { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aGVsbG8=' } },
     { type: 'image', source: { type: 'url', url: 'https://example.invalid/image.png' } },
     { type: 'document', title: 'manual.pdf', source: { type: 'base64', media_type: 'application/pdf', data: 'JVBERg==' } },
+    { type: 'document', source: { type: 'url', url: 'https://example.invalid/a.pdf' } },
     { type: 'document', source: { type: 'text', data: 'document text' } },
   ] }] });
   assert.deepEqual(p.calls[0].body.messages[0].content, [
     { type: 'image_url', image_url: { url: 'data:image/png;base64,aGVsbG8=' } },
     { type: 'image_url', image_url: { url: 'https://example.invalid/image.png' } },
     { type: 'file', file: { filename: 'manual.pdf', file_data: 'data:application/pdf;base64,JVBERg==' } },
+    { type: 'text', text: 'Document (document): https://example.invalid/a.pdf' },
     { type: 'text', text: 'document text' },
   ]);
 });
 
+test('structured output formats map to OpenAI response_format', async () => {
+  const schema = { type: 'object', properties: { name: { type: 'string' } } };
+  const p = setup();
+  await p.send({ output_config: { format: { type: 'json_schema', json_schema: { name: 'out', schema, strict: true } } } });
+  assert.deepEqual(p.calls[0].body.response_format, { type: 'json_schema', json_schema: { name: 'out', schema, strict: true } });
+  const p2 = setup();
+  await p2.send({ output_config: { format: { type: 'json_object' } } });
+  assert.deepEqual(p2.calls[0].body.response_format, { type: 'json_object' });
+  const p3 = setup();
+  await p3.send({ output_config: { format: { type: 'json_schema', json_schema: { schema: schema } } } });
+  assert.deepEqual(p3.calls[0].body.response_format, { type: 'json_schema', json_schema: { name: 'output', schema, strict: false } });
+});
+
 test('unsupported attachments, citations, tools and malformed requests fail before fetch', async () => {
   for (const fields of [
-    { messages: [{ role: 'user', content: [{ type: 'document', source: { type: 'url', url: 'https://example.invalid/a.pdf' } }] }] },
     { messages: [{ role: 'user', content: [{ type: 'document', citations: { enabled: true }, source: { type: 'text', data: 'text' } }] }] },
     { messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'file' } }] }] },
     { messages: [{ role: 'user', content: [{ type: 'audio' }] }] },
@@ -178,7 +192,7 @@ test('unsupported attachments, citations, tools and malformed requests fail befo
     { messages: [{ role: 'user', content: [{ type: 'text' }] }] },
     { messages: 'invalid' }, { system: [{ type: 'image' }] },
     { tools: [{ type: 'web_search_20250305', name: 'web_search' }] },
-    { tool_choice: { type: 'bad' } }, { output_config: { format: { type: 'json_schema' } } },
+    { tool_choice: { type: 'bad' } },
   ]) {
     const p = setup();
     const r = await p.send(fields);

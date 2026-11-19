@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import installFiles from '../install-files.cjs';
 
 const windows = process.platform === 'win32';
 const root = mkdtempSync(join(tmpdir(), 'clawgod lifecycle-'));
@@ -10,7 +11,8 @@ const home = join(root, 'profile space \u6d4b\u8bd5');
 const dir = join(home, '.clawgod');
 const bin = join(home, '.local', 'bin');
 const commands = join(root, 'commands');
-const installer = join(root, windows ? 'install.ps1' : 'install.sh');
+const installerName = windows ? 'install.ps1' : 'install.sh';
+const installer = join(root, installerName);
 const uninstallerName = windows ? 'uninstall.ps1' : 'uninstall.sh';
 const uninstaller = join(root, uninstallerName);
 const native = windows ? 'claude.fallback.exe' : 'claude.fallback';
@@ -24,14 +26,14 @@ for (const key of Object.keys(env)) if (/^(?:https?_proxy|all_proxy)$/i.test(key
 const source = name => readFileSync(new URL(name, import.meta.url), 'utf8');
 const uninstallerSource = process.argv[2]
   ? readFileSync(join(dirname(resolve(process.argv[2])), uninstallerName), 'utf8')
-  : source('../templates/' + uninstallerName);
+  : source('../../' + uninstallerName);
 const payloads = {
+  ...installFiles.fileListsFor(installerName),
   'cli.cjs': source('./cli.cjs'),
   'runtime-helpers.cjs': source('./runtime-helpers.cjs'),
   'prompt-runtime.cjs': source('./prompt-runtime.cjs'),
   'lean-mode.cjs': source('./lean-mode.cjs'),
-  'lean-apply.cjs': source('../windows/lean-apply.cjs'),
-  'startup-check.cjs': source('./startup-check.cjs'),
+  'lean-apply.cjs': source('../windows/lean-apply.cjs'),  'startup-check.cjs': source('./startup-check.cjs'),
   'features.json': '{}',
   'system-prompt.md': 'Lifecycle fixture prompt.\n',
   'extract-natives.mjs': `import {mkdirSync,writeFileSync} from 'node:fs';import{join}from'node:path';
@@ -54,7 +56,7 @@ else console.log(require('fs').readFileSync(require('path').join(__dirname,'.sou
     const dir=join(process.argv[3],'package');mkdirSync(dir,{recursive:true});if(process.env.CLAWGOD_FAIL_STAGE!=='missing-binary')copyFileSync(process.execPath,join(dir,'claude.exe'));
     writeFileSync(join(dir,'package.json'),JSON.stringify({version}));console.log('VERSION='+version);`,
 };
-let template = source(windows ? '../templates/install.ps1' : '../templates/install.sh');
+let template = source('../templates/' + installerName);
 if (process.argv[2]) {
   const built = readFileSync(resolve(process.argv[2]), 'utf8');
   const selfVersion = windows ? /^\$ClawSelfVersion = ".*"$/m : /^CLAWGOD_SELF_VERSION=".*"$/m;

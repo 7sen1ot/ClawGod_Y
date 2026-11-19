@@ -15,7 +15,7 @@ try {
     $prefix = @'
 $ErrorActionPreference = 'Stop'
 $ClawDir = $env:CLAWGOD_TEST_DIR
-$BunBin = (Get-Command node.exe).Source
+$BunBin = (Get-Command bun.exe).Source
 function Write-Dim($message) { Write-Host $message }
 function Write-Err($message) { Write-Host $message }
 function Write-OK($message) { Write-Host $message }

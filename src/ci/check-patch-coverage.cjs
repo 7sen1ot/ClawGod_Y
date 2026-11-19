@@ -1,16 +1,35 @@
 const { readFileSync } = require('node:fs');
 
-const [logPath, platform] = process.argv.slice(2);
+const [logPath, platform, versionArg] = process.argv.slice(2);
 if (!logPath || !['linux', 'macos', 'windows'].includes(platform)) {
-  throw new Error('Usage: node check-patch-coverage.cjs <install-log> <linux|macos|windows>');
+  throw new Error('Usage: bun check-patch-coverage.cjs <install-log> <linux|macos|windows> [claude-version]');
 }
+
+// Version below which a retired patch rule no longer counts as a coverage gap.
+// Rules whose anchors were removed upstream before this version are dead
+// weight: they are expected absent and excluded from the failure baseline.
+const RETIRED_BEFORE = new Map([
+  ['Ultrareview enable (direct literal, <=2.1.213)', '2.1.214'],
+  ['Message list filter bypass (legacy ternary)', '2.1.214'],
+]);
+
+const installedVersion = versionArg && /^\d+\.\d+\.\d+$/.test(versionArg)
+  ? versionArg
+  : (readFileSync(logPath, 'utf8').match(/Source:\s*([\d.]+)/) || [])[1];
+const versionAtLeast = (bound) => {
+  if (!installedVersion || !bound) return true;
+  const [a, b] = [installedVersion.split('.').map(Number), bound.split('.').map(Number)];
+  for (let i = 0; i < 3; i++) {
+    if (a[i] !== b[i]) return a[i] > b[i];
+  }
+  return true;
+};
 
 // Known gaps in Claude 2.1.316: actions/runs/41206844027, also shared by stable 2.1.309.
 const baseline = new Map([
   ['Computer Use gate (resolved configuration contract)', 'absent'],
   ['Neutralize geo-steganography in date string (qla)', 'unverified'],
   ['Skip MCP server allowlist / policy checks', 'absent'],
-  ['Ultrareview enable (direct literal, <=2.1.213)', 'absent'],
   ['Computer Use gate bypass', 'unverified'],
   ['Auto-mode unlock for third-party API (provider helper gate)', 'absent'],
   ['macOS Cmd+V image paste fallback to clipboard read', 'stale'],
@@ -18,8 +37,10 @@ const baseline = new Map([
   ['Neutralize geo-detection probe (rdp)', 'unverified'],
   ['Neutralize apostrophe steganography (odp)', 'absent'],
   ['Remove cautious actions section', 'unverified'],
-  ['Message list filter bypass (legacy ternary)', 'absent'],
 ]);
+for (const [name, bound] of RETIRED_BEFORE) {
+  if (!versionAtLeast(bound)) baseline.set(name, 'absent');
+}
 if (platform !== 'macos') {
   baseline.set('Computer Use default enabled', 'unverified');
   baseline.set('Computer Use subscription bypass', 'unverified');
