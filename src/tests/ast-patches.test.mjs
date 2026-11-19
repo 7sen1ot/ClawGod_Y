@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { runInNewContext } from 'node:vm';
-import { AST_PATCH_IDS, scanAstPatches, applyAstEdits, parsePatchSource } from './ast-patches.mjs';
+import { AST_PATCH_IDS, scanAstPatches, applyAstEdits, parsePatchSource } from '../shared/ast-patches.mjs';
 import { requiredRuntime } from './required-runtime.fixture.mjs';
-import { instructionFileFilter } from './runtime-helpers.cjs';
+import { instructionFileFilter } from '../shared/runtime-helpers.cjs';
 
 const source = `
 function projects(){return paths.join(root,'projects')}
@@ -189,7 +189,7 @@ try {
     const dir = join(root, graph ? 'graph' : 'legacy');
     mkdirSync(dir);
     for (const name of ['patch.mjs', 'patch-rules.mjs', 'patch-registry.mjs', 'ast-patches.mjs', 'ast-helpers.mjs', 'acorn.mjs', 'pentest-patches.mjs', 'pentest-scanners.mjs', 'pentest-prompts.mjs', 'pentest-trimming.mjs', 'pentest-policy-text.mjs', 'pentest-pruner.mjs', 'runtime-helpers.cjs', 'prompt-runtime.cjs']) {
-      copyFileSync(new URL(`./${name}`, import.meta.url), join(dir, name));
+      copyFileSync(new URL(`../shared/${name}`, import.meta.url), join(dir, name));
     }
     const entry = join(dir, 'cli.original.cjs');
     if (graph) {

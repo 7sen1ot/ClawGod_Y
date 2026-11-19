@@ -1,18 +1,18 @@
 # Installer and uninstaller build sources
 
-`install.sh`, `install.ps1`, `uninstall.sh`, and `uninstall.ps1` are generated,
-committed release artifacts. Installation and uninstallation have separate
-templates and entry points. The installers cache the standalone uninstaller in
-`~/.clawgod/`; `clawgod --uninstall` delegates to that script.
-Edit the files under this directory, then rebuild from the repository root:
+The release workflow builds `install.sh`, `install.ps1`, `uninstall.sh`, and
+`uninstall.ps1` from the templates and publishes them as release assets. Git
+ignores the four local outputs. Each installer embeds its matching standalone
+uninstaller and writes it to `~/.clawgod/` for `clawgod --uninstall`.
+To build a local copy, run
 
 ```bash
 bun build.js
 bun build.js --check
 ```
 
-The `build-sources` CI job runs `--check` once per workflow run and fails
-when any of the four generated scripts is missing or differs from its sources.
+`--check` renders all templates in memory. If any local output exists, it
+also checks all four files against the rendered bytes.
 `.gitattributes` pins the complete build graph to LF on every platform.
 
 The installers accept one optional version argument: `latest`, `stable`, or an
@@ -45,23 +45,24 @@ installation rollback snapshots.
 
 ## Testing
 
-From the repository root, `bun run test` runs the proxy and issue-policy
-suites. The installer and platform checks run in their respective workflows.
+From the repository root, `bun run test` builds the installers and runs the
+source, installer, proxy and issue-policy suites. Platform-specific PowerShell
+and terminal checks run in CI.
 
-`bun src/shared/ast-patches.test.mjs` checks semantic locations, property
+`bun src/tests/ast-patches.test.mjs` checks semantic locations, property
 reordering, quoted/computed keys, supported function forms, neighboring code,
 runtime toggles, repeated patching, dry-run/verify, clean-source restoration,
 and syntax-failure safety. CI runs this suite alongside the patch integration
-fixtures in `src/shared/patch.test.mjs`.
+fixtures in `src/tests/patch.test.mjs`.
 
-`src/shared/patch.test.mjs` tests the classifier-timeout helper in
+`src/tests/patch.test.mjs` tests the classifier-timeout helper in
 `runtime-helpers.cjs` and runs the patcher on legacy bundles and chunk graphs.
 It checks Ultraplan toggles, prompt assembly hooks, metadata preservation,
 and warning/skip behavior for unsupported non-required shapes.
-No Claude bundle is needed. Run locally with Node:
+The suite uses local fixtures and runs under Bun.
 
 ```bash
-bun src/shared/patch.test.mjs
+bun src/tests/patch.test.mjs
 ```
 
 The same suite checks the `wiggly-dove` privacy gate with renamed flag
@@ -72,45 +73,45 @@ The patch covers this automatic metadata channel; prompts and tool results
 keep their usual behavior. If the matcher becomes stale, this non-required
 patch is skipped with a warning and the upstream behavior is retained.
 
-`src/shared/bun-ant-shim.test.mjs` tests the `Bun.ant.CellSegmenter`
+`src/tests/bun-ant-shim.test.mjs` tests the `Bun.ant.CellSegmenter`
 implementation in `bun-ant-shim.cjs`: escape scanning, grapheme widths, style
 runs, hyperlink runs, capacity reporting, and the cell/damage packing that the
 patched bundle reads back. It runs under plain Node too, because the shim
 falls back to a local width table when `Bun.stringWidth` is unavailable:
 
 ```bash
-bun src/shared/bun-ant-shim.test.mjs
+bun src/tests/bun-ant-shim.test.mjs
 ```
 
-`src/shared/terminal-reply.test.mjs` checks the incomplete DA1 reply timer,
+`src/tests/terminal-reply.test.mjs` checks the incomplete DA1 reply timer,
 normal keyboard/paste fallback, its two-second timeout, and the actual patch
 composition for legacy bundles and chunk graphs:
 
 ```bash
-bun src/shared/terminal-reply.test.mjs
+bun src/tests/terminal-reply.test.mjs
 ```
 
 While a terminal probe is pending, a lone Escape or Alt+[ may wait up to two
 seconds for a reply continuation before the original parser handles it. With
 no outstanding probe, the original input timing is unchanged.
 
-`src/shared/lean.test.mjs` exercises the full launcher with isolated settings,
+`src/tests/lean.test.mjs` exercises the full launcher with isolated settings,
 plus the Unix and Windows install/uninstall settings handling. It covers the
 single `~/.clawgod/lean-settings.json` configuration, cleanup of legacy managed
 settings, preservation of user settings, provider parity, explicit network
 environment settings, and launcher `--settings` arguments:
 
 ```bash
-bun src/shared/lean.test.mjs
+bun src/tests/lean.test.mjs
 ```
 
-`src/shared/provider.test.mjs` runs the launcher and proxy request handler with
+`src/tests/provider.test.mjs` runs the launcher and proxy request handler with
 isolated configuration and mocked HTTP transport. It checks provider authentication,
 blank-token fallback, effort translation and environment precedence, including
 streaming requests and custom model aliases that omit `output_config`:
 
 ```bash
-bun src/shared/provider.test.mjs
+bun src/tests/provider.test.mjs
 ```
 
 `src/tests/openai-proxy.test.mjs` exercises request/response translation,
@@ -128,13 +129,21 @@ The integration suite runs a real Bun proxy and loopback HTTP upstream. It
 verifies a complete tool call/result round trip, streaming token accounting,
 error status/retry headers, local counting without network calls, and stream
 timeouts. CI runs both suites under Bun on Linux, macOS, and Windows. A change
-confined to the proxy tests skips the installer compatibility matrix.
+confined to the proxy or its tests skips the installer compatibility matrix.
 
-In `compat-daily.yml`, `build-sources` runs the Node regression suites and checks
-generated scripts. Compatibility smoke jobs run on Linux, macOS, and Windows
-with the Bun version pinned in `.bun-version`. `.github/scripts/resolve-claude-versions.cjs` builds their Claude
-version matrix from the template default and npm's `stable` and `latest` tags,
-deduplicating equal versions.
+The proxy reuses the last upstream input-token count for an identical model,
+input configuration and message prefix. For an extended conversation it
+estimates only the added messages. The count endpoint marks an identical
+request as `upstream` and other counts as `estimate` in the
+`x-clawgod-token-count` header. Tool and output schemas contribute to estimates.
+URL PDFs are forwarded as file attachments to providers that accept URLs in
+`file_data`. OpenAI's Chat Completions file input accepts base64 PDF data.
+
+In `compat-daily.yml`, `build-sources` builds the scripts and runs the source
+suite under Bun. Compatibility smoke jobs run on Linux, macOS, and Windows
+with the Bun version pinned in `.bun-version`. Branch pushes and pull requests
+use the template's default Claude version. Scheduled, manual and release runs
+also check npm's `stable` and `latest` versions. Equal versions run once.
 
 `installer-checks.yml` covers installation, rollback, standalone uninstallation,
 downloads, native extraction, compiled startup, and source fallback. Its matrix
@@ -149,9 +158,9 @@ from `src/ci/tui-requirements.txt`. Windows CI runs it against the resolved Clau
 version matrix with the pinned Bun version. Terminal logs, final screens and results are
 uploaded as CI artifacts.
 
-`src/shared/updater.test.mjs` checks that the launcher disables native
+`src/tests/updater.test.mjs` checks that the launcher disables native
 background updates before loading Claude, including inherited false values.
-`src/shared/startup-check.test.mjs` checks the installer's bounded startup
+`src/tests/startup-check.test.mjs` checks the installer's bounded startup
 probe, version output, errors, closed stdin, paths with spaces/non-ASCII text,
 process-tree timeout cleanup, logs, and standalone version-query side effects.
 Version detection uses stdout independently of stderr and the truncated log
@@ -175,14 +184,13 @@ migrating settings, or starting the background release check.
 `src/windows/launchers.test.ps1` runs the installer's launcher section on real
 Windows files. It covers native executable isolation, repeated installs,
 compiled/source launcher selection, argument passing, and legacy artifact cleanup.
-Run the JavaScript scripts with Node and the `.ps1` scripts with Windows
-PowerShell 5.1; CI runs the corresponding platform checks.
+Run the JavaScript scripts with Bun and the Windows scripts with PowerShell 5.1.
 
 Each installation refreshes the private `~/.clawgod/claude.fallback` binary
 (`claude.fallback.exe` on Windows) from the selected Claude version. Launchers
 set `CLAUDE_CODE_EXECPATH`, and `cli.cjs` redirects `process.execPath` there for
 native subprocesses. The original `claude` installation remains separate.
-`launchers.test.ps1` and `src/shared/native-refresh.test.mjs` cover this isolation
+`launchers.test.ps1` and `src/tests/native-refresh.test.mjs` cover this isolation
 on Windows and Unix, including protection against writing through a symlink.
 
 ## Layout
@@ -200,7 +208,7 @@ processing and request reinstallation. Rerun the installer for the selected
 Claude version to refresh the extracted source and snapshot. Patched source is
 written only after required hooks and syntax checks pass.
 
-`bun src/shared/source-backup.test.mjs` covers repeated patching, graph and
+`bun src/tests/source-backup.test.mjs` covers repeated patching, graph and
 legacy backups, version/file-set validation, revert, and failure without source
 writes, plus Unix extraction/patch rollback and failure propagation. Windows
 rollback is covered by `src/windows/source-recovery.test.ps1`. The source-backup
@@ -210,7 +218,8 @@ check each installation log against the coverage baseline.
 - `install-files.cjs` lists embedded sources and generates the rollback and
   uninstall lists for each platform. Both lists include the installed runtime
   payloads. User configuration and the cached uninstaller are retained on uninstall.
-- `shared/` contains runtime payloads, test fixtures and the vendored Acorn parser.
+- `tests/` contains the JavaScript suites and their fixtures.
+- `shared/` contains cross-platform payloads and the vendored Acorn parser.
   `cli.cjs` is the launcher bootstrap for Unix and Windows.
   `feature-gates.cjs` carries a `const CLAWGOD_FEATURES_META = {};`
   marker that `build.js` replaces with `featuresMeta()` from

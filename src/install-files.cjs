@@ -4,14 +4,14 @@ const runtimePayloads = [
   'feature-gates.cjs', 'patch.mjs', 'patch-rules.mjs', 'ast-patches.mjs', 'ast-helpers.mjs',
   'pentest-patches.mjs', 'pentest-scanners.mjs', 'pentest-prompts.mjs', 'pentest-trimming.mjs',
   'pentest-policy-text.mjs', 'pentest-pruner.mjs', 'lean-mode.cjs',
-  'npm-fetch.mjs', 'acorn.mjs', 'acorn.LICENSE',
+  'acorn.mjs', 'acorn.LICENSE',
 ];
 // The Windows uninstaller tolerates removal failures for these payloads.
 const bestEffortPayloads = ['compile-runtime.mjs', 'patch-registry.mjs', 'system-prompt.md'];
 
-// features.json is seeded once and belongs to the user afterwards.
+// The downloader runs in a temporary directory. features.json belongs to the user after seeding.
 const sharedSources = Object.fromEntries(
-  [...runtimePayloads, ...bestEffortPayloads, 'features.json'].map(name => [name, 'shared/' + name]),
+  [...runtimePayloads, ...bestEffortPayloads, 'npm-fetch.mjs', 'features.json'].map(name => [name, 'shared/' + name]),
 );
 const windowsSources = {
   ...sharedSources,
@@ -22,7 +22,7 @@ function formatList(names) {
   return names.map(name => `    '${name}'`).join('\n');
 }
 
-function fileListsFor(target) {
+function templateValuesFor(target, uninstallerSource) {
   const windows = target.endsWith('.ps1');
   const exe = windows ? '.exe' : '';
   const uninstaller = windows ? 'uninstall.ps1' : 'uninstall.sh';
@@ -33,11 +33,14 @@ function fileListsFor(target) {
   ];
   const bestEffort = [...bestEffortPayloads, '.clawgod-version', '.compiled-runtime', '.compiled-runtime-cache.json'];
   if (target !== uninstaller) {
-    return { 'rollback-files': formatList([...files, ...bestEffort, ...directories, 'patches.json', uninstaller]) };
+    return {
+      'rollback-files': formatList([...files, ...bestEffort, ...directories, 'patches.json', uninstaller]),
+      'standalone-uninstaller': windows ? Buffer.from(uninstallerSource).toString('base64') : uninstallerSource.replace(/\n$/, ''),
+    };
   }
 
   const uninstallFiles = [
-    ...files, 'cli.original.js.bak', 'cli.js', 'patch.js', 'repatch.mjs', '.lean-disabled', '.lean-max',
+    ...files, 'npm-fetch.mjs', 'cli.original.js.bak', 'cli.js', 'patch.js', 'repatch.mjs', '.lean-disabled', '.lean-max',
     'startup-check.log', 'clawgod-import' + exe, 'claude.staged' + exe,
   ];
   const optionalFiles = [...bestEffort, 'probe-tools.log'];
@@ -49,4 +52,4 @@ function fileListsFor(target) {
   return lists;
 }
 
-module.exports = { sharedSources, windowsSources, fileListsFor };
+module.exports = { sharedSources, windowsSources, templateValuesFor };

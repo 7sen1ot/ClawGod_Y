@@ -144,6 +144,7 @@ export const upstreamPatches = [
     id: 'ultrareview-direct',
     toggleable: true,
     name: 'Ultrareview enable (direct literal, <=2.1.213)',
+    versions: '<=2.1.213',
     pattern: /function ([\w$]+)\(\)\{return ([\w$]+)\("tengu_review_bughunter_config",null\)(\?\.enabled===!0)?\}/g,
     replacer: (m, fn, getter, hasGate) =>
       hasGate

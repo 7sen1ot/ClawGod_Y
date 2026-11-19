@@ -22,9 +22,9 @@ try {
   for (const mount of ['/$bunfs/root/', 'B:/~BUN/root/']) {
     const dir = join(root, mount.startsWith('B:') ? 'windows' : 'posix', 'profile space \u6d4b\u8bd5');
     mkdirSync(join(dir, 'bunfs'), { recursive: true });
-    copyFileSync(new URL('./post-process.mjs', import.meta.url), join(dir, 'post-process.mjs'));
-    copyFileSync(new URL('./acorn.mjs', import.meta.url), join(dir, 'acorn.mjs'));
-    copyFileSync(new URL('./ast-helpers.mjs', import.meta.url), join(dir, 'ast-helpers.mjs'));
+    copyFileSync(new URL('../shared/post-process.mjs', import.meta.url), join(dir, 'post-process.mjs'));
+    copyFileSync(new URL('../shared/acorn.mjs', import.meta.url), join(dir, 'acorn.mjs'));
+    copyFileSync(new URL('../shared/ast-helpers.mjs', import.meta.url), join(dir, 'ast-helpers.mjs'));
     writeFileSync(join(dir, 'pathmap.json'), JSON.stringify({
       [`${mount}helper.js`]: { path: 'bunfs/helper.js', loader: 'js' },
       [`${mount}state-library.js.txt`]: { path: 'bunfs/state-library.js.txt', loader: 'text' },

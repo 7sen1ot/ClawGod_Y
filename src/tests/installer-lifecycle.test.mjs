@@ -14,13 +14,11 @@ const commands = join(root, 'commands');
 const installerName = windows ? 'install.ps1' : 'install.sh';
 const installer = join(root, installerName);
 const uninstallerName = windows ? 'uninstall.ps1' : 'uninstall.sh';
-const uninstaller = join(root, uninstallerName);
 const native = windows ? 'claude.fallback.exe' : 'claude.fallback';
 const launcher = join(bin, windows ? 'clawgod.cmd' : 'clawgod');
 const cache = join(dir, uninstallerName);
 const savedUserPath = windows ? spawnSync('powershell.exe', ['-NoProfile', '-Command', '[Environment]::GetEnvironmentVariable("Path", "User")'], { encoding: 'utf8' }).stdout.trimEnd() : '';
 const env = { ...process.env, HOME: home, USERPROFILE: home, CLAWGOD_FIXTURE_INSTALLER: installer,
-  CLAWGOD_FIXTURE_UNINSTALLER: uninstaller,
   PATH: commands + (windows ? ';' : ':') + process.env.PATH };
 for (const key of Object.keys(env)) if (/^(?:https?_proxy|all_proxy)$/i.test(key)) delete env[key];
 const source = name => readFileSync(new URL(name, import.meta.url), 'utf8');
@@ -28,12 +26,13 @@ const uninstallerSource = process.argv[2]
   ? readFileSync(join(dirname(resolve(process.argv[2])), uninstallerName), 'utf8')
   : source('../../' + uninstallerName);
 const payloads = {
-  ...installFiles.fileListsFor(installerName),
-  'cli.cjs': source('./cli.cjs'),
-  'runtime-helpers.cjs': source('./runtime-helpers.cjs'),
-  'prompt-runtime.cjs': source('./prompt-runtime.cjs'),
-  'lean-mode.cjs': source('./lean-mode.cjs'),
-  'lean-apply.cjs': source('../windows/lean-apply.cjs'),  'startup-check.cjs': source('./startup-check.cjs'),
+  ...installFiles.templateValuesFor(installerName, uninstallerSource),
+  'cli.cjs': source('../shared/cli.cjs'),
+  'runtime-helpers.cjs': source('../shared/runtime-helpers.cjs'),
+  'prompt-runtime.cjs': source('../shared/prompt-runtime.cjs'),
+  'lean-mode.cjs': source('../shared/lean-mode.cjs'),
+  'lean-apply.cjs': source('../windows/lean-apply.cjs'),
+  'startup-check.cjs': source('../shared/startup-check.cjs'),
   'features.json': '{}',
   'system-prompt.md': 'Lifecycle fixture prompt.\n',
   'extract-natives.mjs': `import {mkdirSync,writeFileSync} from 'node:fs';import{join}from'node:path';
@@ -53,7 +52,11 @@ else console.log(require('fs').readFileSync(require('path').join(__dirname,'.sou
     writeFileSync(join(process.env.USERPROFILE,'requested-package.txt'),process.argv[2]);
     if(['download','corrupt'].includes(process.env.CLAWGOD_FAIL_STAGE))throw new Error('fixture download or corrupt archive');
     const tag=process.argv[2].split('@').at(-1),version=tag==='latest'?'2.1.315':tag==='stable'?'2.1.308':tag;
-    const dir=join(process.argv[3],'package');mkdirSync(dir,{recursive:true});if(process.env.CLAWGOD_FAIL_STAGE!=='missing-binary')copyFileSync(process.execPath,join(dir,'claude.exe'));
+    const dir=join(process.argv[3],'package');mkdirSync(dir,{recursive:true});
+    if(process.env.CLAWGOD_FAIL_STAGE!=='missing-binary'){
+      if(process.platform==='win32')copyFileSync(process.execPath,join(dir,'claude.exe'));
+      else writeFileSync(join(dir,'claude'),'#!/bin/sh\\necho "'+version+' (Claude Code)"\\n',{mode:0o755});
+    }
     writeFileSync(join(dir,'package.json'),JSON.stringify({version}));console.log('VERSION='+version);`,
 };
 let template = source('../templates/' + installerName);
@@ -83,9 +86,10 @@ const run = (args = [], extra = {}, piped = false) => {
     env: { ...env, ...extra }, input: piped ? template : undefined, encoding: 'utf8', timeout: 60000,
   });
   const command = `function Invoke-WebRequest { throw 'Optional import download is offline' }
-function Invoke-RestMethod { if($env:CLAWGOD_FAIL_CACHE -eq '1'){throw 'Uninstaller download failed'};[IO.File]::ReadAllText($env:CLAWGOD_FIXTURE_UNINSTALLER) }
+function Invoke-RestMethod { throw 'Fixture network is offline' }
 ${['PROCESSOR_ARCHITECTURE', 'PROCESSOR_ARCHITEW6432'].filter(key => Object.hasOwn(extra, key)).map(key => `$env:${key}='${extra[key].replaceAll("'", "''")}'`).join('\n')}
 ${extra.CLAWGOD_FAIL_LAUNCHER ? '$lock=[IO.File]::Open((Join-Path $env:USERPROFILE ".local\\bin\\clawgod.cmd"),"Open","Read","Read")' : ''}
+${extra.CLAWGOD_FAIL_CACHE ? '$lock=[IO.File]::Open((Join-Path $env:USERPROFILE ".clawgod\\uninstall.ps1.tmp"),"OpenOrCreate","Write","None")' : ''}
 ${piped ? '& ([scriptblock]::Create([IO.File]::ReadAllText($env:CLAWGOD_FIXTURE_INSTALLER)))' : '& $env:CLAWGOD_FIXTURE_INSTALLER'} ${args.map(arg => `'${arg.replaceAll("'", "''")}'`).join(' ')}
 if (-not $?) { exit 1 }
 `;
@@ -99,32 +103,22 @@ try {
   mkdirSync(bin, { recursive: true });
   mkdirSync(commands);
   writeFileSync(installer, (windows ? '\ufeff' : '') + template);
-  writeFileSync(uninstaller, uninstallerSource);
   const official = join(commands, windows ? 'claude.exe' : 'claude');
   writeFileSync(official, 'official Claude must remain unchanged', { mode: 0o755 });
   if (windows) writeFileSync(join(commands, 'rg.cmd'), '@echo off\r\necho ripgrep fixture\r\n');
   if (!windows) {
-    shellFile('npm', `printf '%s' "$2" > "$HOME/requested-package.txt"
-[ "\${CLAWGOD_FAIL_STAGE:-}" != download ] || exit 23
-tag="\${2##*@}"; case "$tag" in latest) version=2.1.315;; stable) version=2.1.308;; *) version="$tag";; esac
-printf '%s' "$version" > fixture.tgz\n`);
-    shellFile('tar', `[ "\${CLAWGOD_FAIL_STAGE:-}" != corrupt ] || exit 2
-version=$(cat "$2");mkdir -p package
-if [ "\${CLAWGOD_FAIL_STAGE:-}" = missing-binary ]; then exit 0; fi
-printf '#!/bin/bash\\necho "%s (Claude Code)"\\n' "$version" > package/claude
-printf '{"version":"%s"}' "$version" > package/package.json\n`);
     shellFile('stat', 'echo 11000001\n');
     shellFile('uname', `case "$1" in -s) if [ -n "\${CLAWGOD_FIXTURE_OS:-}" ];then echo "$CLAWGOD_FIXTURE_OS";exit;fi;;
 -m) if [ -n "\${CLAWGOD_FIXTURE_ARCH:-}" ];then echo "$CLAWGOD_FIXTURE_ARCH";exit;fi;;esac
 exec /usr/bin/uname "$@"\n`);
     shellFile('ldd', 'echo "\${CLAWGOD_FIXTURE_LIBC:-glibc}"\n');
     shellFile('rg', 'echo "ripgrep fixture"\n');
-    shellFile('curl', `while [ "$#" -gt 0 ]; do if [ "$1" = -o ];then target="$2";shift 2;else shift;fi;done
-case "$target" in */clawgod-import) exit 22;; esac
-[ "\${CLAWGOD_FAIL_CACHE:-0}" != 1 ] || exit 22
-cp "$CLAWGOD_FIXTURE_UNINSTALLER" "$target"\n`);
+    shellFile('curl', 'exit 22\n');
     shellFile('mv', `for target in "$@"; do :; done
-case "$target" in */.local/bin/clawgod) [ "\${CLAWGOD_FAIL_LAUNCHER:-0}" != 1 ] || exit 73;; esac
+case "$target" in
+  */.local/bin/clawgod) [ "\${CLAWGOD_FAIL_LAUNCHER:-0}" != 1 ] || exit 73;;
+  */.clawgod/uninstall.sh) [ "\${CLAWGOD_FAIL_CACHE:-0}" != 1 ] || exit 73;;
+esac
 exec /bin/mv "$@"\n`);
   }
   for (const [args, version] of [[[], '2.1.322'], [['latest'], '2.1.315'], [['stable'], '2.1.308'], [['2.1.309'], '2.1.309']]) {

@@ -11,7 +11,7 @@ if (process.platform === 'win32') {
 
 const root = mkdtempSync(join(tmpdir(), 'clawgod-native-refresh-'));
 try {
-  const template = readFileSync(new URL('../templates/install.sh', import.meta.url), 'utf8');
+  const template = readFileSync(new URL('../../install.sh', import.meta.url), 'utf8');
   const start = template.indexOf('IMPORT_BIN="$CLAWGOD_DIR/clawgod-import"');
   assert.ok(start > 0, 'launcher section not found');
   const section = template.slice(start);
@@ -27,7 +27,6 @@ try {
   writeFileSync(bun, '#!/bin/bash\nexec "$CLAUDE_CODE_EXECPATH" "$@"\n', { mode: 0o755 });
   const installer = join(root, 'install.sh');
   writeFileSync(installer, '#!/bin/bash\nexit 0\n');
-  writeFileSync(join(root, 'uninstall.sh'), readFileSync(new URL('../../uninstall.sh', import.meta.url), 'utf8'));
   writeFileSync(join(clawgod, 'cli.cjs'), '// fixture');
   const env = { ...process.env, HOME: root, CLAWGOD_DIR: clawgod, BIN_DIR: bin, BUN_BIN: bun, NATIVE_BIN_LABEL: '2.1.308' };
   const script = 'set -e\ninfo() { echo "$*"; }; warn() { echo "$*"; }; dim() { :; }; rollback_install() { :; };\ncurl() { return 1; }\n' + section;

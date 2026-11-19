@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 
 const require = createRequire(import.meta.url);
-const wrapper = fs.readFileSync(new URL('./cli.cjs', import.meta.url), 'utf8');
+const wrapper = fs.readFileSync(new URL('../shared/cli.cjs', import.meta.url), 'utf8');
 const home = fs.mkdtempSync(join(tmpdir(), 'clawgod-updater-test-'));
 const bundleDir = join(home, 'installation');
 const dir = join(home, '.clawgod');
@@ -31,7 +31,7 @@ try {
             loaded = true;
             return {};
           }
-          if (name === './runtime-helpers.cjs') return require('./runtime-helpers.cjs');
+          if (name === './runtime-helpers.cjs') return require('../shared/runtime-helpers.cjs');
           if (['./feature-gates.cjs', './bun-ant-shim.cjs'].includes(name)) return {};
           return require(name);
         },

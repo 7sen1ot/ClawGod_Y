@@ -89,12 +89,13 @@ jobs:
 
       - name: Prepare and verify final release files
         run: |
+          bun run build
           bun .github/scripts/release-assets.cjs "$GITHUB_REF_NAME"
           bash -n install.sh
           bash -n uninstall.sh
 
       - name: Check installation and uninstall from the final release scripts
-        run: bun src/shared/installer-lifecycle.test.mjs install.sh
+        run: bun src/tests/installer-lifecycle.test.mjs install.sh
 
       - name: Create GitHub release
         env:

@@ -6,7 +6,9 @@
     "build": "bun build.js",
     "build:check": "bun build.js --check",
     "test": "bun run test:unit && bun run test:proxy && bun run test:issues",
-    "test:unit": "bun src/shared/ast-patches.test.mjs && bun src/shared/patch.test.mjs && bun src/shared/pentest-patches.test.mjs && bun src/shared/pentest-pruner.test.mjs && bun src/shared/source-backup.test.mjs && bun src/shared/terminal-reply.test.mjs && bun src/shared/lean.test.mjs && bun src/shared/updater.test.mjs && bun src/shared/startup-check.test.mjs && bun src/shared/provider.test.mjs && bun src/shared/prompt-assembly.test.mjs && bun src/shared/bun-ant-shim.test.mjs && bun src/shared/post-process.test.mjs && bun src/shared/compile-runtime.test.mjs && bun src/shared/extract-natives.test.mjs && bun src/shared/npm-fetch.test.mjs && bun src/shared/installer-lifecycle.test.mjs && bun src/shared/native-refresh.test.mjs && bun .github/scripts/ci-gates.test.cjs",
+    "test:unit": "bun run test:source && bun src/tests/startup-check.test.mjs && bun src/tests/post-process.test.mjs && bun src/tests/bun-ant-shim.test.mjs && bun run test:installer && bun src/tests/native-refresh.test.mjs",
+    "test:source": "bun run build && bun src/tests/ast-patches.test.mjs && bun src/tests/patch.test.mjs && bun src/tests/pentest-patches.test.mjs && bun src/tests/pentest-pruner.test.mjs && bun src/tests/source-backup.test.mjs && bun src/tests/terminal-reply.test.mjs && bun src/tests/lean.test.mjs && bun src/tests/updater.test.mjs && bun src/tests/provider.test.mjs && bun src/tests/prompt-assembly.test.mjs && bun .github/scripts/ci-gates.test.cjs",
+    "test:installer": "bun run build && bun src/tests/installer-lifecycle.test.mjs && bun src/tests/npm-fetch.test.mjs && bun src/tests/extract-natives.test.mjs && bun src/tests/compile-runtime.test.mjs",
     "test:proxy": "bun test ./src/tests/openai-proxy.test.mjs ./src/tests/openai-proxy.integration.test.mjs",
     "test:issues": "bun .github/scripts/close-inactive-issues.test.cjs"
   }

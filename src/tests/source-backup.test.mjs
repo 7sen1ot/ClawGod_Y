@@ -13,7 +13,7 @@ try {
     const dir = join(root, graph ? 'graph' : 'legacy');
     mkdirSync(dir);
     for (const name of ['patch.mjs', 'patch-rules.mjs', 'patch-registry.mjs', 'ast-patches.mjs', 'ast-helpers.mjs', 'acorn.mjs', 'pentest-patches.mjs', 'pentest-scanners.mjs', 'pentest-prompts.mjs', 'pentest-trimming.mjs', 'pentest-policy-text.mjs', 'pentest-pruner.mjs', 'runtime-helpers.cjs', 'prompt-runtime.cjs']) {
-      copyFileSync(new URL(`./${name}`, import.meta.url), join(dir, name));
+      copyFileSync(new URL(`../shared/${name}`, import.meta.url), join(dir, name));
     }
     const entry = join(dir, 'cli.original.cjs');
     if (graph) mkdirSync(join(dir, 'bunfs'));

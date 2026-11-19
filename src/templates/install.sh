@@ -42,25 +42,12 @@ else
   fi
 fi
 MIN_BUN_VERSION="1.3.14"
-BUN_VERSION_RAW=$($BUN_BIN --version 2>/dev/null | head -1)
+BUN_VERSION_RAW=$("$BUN_BIN" --version 2>/dev/null) || BUN_VERSION_RAW=
 info "Bun: $BUN_VERSION_RAW"
-BUN_VERSION_NUM=$(echo "$BUN_VERSION_RAW" | sed 's/-.*//')
+BUN_VERSION_NUM=${BUN_VERSION_RAW%%-*}
 if [ -z "$BUN_VERSION_NUM" ] \
    || [ "$(printf '%s\n%s\n' "$BUN_VERSION_NUM" "$MIN_BUN_VERSION" | sort -V | head -1)" != "$MIN_BUN_VERSION" ]; then
-  warn ""
-  warn "Bun ${BUN_VERSION_RAW:-<unknown>} is below the required minimum ($MIN_BUN_VERSION)."
-  warn ""
-  warn "  Anthropic builds claude-code with Bun's canary channel. Older Bun"
-  warn "  panics on cli.original.cjs with 'Expected CommonJS module to have"
-  warn "  a function wrapper'. This is a hard requirement, not a warning."
-  warn ""
-  warn "  Upgrade with one of:"
-  warn "    bun upgrade --canary               (if installed via curl/install.sh)"
-  warn "    brew upgrade bun                   (homebrew)"
-  warn "    scoop uninstall bun && \\           (scoop — shim blocks self-replace)"
-  warn "      irm https://bun.sh/install.ps1 | iex && bun upgrade --canary"
-  warn ""
-  warn "  Then re-run this installer."
+  warn "Bun $MIN_BUN_VERSION or later is required (found ${BUN_VERSION_RAW:-unknown}). Use bun upgrade or update Bun with your package manager."
   exit 1
 fi
 
@@ -111,7 +98,7 @@ NATIVE_BIN_TMPDIR=$(mktemp -d)
 cat > "$NATIVE_BIN_TMPDIR/fetch.mjs" << 'FETCH_EOF'
 {{CLAWGOD:npm-fetch.mjs}}
 FETCH_EOF
-if "$BUN_BIN" "$NATIVE_BIN_TMPDIR/fetch.mjs" "$NPM_PKG@$VERSION" "$NATIVE_BIN_TMPDIR" 2>&1 | while IFS= read -r line; do echo "  $line"; done; then
+if "$BUN_BIN" "$NATIVE_BIN_TMPDIR/fetch.mjs" "$NPM_PKG@$VERSION" "$NATIVE_BIN_TMPDIR"; then
   if [ -f "$NATIVE_BIN_TMPDIR/package/claude" ]; then
     sz=$(stat -f%z "$NATIVE_BIN_TMPDIR/package/claude" 2>/dev/null || stat -c%s "$NATIVE_BIN_TMPDIR/package/claude" 2>/dev/null || echo 0)
     if [ "$sz" -gt 10000000 ]; then
@@ -380,25 +367,7 @@ dim "Verifying Bun can load patched cli.original.cjs (bounded startup check) ...
 sanity_rc=0
 sanity_out=$("$BUN_BIN" "$CLAWGOD_DIR/startup-check.cjs" "$BUN_BIN" "$CLAWGOD_DIR/cli.cjs" 2>&1) || sanity_rc=$?
 if echo "$sanity_out" | grep -q "Expected CommonJS module to have a function wrapper"; then
-  echo ""
-  warn "The selected Bun runtime cannot load Anthropic's cli.original.cjs."
-  warn ""
-  warn "  Anthropic builds with Bun's canary channel (currently ~1.3.14), while"
-  warn "  bun.sh's main download is on stable (currently 1.3.13). The canary build"
-  warn "  is NOT visible on bun.sh's download page — it lives on GitHub Releases"
-  warn "  and is reachable only via 'bun upgrade --canary'."
-  warn ""
-  warn "  If your bun is from bun.sh:"
-  warn "    bun upgrade --canary"
-  warn ""
-  warn "  If your bun is from a package manager (brew/apt/scoop) where the binary"
-  warn "  is behind a shim and refuses to self-replace ('bun upgrade' silently"
-  warn "  hangs or no-ops):"
-  warn "    <pkg-manager> uninstall bun"
-  warn "    curl -fsSL https://bun.sh/install | bash"
-  warn "    bun upgrade --canary"
-  warn ""
-  warn "  Then re-run install.sh — this sanity check will pass."
+  warn "Bun $BUN_VERSION_RAW could not load this CLI. Use bun upgrade or update Bun with your package manager."
   exit 1
 fi
 if [ "$sanity_rc" -ne 0 ]; then
@@ -485,16 +454,9 @@ if [ -f "$CLAWGOD_DIR/claude.staged" ]; then
 fi
 chmod +x "$CLAWGOD_DIR/claude.fallback"
 
-if [ -f "$0" ] && [ -f "$(dirname "$0")/uninstall.sh" ]; then
-  cp "$(dirname "$0")/uninstall.sh" "$CLAWGOD_DIR/uninstall.sh.tmp"
-else
-  if [ "$CLAWGOD_SELF_VERSION" = "0.0.0-dev" ]; then
-    UNINSTALL_URL="https://raw.githubusercontent.com/7sen1ot/ClawGod_Y/main/uninstall.sh"
-  else
-    UNINSTALL_URL="https://github.com/7sen1ot/ClawGod_Y/releases/download/v$CLAWGOD_SELF_VERSION/uninstall.sh"
-  fi
-  curl -fsSL "$UNINSTALL_URL" -o "$CLAWGOD_DIR/uninstall.sh.tmp"
-fi
+cat > "$CLAWGOD_DIR/uninstall.sh.tmp" <<'CLAWGOD_UNINSTALL_EOF'
+{{CLAWGOD:standalone-uninstaller}}
+CLAWGOD_UNINSTALL_EOF
 [ -s "$CLAWGOD_DIR/uninstall.sh.tmp" ] || { err "Uninstaller is missing or empty"; exit 1; }
 chmod +x "$CLAWGOD_DIR/uninstall.sh.tmp"
 mv -f "$CLAWGOD_DIR/uninstall.sh.tmp" "$CLAWGOD_DIR/uninstall.sh"
@@ -539,10 +501,4 @@ dim "  If 'clawgod' is not found, restart your terminal or run: hash -r"
 echo ""
 dim "  Config: ~/.clawgod/provider.json"
 dim "  Flags:  ~/.clawgod/features.json"
-echo ""
-dim "  If 'claude' panics with 'Expected CommonJS module to have a function wrapper',"
-dim "  your Bun lags Anthropic's embedded Bun. Upgrade with one of:"
-dim "    bun upgrade --canary           (if installed via curl/install.sh)"
-dim "    scoop update bun               (scoop — may lag stable)"
-dim "    brew upgrade bun               (homebrew)"
 echo ""

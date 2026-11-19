@@ -7,7 +7,7 @@ import { runInNewContext } from 'node:vm';
 
 const require = createRequire(import.meta.url);
 const read = path => fs.readFileSync(new URL(path, import.meta.url), 'utf8');
-const wrapper = read('./cli.cjs');
+const wrapper = read('../shared/cli.cjs');
 const unix = read('../templates/install.sh');
 const unixApply = unix.match(/"\$BUN_BIN" -e '\n(const \{leanApply\}[^']*)\n' "\$CLAWGOD_DIR\/lean-mode\.cjs" "\$CLAWGOD_DIR\/lean-settings\.json" "\$CLAWGOD_DIR\/patches\.json"/)?.[1];
 assert.ok(unixApply, 'install.sh must apply Lean via lean-mode.cjs into the clawgod-scoped file');
@@ -48,7 +48,7 @@ function launch(args = [], env = {}, expectLoaded = args.length === 0) {
       require(name) {
         if (name === 'os') return { homedir: () => home };
         if (name === './cli.original.cjs') { loaded = true; return {}; }
-        if (name === './runtime-helpers.cjs') return require('./runtime-helpers.cjs');
+        if (name === './runtime-helpers.cjs') return require('../shared/runtime-helpers.cjs');
         if (['./feature-gates.cjs', './bun-ant-shim.cjs'].includes(name)) return {};
         return require(name);
       },
@@ -60,7 +60,7 @@ function launch(args = [], env = {}, expectLoaded = args.length === 0) {
   return proc;
 }
 
-const { leanApply, DENY, FLAGS, SETTINGS, LEGACY_SHARED_DENY } = require('./lean-mode.cjs');
+const { leanApply, DENY, FLAGS, SETTINGS, LEGACY_SHARED_DENY } = require('../shared/lean-mode.cjs');
 
 function checkStrict(s) {
   for (const k of FLAGS) assert.equal(s[k], true, k);
@@ -103,8 +103,8 @@ try {
 
   const patches = join(dir, 'patches.json');
   for (const [code, args] of [
-    [winApply, [require.resolve('./lean-mode.cjs'), leanSettings, patches]],
-    [unixApply, [require.resolve('./lean-mode.cjs'), leanSettings, patches]],
+    [winApply, [require.resolve('../shared/lean-mode.cjs'), leanSettings, patches]],
+    [unixApply, [require.resolve('../shared/lean-mode.cjs'), leanSettings, patches]],
   ]) {
     reset();
     runInNewContext(code, { require, process: { argv: ['bun', ...args] } });

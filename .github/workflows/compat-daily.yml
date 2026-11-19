@@ -1,6 +1,5 @@
 name: Compat Daily
 
-
 on:
   workflow_call:
   schedule:
@@ -11,12 +10,11 @@ on:
     paths:
       - .bun-version
       - build.js
-      - install.sh
-      - install.ps1
-      - uninstall.sh
-      - uninstall.ps1
+      - package.json
       - src/**
+      - '!src/shared/openai-proxy.cjs'
       - '!src/tests/openai-proxy*.test.mjs'
+      - '!src/README.md'
       - .github/workflows/compat-daily.yml
       - .github/workflows/installer-checks.yml
       - .github/workflows/platform-compat.yml
@@ -27,12 +25,11 @@ on:
     paths:
       - .bun-version
       - build.js
-      - install.sh
-      - install.ps1
-      - uninstall.sh
-      - uninstall.ps1
+      - package.json
       - src/**
+      - '!src/shared/openai-proxy.cjs'
       - '!src/tests/openai-proxy*.test.mjs'
+      - '!src/README.md'
       - .github/workflows/compat-daily.yml
       - .github/workflows/installer-checks.yml
       - .github/workflows/platform-compat.yml
@@ -44,7 +41,7 @@ permissions:
   contents: read
 
 jobs:
-  resolve-versions:
+  build-sources:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -52,85 +49,32 @@ jobs:
       default: ${{ steps.resolve.outputs.default }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - name: Resolve and deduplicate Claude versions
-        id: resolve
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          script: |
-            const fs = require('fs');
-            const resolve = require('./.github/scripts/resolve-claude-versions.cjs');
-            const result = resolve(fs.readFileSync('src/templates/install.sh', 'utf8'));
-            core.setOutput('default', result.defaultVersion);
-            core.setOutput('versions', JSON.stringify(result.versions));
+          bun-version-file: .bun-version
+      - id: resolve
+        run: bun .github/scripts/resolve-claude-versions.cjs
+      - run: bun run test:source
+      - name: Parse JavaScript without executing it
+        run: |
+          bun -e '
+            const parser = new Bun.Transpiler({loader: "js"});
+            for (const pattern of ["src/{shared,ci,tests,windows}/*.{mjs,cjs}", ".github/scripts/*.cjs"]) {
+              for (const file of new Bun.Glob(pattern).scanSync(".")) parser.transformSync(await Bun.file(file).text());
+            }
+          '
 
   installer-checks:
     uses: ./.github/workflows/installer-checks.yml
 
-  build-sources:
-    name: Generated installers are current
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-
-
-      - name: Verify generated installers
-        run: bun build.js --check
-
-      - name: Run AST patch regression tests
-        run: bun src/shared/ast-patches.test.mjs
-
-      - name: Run patch semantic tests
-        run: bun src/shared/patch.test.mjs
-
-      - name: Run pentest patch regression tests
-        run: bun src/shared/pentest-patches.test.mjs
-
-      - name: Run pentest graph pruning regression tests
-        run: bun src/shared/pentest-pruner.test.mjs
-
-      - name: Run clean source and repatch regression tests
-        run: bun src/shared/source-backup.test.mjs
-
-      - name: Run terminal reply regression tests
-        run: bun src/shared/terminal-reply.test.mjs
-
-      - name: Run Lean mode regression tests
-        run: bun src/shared/lean.test.mjs
-
-      - name: Run updater environment regression tests
-        run: bun src/shared/updater.test.mjs
-
-      - name: Run bounded startup verification regression tests
-        run: bun src/shared/startup-check.test.mjs
-
-      - name: Run provider auth and proxy effort regression tests
-        run: bun src/shared/provider.test.mjs
-
-      - name: Run prompt assembly regression tests
-        run: bun src/shared/prompt-assembly.test.mjs
-
-      - name: Run Bun.ant shim tests
-        run: bun src/shared/bun-ant-shim.test.mjs
-
-      - name: Check CI version resolution, coverage gates and release assets
-        run: bun .github/scripts/ci-gates.test.cjs
-
-      - name: Check embedded JavaScript syntax
-        shell: bash
-        run: |
-          set -euo pipefail
-          for file in src/shared/*.mjs src/shared/*.cjs src/windows/*.mjs src/windows/*.cjs src/ci/*.cjs .github/scripts/*.cjs; do
-            bun --check "$file"
-          done
-
   smoke:
     name: ${{ matrix.name }} (Claude ${{ matrix.claude.channels }})
-    needs: resolve-versions
+    needs: build-sources
     strategy:
       fail-fast: false
       matrix:
-        claude: ${{ fromJSON(needs.resolve-versions.outputs.versions) }}
+        claude: ${{ fromJSON(needs.build-sources.outputs.versions) }}
         os: [ubuntu-latest, macos-26]
         include:
           - name: Linux smoke (x64)
@@ -151,19 +95,10 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version-file: .bun-version
-
-      - name: Cache ~/.npm (claude-code-<plat> tarball)
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
-        with:
-          path: ~/.npm
-          key: npm-claude-v2-${{ runner.os }}-${{ runner.arch }}-${{ matrix.claude.version }}
-          restore-keys: |
-            npm-claude-v2-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Install ripgrep (Linux)
         if: runner.os == 'Linux'
@@ -195,10 +130,11 @@ jobs:
             sw_vers
           fi
 
+      - run: bun run build
       - name: Configure a provider before fresh installation
         run: bun src/ci/provider-startup-fixture.cjs seed
 
-      - name: Run install.sh (npm-fallback path)
+      - name: Run install.sh (registry download)
         shell: bash
         run: |
           set -euo pipefail
@@ -364,7 +300,7 @@ jobs:
   publish-badge:
     permissions:
       contents: write
-    needs: [resolve-versions, build-sources, installer-checks, smoke, windows-smoke]
+    needs: [build-sources, installer-checks, smoke, windows-smoke]
     if: github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -372,7 +308,7 @@ jobs:
       - name: Publish supported-Claude-version badge after all checks pass
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CLAUDE_VERSION: ${{ needs.resolve-versions.outputs.default }}
+          CLAUDE_VERSION: ${{ needs.build-sources.outputs.default }}
         run: |
           version="$CLAUDE_VERSION"
           tmp=$(mktemp -d)
@@ -394,7 +330,7 @@ jobs:
           echo "Published badge: claude $version"
 
   report-failures:
-    needs: [resolve-versions, smoke, windows-smoke]
+    needs: [build-sources, smoke, windows-smoke]
     if: ${{ !cancelled() && github.event_name == 'schedule' && (needs.smoke.result == 'failure' || needs.windows-smoke.result == 'failure') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -404,7 +340,7 @@ jobs:
     steps:
       - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         env:
-          VERSIONS: ${{ needs.resolve-versions.outputs.versions }}
+          VERSIONS: ${{ needs.build-sources.outputs.versions }}
         with:
           script: |
             const repo = context.repo;
@@ -430,20 +366,18 @@ jobs:
 
   windows-smoke:
     name: Windows smoke (PowerShell 5.1, Claude ${{ matrix.claude.channels }})
-    needs: resolve-versions
+    needs: build-sources
     runs-on: windows-latest
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        claude: ${{ fromJSON(needs.resolve-versions.outputs.versions) }}
+        claude: ${{ fromJSON(needs.build-sources.outputs.versions) }}
     env:
-      NPM_CONFIG_CACHE: ${{ github.workspace }}\.npm-cache
       CLAUDE_CHANNEL: ${{ matrix.claude.channels }}
       CLAUDE_VERSION: ${{ matrix.claude.version }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -460,14 +394,6 @@ jobs:
         run: |
           python -m pip install -r src/ci/tui-requirements.txt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Cache npm downloads
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
-        with:
-          path: ${{ github.workspace }}\.npm-cache
-          key: npm-claude-v2-${{ runner.os }}-${{ runner.arch }}-${{ matrix.claude.version }}
-          restore-keys: |
-            npm-claude-v2-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Install ripgrep
         shell: powershell
@@ -495,10 +421,11 @@ jobs:
           rg --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - run: bun run build
       - name: Configure a provider before fresh installation
         run: bun src/ci/provider-startup-fixture.cjs seed
 
-      - name: Run install.ps1 with version argument (npm-fallback path)
+      - name: Run install.ps1 with version argument (registry download)
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
@@ -648,14 +575,11 @@ jobs:
         run: |
           $clawDir = Join-Path $env:USERPROFILE '.clawgod'
           $version = (Get-Content (Join-Path $clawDir '.source-version') -Raw).Trim()
-          $fixture = Join-Path $env:RUNNER_TEMP 'tui-native'
-          bun src/shared/npm-fetch.mjs "@anthropic-ai/claude-code-win32-x64@$version" $fixture
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $testArgs = @(
             'src/ci/tui-smoke.py',
             '--cli', (Join-Path $clawDir 'cli.cjs'),
             '--bun', (Get-Command bun).Source,
-            '--native', (Join-Path $fixture 'package\claude.exe'),
+            '--native', (Join-Path $clawDir 'claude.fallback.exe'),
             '--version', $version,
             '--output', (Join-Path $env:RUNNER_TEMP 'tui-artifacts')
           )

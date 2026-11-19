@@ -28,10 +28,9 @@ function userPart(block) {
   if (block.type === 'document') {
     if (block.citations && block.citations.enabled) throw new Error('Document citations are not supported by openai-chat');
     if (source.type === 'text') return { type: 'text', text: textValue(source.data) };
-    if (source.type === 'url' && source.url) {
-      // OpenAI-compatible providers fetch URL documents themselves; forward the URL.
-      return { type: 'text', text: 'Document (' + (block.title || 'document') + '): ' + source.url };
-    }
+    // Some Chat Completions providers accept a public PDF URL in file_data.
+    if (source.type === 'url' && typeof source.url === 'string' && URL.canParse(source.url) && /^https?:\/\//i.test(source.url))
+      return { type: 'file', file: { filename: block.title || 'document.pdf', file_data: source.url } };
     if (source.type === 'base64' && source.media_type === 'application/pdf' && source.data)
       return { type: 'file', file: { filename: block.title || 'document.pdf', file_data: 'data:application/pdf;base64,' + source.data } };
     throw new Error('Unsupported document source; use base64 PDF, a URL, or text');
@@ -96,51 +95,52 @@ function translateRequest(body, configuredEffort) {
     else throw new Error('Unsupported tool_choice');
     if (choice.disable_parallel_tool_use !== undefined) result.parallel_tool_calls = !choice.disable_parallel_tool_use;
   }
-  if (body.output_config && body.output_config.format) {
-    var format = body.output_config.format;
-    if (format.type === 'json_schema' && format.json_schema && typeof format.json_schema.schema === 'object') {
+  var format = body.output_config?.format;
+  if (format != null) {
+    if (format.type === 'json_object') result.response_format = { type: 'json_object' };
+    else {
+      // Anthropic puts schema directly on format. Also accept the existing OpenAI-shaped wrapper.
+      const definition = format.schema !== undefined ? format : format.json_schema;
+      const schema = definition?.schema;
+      if (format.type !== 'json_schema' || !schema || typeof schema !== 'object' || Array.isArray(schema))
+        throw new Error('output_config.format requires json_object or json_schema with an object schema');
+      if (definition.strict != null && typeof definition.strict !== 'boolean') throw new Error('json_schema.strict must be boolean');
       result.response_format = { type: 'json_schema', json_schema: {
-        name: format.json_schema.name || 'output',
-        schema: format.json_schema.schema,
-        strict: format.json_schema.strict === true,
+        name: definition.name || 'output', schema, strict: definition.strict ?? (definition === format),
       } };
-    } else if (format.type === 'json_object') {
-      result.response_format = { type: 'json_object' };
     }
   }
   if (body.stream) result.stream_options = { include_usage: true };
   return result;
 }
 
-function estimateTokens(request) {
-  var mediaTokens = 0;
-  function visit(value) {
-    if (Array.isArray(value)) value.forEach(visit);
-    else if (value && typeof value === 'object') {
-      if (value.type === 'image_url' && value.image_url) { mediaTokens += 1600; return; }
-      if (value.type === 'file' && value.file && typeof value.file.file_data === 'string' && value.file.file_data.startsWith('data:application/pdf;base64,')) {
-        mediaTokens += Math.ceil(value.file.file_data.split(',')[1].length / 4); return;
-      }
-      for (var key of Object.keys(value)) visit(value[key]);
+function textTokens(text) {
+  let units = text.length;
+  for (const run of text.matchAll(/[^a-zA-Z0-9\s]+/g)) units += 2 * run[0].length;
+  return Math.ceil(units / 3);
+}
+
+function messageTokens(messages) {
+  let total = 0;
+  for (const { content, ...fields } of messages) {
+    total += 4 + textTokens(JSON.stringify(fields));
+    if (!Array.isArray(content)) total += textTokens(content || '');
+    else for (const part of content) {
+      if (part.type === 'text') total += textTokens(part.text);
+      else if (part.file?.file_data.startsWith('data:application/pdf;base64,'))
+        total += Math.ceil((part.file.file_data.length - 'data:application/pdf;base64,'.length) / 4);
+      else total += 1600;
     }
   }
-  visit(request.messages);
-  visit(request.tools);
-  // ~3.5 characters per token for English/code; CJK-heavy text runs closer to
-  // one character per token, so count those separately.
-  var cjk = 0, ascii = 0;
-  function countText(value) {
-    if (typeof value === 'string') {
-      for (var i = 0; i < value.length; i++) {
-        if (value.charCodeAt(i) > 0x2e7f) cjk++;
-        else ascii++;
-      }
-    } else if (Array.isArray(value)) value.forEach(countText);
-    else if (value && typeof value === 'object') { for (var key of Object.keys(value)) countText(value[key]); }
-  }
-  countText(request.messages);
-  countText(request.tools);
-  return Math.max(1, Math.ceil(ascii / 3.5) + cjk + mediaTokens + request.messages.length * 4);
+  return total;
+}
+
+function inputSettings(request) {
+  return [request.tools, request.tool_choice, request.parallel_tool_calls, request.response_format, request.reasoning_effort];
+}
+
+function prefixKey(request, length) {
+  return Bun.hash(JSON.stringify([request.model, inputSettings(request), request.messages.slice(0, length)]));
 }
 
 function mapFinishReason(reason, hasToolCalls) {
@@ -181,7 +181,7 @@ function translateResponse(response, model) {
 
 function sse(event, data) { return 'event: ' + event + '\ndata: ' + JSON.stringify(data) + '\n\n'; }
 
-function createStreamTranslator(model) {
+function createStreamTranslator(model, recordUsage) {
   var started = false, finished = false, stopped = false, textIndex = null, nextIndex = 0;
   var tools = new Map(), usage = usageOf(), reason;
   return function (chunk) {
@@ -191,6 +191,7 @@ function createStreamTranslator(model) {
     if (chunk === null) {
       if (!finished) throw new Error('Upstream stream ended before finish_reason');
       stopped = true;
+      recordUsage(usage.input_tokens);
       emit('message_delta', { delta: { stop_reason: reason, stop_sequence: null }, usage: usage });
       emit('message_stop', {});
       return events;
@@ -238,8 +239,8 @@ function createStreamTranslator(model) {
   };
 }
 
-async function* translateStream(reader, model) {
-  var decoder = new TextDecoder(), buffer = '', data = [], translate = createStreamTranslator(model);
+async function* translateStream(reader, model, recordUsage) {
+  var decoder = new TextDecoder(), buffer = '', data = [], translate = createStreamTranslator(model, recordUsage);
   function payload(line) {
     if (line === '') { var result = data.length ? data.join('\n') : undefined; data = []; return result; }
     if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''));
@@ -283,6 +284,7 @@ function startProxy(config) {
   if (!['http:', 'https:'].includes(upstreamURL.protocol) || upstreamURL.username || upstreamURL.password || upstreamURL.search || upstreamURL.hash)
     throw new Error('OpenAI baseURL must be an HTTP(S) API base without credentials, query, or fragment');
   upstreamURL.pathname = upstreamURL.pathname.replace(/\/+$/, '') + '/chat/completions';
+  let lastCount;
   var server = Bun.serve({
     port: 0, hostname: '127.0.0.1', idleTimeout: 255,
     fetch: async function (req) {
@@ -296,7 +298,20 @@ function startProxy(config) {
         request = translateRequest(body, config.effort);
         request.model = body.model || config.model || '';
       } catch (e) { return errorResponse(400, 'Translation error: ' + e.message); }
-      if (count) return json({ input_tokens: estimateTokens(request) }, 200, { 'x-clawgod-token-count': 'estimate' });
+      if (count) {
+        const prefix = lastCount && request.messages.length >= lastCount.length &&
+          prefixKey(request, lastCount.length) === lastCount.key;
+        const exact = prefix && request.messages.length === lastCount.length;
+        const tokens = prefix ? lastCount.tokens + messageTokens(request.messages.slice(lastCount.length))
+          : messageTokens(request.messages) + textTokens(JSON.stringify(inputSettings(request).filter(v => v != null)));
+        return json({ input_tokens: Math.max(1, tokens) }, 200, { 'x-clawgod-token-count': exact ? 'upstream' : 'estimate' });
+      }
+      function recordUsage(tokens) {
+        if (Number.isSafeInteger(tokens) && tokens > 0) {
+          const length = request.messages.length;
+          lastCount = { key: prefixKey(request, length), length, tokens };
+        }
+      }
 
       var abort = new AbortController();
       var onAbort = function () { abort.abort(req.signal.reason); };
@@ -320,6 +335,7 @@ function startProxy(config) {
         }
         if (!request.stream) {
           var result = translateResponse(await upstream.json(), request.model);
+          recordUsage(result.usage.input_tokens);
           cleanup();
           return json(result);
         }
@@ -331,7 +347,7 @@ function startProxy(config) {
         return errorResponse(502, 'Upstream request failed: ' + e.message);
       }
 
-      var reader = upstream.body.getReader(), iterator = translateStream(reader, request.model), cancelled = false;
+      var reader = upstream.body.getReader(), iterator = translateStream(reader, request.model, recordUsage), cancelled = false;
       async function closeReader() { try { await reader.cancel(); } catch {} cleanup(); }
       var readable = new ReadableStream({
         async pull(controller) {

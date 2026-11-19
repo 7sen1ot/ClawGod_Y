@@ -7,8 +7,8 @@ import { runInNewContext } from 'node:vm';
 
 const require = createRequire(import.meta.url);
 const read = file => fs.readFileSync(new URL(file, import.meta.url), 'utf8');
-const launcher = read('./cli.cjs');
-const proxy = read('./openai-proxy.cjs');
+const launcher = read('../shared/cli.cjs');
+const proxy = read('../shared/openai-proxy.cjs');
 const home = fs.mkdtempSync(join(tmpdir(), 'clawgod-provider-test-'));
 const dir = join(home, '.clawgod');
 fs.mkdirSync(dir);
@@ -29,7 +29,7 @@ function launch(config = {}, env = {}) {
   runInNewContext(proxy, {
     module: proxyModule, URL, Response, ReadableStream, TextEncoder, TextDecoder,
     AbortController, setTimeout, clearTimeout,
-    Bun: { serve(options) { handler = options.fetch; return { port: 12345, stop() {} }; } },
+    Bun: { hash: Bun.hash, serve(options) { handler = options.fetch; return { port: 12345, stop() {} }; } },
     async fetch(url, options) {
       const body = JSON.parse(options.body);
       requests.push({ url, headers: options.headers, body });
@@ -53,7 +53,7 @@ function launch(config = {}, env = {}) {
       if (name === 'os') return { homedir: () => home };
       if (name === './openai-proxy.cjs') return proxyModule.exports;
       if (name === './cli.original.cjs') { loaded = true; return {}; }
-      if (name === './runtime-helpers.cjs') return require('./runtime-helpers.cjs');
+      if (name === './runtime-helpers.cjs') return require('../shared/runtime-helpers.cjs');
       if (['./feature-gates.cjs', './bun-ant-shim.cjs'].includes(name)) return {};
       return require(name);
     },

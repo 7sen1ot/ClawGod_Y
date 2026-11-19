@@ -1,9 +1,9 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 import { createRequire } from 'node:module';
 import assert from 'node:assert/strict';
 
 const require = createRequire(import.meta.url);
-const { CellSegmenter, install, scanChunks } = require('./bun-ant-shim.cjs');
+const { CellSegmenter, install, scanChunks } = require('../shared/bun-ant-shim.cjs');
 
 const RUN_SHIFT = 10;
 const TAB_FLAG = 256;

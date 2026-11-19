@@ -8,6 +8,7 @@ const { prepareInstallers, verifyAssets, imports } = require('./release-assets.c
 const repository = resolve(__dirname, '../..');
 
 const installer = 'VERSION="2.1.316"\n';
+assert.deepEqual(resolveVersions(installer).versions, [{ version: '2.1.316', channels: '2.1.316' }]);
 for (const [stable, latest, expected] of [
   ['2.1.316', '2.1.316', [['2.1.316', '2.1.316, stable, latest']]],
   ['2.1.309', '2.1.316', [['2.1.316', '2.1.316, latest'], ['2.1.309', 'stable']]],

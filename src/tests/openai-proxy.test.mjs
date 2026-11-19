@@ -26,7 +26,7 @@ function setup(upstream = () => jsonResponse(), config = {}) {
   const calls = [], module = { exports: {} };
   runInNewContext(source, {
     module, URL, Response, ReadableStream, TextEncoder, TextDecoder, AbortController, setTimeout, clearTimeout,
-    Bun: { serve(options) { handler = options.fetch; return { port: 12345, stop() { stopped = true; } }; } },
+    Bun: { hash: Bun.hash, serve(options) { handler = options.fetch; return { port: 12345, stop() { stopped = true; } }; } },
     async fetch(url, options) { calls.push({ url, ...options, body: JSON.parse(options.body) }); return upstream(options); },
   });
   const proxy = module.exports.startProxy({ baseURL: 'https://upstream.invalid/v1/', apiKey: 'test-key', model: 'fallback-model', ...config });
@@ -159,7 +159,7 @@ test('base64/URL images, PDF files, URL documents and text documents retain thei
     { type: 'image_url', image_url: { url: 'data:image/png;base64,aGVsbG8=' } },
     { type: 'image_url', image_url: { url: 'https://example.invalid/image.png' } },
     { type: 'file', file: { filename: 'manual.pdf', file_data: 'data:application/pdf;base64,JVBERg==' } },
-    { type: 'text', text: 'Document (document): https://example.invalid/a.pdf' },
+    { type: 'file', file: { filename: 'document.pdf', file_data: 'https://example.invalid/a.pdf' } },
     { type: 'text', text: 'document text' },
   ]);
 });
@@ -175,10 +175,14 @@ test('structured output formats map to OpenAI response_format', async () => {
   const p3 = setup();
   await p3.send({ output_config: { format: { type: 'json_schema', json_schema: { schema: schema } } } });
   assert.deepEqual(p3.calls[0].body.response_format, { type: 'json_schema', json_schema: { name: 'output', schema, strict: false } });
+  await p.send({ output_config: { format: { type: 'json_schema', schema } } });
+  assert.deepEqual(p.calls[1].body.response_format, { type: 'json_schema', json_schema: { name: 'output', schema, strict: true } });
 });
 
 test('unsupported attachments, citations, tools and malformed requests fail before fetch', async () => {
   for (const fields of [
+    { output_config: { format: { type: 'json_schema', schema: [] } } },
+    { output_config: { format: { type: 'unknown' } } },
     { messages: [{ role: 'user', content: [{ type: 'document', citations: { enabled: true }, source: { type: 'text', data: 'text' } }] }] },
     { messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'file' } }] }] },
     { messages: [{ role: 'user', content: [{ type: 'audio' }] }] },
@@ -220,6 +224,7 @@ test('count_tokens is local, deterministic, includes system/tools/media and excl
   const baseline = await count();
   assert.equal(await count({ max_tokens: 10000 }), baseline);
   assert.equal(await count(), baseline);
+  assert.ok(await count({ output_config: { format: { type: 'json_schema', schema: { description: 'details '.repeat(80) } } } }) > baseline);
   assert.ok(await count({ system: 'a'.repeat(1000) }) > baseline);
   assert.ok(await count({ messages: [{ role: 'user', content: '你好'.repeat(100) }] }) > baseline);
   assert.ok(await count({ tools: [{ name: 'run', input_schema: { type: 'object', properties: { parameter: { type: 'string' } } } }] }) > baseline);

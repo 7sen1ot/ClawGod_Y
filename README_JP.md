@@ -41,13 +41,13 @@ ClawGod_Y は公式 [Claude Code](https://docs.anthropic.com/en/docs/claude-code
 **macOS / Linux / WSL：**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/7sen1ot/ClawGod_Y/main/install.sh | bash -s --
+curl -fsSL https://github.com/7sen1ot/ClawGod_Y/releases/latest/download/install.sh | bash -s --
 ```
 
 **Windows PowerShell：**
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/7sen1ot/ClawGod_Y/main/install.ps1)))
+& ([scriptblock]::Create((irm https://github.com/7sen1ot/ClawGod_Y/releases/latest/download/install.ps1)))
 ```
 
 デフォルトでは Claude Code `2.1.322` をインストールします。別のバージョンを選ぶには、上記のコマンドの末尾に `latest`、`stable`、または具体的なバージョン番号を追加してください。

@@ -76,6 +76,15 @@ test('Bun HTTP integration: tool round trip, streaming usage, errors, count and 
         content = message.content;
       }
       assert.deepEqual(content, [{ type: 'tool_use', id: 'call-1', name: 'read_file', input: { path: 'README.md' } }]);
+      const callsAfterReply = calls.length;
+      const repeatCount = await send(first, '/v1/messages/count_tokens');
+      assert.equal(repeatCount.headers.get('x-clawgod-token-count'), 'upstream');
+      assert.equal((await repeatCount.json()).input_tokens, 42);
+      const longer = { ...first, messages: [...first.messages, { role: 'user', content: 'continue' }] };
+      const longerCount = await send(longer, '/v1/messages/count_tokens');
+      assert.equal(longerCount.headers.get('x-clawgod-token-count'), 'estimate');
+      assert.ok((await longerCount.json()).input_tokens > 42);
+      assert.equal(calls.length, callsAfterReply);
       mode = 'text';
       const second = await send({ ...first, stream: false, tool_choice: { type: 'auto' }, messages: [...first.messages, { role: 'assistant', content }, { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call-1', content: 'README contents' }] }] });
       assert.equal((await second.json()).content[0].text, 'file read');

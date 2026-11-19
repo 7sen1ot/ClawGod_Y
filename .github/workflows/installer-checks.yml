@@ -59,36 +59,29 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: ${{ matrix.bun }}
-          bun-version-file: .bun-version
+          bun-version-file: ${{ matrix.bun == '' && '.bun-version' || '' }}
       - name: Check source fixtures for startup and text assets
         if: matrix.bun == ''
         shell: bash
         env:
           CLAWGOD_TEST_BUN: bun
         run: |
-          bun src/shared/startup-check.test.mjs
-          bun src/shared/post-process.test.mjs
+          bun src/tests/startup-check.test.mjs
+          bun src/tests/post-process.test.mjs
       - name: Check Chat Completions on scheduled, manual and release runs
         if: matrix.bun == '' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/'))
         run: bun run test:proxy
       - name: Check the renderer shim under Bun on Unix
         if: runner.os != 'Windows' && matrix.bun == ''
-        run: bun src/shared/bun-ant-shim.test.mjs
-      - name: Check installation, rollback and standalone uninstall
-        run: bun src/shared/installer-lifecycle.test.mjs
-      - name: Check downloader failures and corrupt archives with a local registry
-        run: bun src/shared/npm-fetch.test.mjs
-      - name: Check native binary formats and corrupt payloads
-        run: bun src/shared/extract-natives.test.mjs
-      - name: Check compiled startup and source fallback
-        run: bun src/shared/compile-runtime.test.mjs
+        run: bun src/tests/bun-ant-shim.test.mjs
+      - run: bun run test:installer
       - name: Check final generated installer with an injected release version
         run: |
           bun -e "require('./.github/scripts/release-assets.cjs').prepareInstallers(process.cwd(), 'v0.0.0-ci')"
-          bun src/shared/installer-lifecycle.test.mjs ${{ runner.os == 'Windows' && 'install.ps1' || 'install.sh' }}
+          bun src/tests/installer-lifecycle.test.mjs ${{ runner.os == 'Windows' && 'install.ps1' || 'install.sh' }}
       - name: Check Unix native subprocess version and official binary isolation
         if: runner.os != 'Windows'
-        run: bun src/shared/native-refresh.test.mjs
+        run: bun src/tests/native-refresh.test.mjs
       - name: Check Windows startup, native isolation and recovery
         if: runner.os == 'Windows'
         shell: powershell

@@ -41,13 +41,13 @@ The patch implementation draws on [0Chencc/clawgod](https://github.com/0Chencc/c
 **macOS / Linux / WSL:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/7sen1ot/ClawGod_Y/main/install.sh | bash -s --
+curl -fsSL https://github.com/7sen1ot/ClawGod_Y/releases/latest/download/install.sh | bash -s --
 ```
 
 **Windows PowerShell:**
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/7sen1ot/ClawGod_Y/main/install.ps1)))
+& ([scriptblock]::Create((irm https://github.com/7sen1ot/ClawGod_Y/releases/latest/download/install.ps1)))
 ```
 
 Installs Claude Code `2.1.322` by default. To choose another version, append `latest`, `stable`, or a specific version number to either command above.

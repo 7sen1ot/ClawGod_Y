@@ -1,5 +1,5 @@
 
-import { classifierTimeoutFloor as floor, selectApplicationPrompt, filterDefaultPromptSections } from './runtime-helpers.cjs';
+import { classifierTimeoutFloor as floor, selectApplicationPrompt, filterDefaultPromptSections } from '../shared/runtime-helpers.cjs';
 import assert from 'node:assert/strict';
 import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -7,8 +7,8 @@ import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { runInNewContext } from 'node:vm';
 import { createServer, request } from 'node:http';
-import { scanPentestPatches } from './pentest-patches.mjs';
-import { applyAstEdits } from './ast-patches.mjs';
+import { scanPentestPatches } from '../shared/pentest-patches.mjs';
+import { applyAstEdits } from '../shared/ast-patches.mjs';
 import { requiredRuntime } from './required-runtime.fixture.mjs';
 
 const patchFiles = [
@@ -91,7 +91,7 @@ const ultraplanFixtures = [
 const testDir = mkdtempSync(join(tmpdir(), 'clawgod-patch-test-'));
 try {
   for (const name of patchFiles) {
-    copyFileSync(new URL(`./${name}`, import.meta.url), join(testDir, name));
+    copyFileSync(new URL(`../shared/${name}`, import.meta.url), join(testDir, name));
   }
   writeFileSync(join(testDir, 'pathmap.json'), JSON.stringify(Object.fromEntries(
     ['commands.js', 'mixed.js', 'auto-mode.js'].map(name =>
@@ -153,7 +153,7 @@ try {
     assert.equal(missing.status, 0, `${graph ? 'graph' : 'legacy'}: absent optional anchors do not abort the install`);
     assert.match(missing.stdout, /0 failed/);
     assert.match(missing.stdout, /not present in this version/);
-    assert.match(missing.stdout, /Patching completed;/);
+    assert.match(missing.stdout, /unverified or partial coverage/);
     const drifted = requiredRuntime + 'async function decide(a,b,c,d,e,f){return a.checkPermissions("tengu_mcp_server_policy_bypass_exempt")}';
     writeFileSync(target, drifted);
     const strict = spawnSync(process.execPath, [join(testDir, 'patch.mjs')], { encoding: 'utf8' });
@@ -218,7 +218,7 @@ console.log('[patch.test] auto-mode provider gate compatibility and toggle seman
 const promptDir = mkdtempSync(join(tmpdir(), 'clawgod-prompt-hook-test-'));
 try {
   for (const name of patchFiles) {
-    copyFileSync(new URL(`./${name}`, import.meta.url), join(promptDir, name));
+    copyFileSync(new URL(`../shared/${name}`, import.meta.url), join(promptDir, name));
   }
   writeFileSync(join(promptDir, 'system-prompt.md'), 'Fixture role.\n');
   writeFileSync(join(promptDir, 'pathmap.json'), JSON.stringify(Object.fromEntries(
@@ -357,7 +357,7 @@ function privacyFixture(version, flag, check) {
 }
 try {
   for (const name of patchFiles) {
-    copyFileSync(new URL(`./${name}`, import.meta.url), join(privacyDir, name));
+    copyFileSync(new URL(`../shared/${name}`, import.meta.url), join(privacyDir, name));
   }
   writeFileSync(join(privacyDir, 'pathmap.json'), JSON.stringify({
     '/$bunfs/root/privacy.js': { path: 'bunfs/privacy.js', loader: 'js' },

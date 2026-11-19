@@ -1,6 +1,5 @@
 $ErrorActionPreference = 'Stop'
-$template = Get-Content (Join-Path $PSScriptRoot '..\templates\install.ps1') -Raw
-$uninstaller = Get-Content (Join-Path $PSScriptRoot '..\..\uninstall.ps1') -Raw
+$template = Get-Content (Join-Path $PSScriptRoot '..\..\install.ps1') -Raw
 $section = [regex]::Match($template, '(?s)\$cliPathInCmd =.*').Value
 if (-not $section) { throw 'Installer launcher section not found' }
 $install = [ScriptBlock]::Create($section)
@@ -9,7 +8,7 @@ $savedHome = $env:USERPROFILE
 $savedLocal = $env:LOCALAPPDATA
 $savedPath = $env:PATH
 $savedUserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-$node = (Get-Command node.exe).Source
+$BunBin = (Get-Command bun.exe).Source
 $script:messages = New-Object 'System.Collections.Generic.List[string]'
 function Write-OK($message) { $script:messages.Add($message) }
 function Write-Warn($message) { $script:messages.Add($message) }
@@ -24,9 +23,7 @@ try {
     $ClawDir = Join-Path $root '.clawgod'
     New-Item -ItemType Directory -Force $ClawDir | Out-Null
     $env:PATH = "$BinDir;$savedPath"
-    $BunBin = $node
     function Invoke-WebRequest { throw 'offline' }
-    function Invoke-RestMethod { $uninstaller }
 
     $exe = Join-Path $BinDir 'claude.exe'
     $cmd = Join-Path $BinDir 'claude.cmd'
@@ -43,7 +40,7 @@ try {
     $written = Get-Content $clawgod -Raw
     Assert ($written -match 'CLAUDE_CODE_EXECPATH=%USERPROFILE%\\\.clawgod\\claude\.fallback\.exe') "execPath did not use the selected native binary: $written"
     Assert ($script:messages -match "'claude' untouched") 'Untouched notice missing'
-    Copy-Item $node (Join-Path $ClawDir 'claude.fallback.exe') -Force
+    Copy-Item $BunBin (Join-Path $ClawDir 'claude.fallback.exe') -Force
     Set-Content (Join-Path $ClawDir 'cli.cjs') @'
 const {spawnSync}=require('child_process');
 const child=spawnSync(process.env.CLAUDE_CODE_EXECPATH,['--version'],{encoding:'utf8'});
@@ -52,26 +49,26 @@ process.stdout.write(child.stdout);process.exit(child.status);
 '@ -Encoding ASCII
     $childVersion = (& cmd.exe /d /c 'clawgod --version' | Out-String).Trim()
     Assert ($LASTEXITCODE -eq 0) 'Selected native subprocess failed'
-    Assert ($childVersion -eq (& $node --version)) 'Launcher spawned a different native executable'
+    Assert ($childVersion -eq (& $BunBin --version)) 'Launcher spawned a different native executable'
 
     $compiled = Join-Path $ClawDir 'cli.compiled-fixture.exe'
-    Copy-Item $node $compiled
+    Copy-Item $BunBin $compiled
     Set-Content (Join-Path $ClawDir '.compiled-runtime') 'cli.compiled-fixture.exe' -Encoding ASCII
     $compiledResult = (& cmd.exe /d /c 'clawgod -e "process.stdout.write(process.argv[1])" "two words"' | Out-String).Trim()
     Assert ($LASTEXITCODE -eq 0) 'Compiled launcher failed'
     Assert ($compiledResult -eq 'two words') 'Compiled launcher lost arguments or used the source path'
     $uninstallResult = (& cmd.exe /d /c 'clawgod --uninstall' | Out-String).Trim()
     Assert ($LASTEXITCODE -eq 0) 'Uninstall did not bypass compiled mode'
-    Assert ($uninstallResult -eq (& $node --version)) 'Uninstall must use the source path'
+    Assert ($uninstallResult -eq (& $BunBin --version)) 'Uninstall must use the source path'
     Remove-Item -LiteralPath $compiled
     $fallbackResult = (& cmd.exe /d /c 'clawgod --version' | Out-String).Trim()
     Assert ($LASTEXITCODE -eq 0) 'Missing compiled binary did not fall back to source'
-    Assert ($fallbackResult -eq (& $node --version)) 'Source fallback returned the wrong version'
+    Assert ($fallbackResult -eq (& $BunBin --version)) 'Source fallback returned the wrong version'
     Remove-Item -LiteralPath (Join-Path $ClawDir '.compiled-runtime')
 
     $elsewhere = Join-Path $root 'elsewhere'
     New-Item -ItemType Directory -Force $elsewhere | Out-Null
-    Copy-Item $node (Join-Path $elsewhere 'claude.exe')
+    Copy-Item $BunBin (Join-Path $elsewhere 'claude.exe')
     $env:PATH = "$elsewhere;$BinDir;$savedPath"
     try {
         & $install
@@ -84,7 +81,7 @@ process.stdout.write(child.stdout);process.exit(child.status);
     Remove-Item $exe
     $versions = Join-Path $root '.local\share\claude\versions'
     New-Item -ItemType Directory -Force $versions | Out-Null
-    Copy-Item $node (Join-Path $versions 'claude-2.1.285.exe')
+    Copy-Item $BunBin (Join-Path $versions 'claude-2.1.285.exe')
     & $install
     $written = Get-Content $clawgod -Raw
     Assert ($written -notmatch 'claude-2\.1\.285\.exe') "versions/ must not override the selected native binary: $written"
@@ -97,8 +94,8 @@ process.stdout.write(child.stdout);process.exit(child.status);
     Set-Content $exe 'official native' -Encoding ASCII
     Set-Content $cmd "@echo off`r`nrem $root\.clawgod\cli.cjs" -Encoding Ascii
     Set-Content (Join-Path $BinDir 'claude.orig.cmd') '@echo old' -Encoding Ascii
-    Copy-Item $node (Join-Path $BinDir 'claude.orig.exe')
-    Copy-Item $node (Join-Path $BinDir 'claude.abcdef.exe')
+    Copy-Item $BunBin (Join-Path $BinDir 'claude.orig.exe')
+    Copy-Item $BunBin (Join-Path $BinDir 'claude.abcdef.exe')
     Set-Content (Join-Path $ClawDir 'claude.staged.exe') 'staged'
     & $install
     Assert (-not (Test-Path $cmd)) 'Old clawgod claude.cmd launcher was not swept'

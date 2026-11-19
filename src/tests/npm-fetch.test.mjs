@@ -48,7 +48,7 @@ globalThis.fetch = (input, init = {}) => {
   return realFetch(url, { ...init, redirect: 'manual' });
 };`);
   const run = out => new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['--require', preload, fileURLToPath(new URL('./npm-fetch.mjs', import.meta.url)), '@anthropic-ai/claude-code-win32-x64@2.1.316', out], { timeout: 10000 });
+    const child = spawn(process.execPath, ['--require', preload, fileURLToPath(new URL('../shared/npm-fetch.mjs', import.meta.url)), '@anthropic-ai/claude-code-win32-x64@2.1.316', out], { timeout: 10000 });
     let output = '';
     child.stdout.on('data', data => { output += data; }); child.stderr.on('data', data => { output += data; });
     child.on('error', reject); child.on('close', code => resolve({ code, output }));

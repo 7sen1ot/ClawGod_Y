@@ -1,7 +1,7 @@
 
 import assert from 'node:assert/strict';
 import { rewritePromptAssembly, selectApplicationPrompt, filterDefaultPromptSections, refreshPromptSnapshot, finalizeSystemRequest,
-  cleanPromptIdentity, cleanSummaryContent, cleanSummaryMessages, prepareIdentityTemplate, validateExtraBody, brandApplicationText } from './runtime-helpers.cjs';
+  cleanPromptIdentity, cleanSummaryContent, cleanSummaryMessages, prepareIdentityTemplate, validateExtraBody, brandApplicationText } from '../shared/runtime-helpers.cjs';
 
 const MARK = '<!-- clawgod:custom-prompt -->';
 const END = '\n<!-- /clawgod:custom-prompt -->';

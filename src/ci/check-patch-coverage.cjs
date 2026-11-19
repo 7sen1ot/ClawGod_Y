@@ -1,29 +1,19 @@
 const { readFileSync } = require('node:fs');
+const { upstreamPatches } = require('../shared/patch-rules.mjs');
 
 const [logPath, platform, versionArg] = process.argv.slice(2);
 if (!logPath || !['linux', 'macos', 'windows'].includes(platform)) {
   throw new Error('Usage: bun check-patch-coverage.cjs <install-log> <linux|macos|windows> [claude-version]');
 }
 
-// Version below which a retired patch rule no longer counts as a coverage gap.
-// Rules whose anchors were removed upstream before this version are dead
-// weight: they are expected absent and excluded from the failure baseline.
-const RETIRED_BEFORE = new Map([
-  ['Ultrareview enable (direct literal, <=2.1.213)', '2.1.214'],
-  ['Message list filter bypass (legacy ternary)', '2.1.214'],
-]);
-
+const bytes = readFileSync(logPath);
+const log = bytes.toString(bytes[0] === 0xff && bytes[1] === 0xfe ? 'utf16le' : 'utf8')
+  .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
+const start = log.lastIndexOf('Mode: APPLY');
 const installedVersion = versionArg && /^\d+\.\d+\.\d+$/.test(versionArg)
   ? versionArg
-  : (readFileSync(logPath, 'utf8').match(/Source:\s*([\d.]+)/) || [])[1];
-const versionAtLeast = (bound) => {
-  if (!installedVersion || !bound) return true;
-  const [a, b] = [installedVersion.split('.').map(Number), bound.split('.').map(Number)];
-  for (let i = 0; i < 3; i++) {
-    if (a[i] !== b[i]) return a[i] > b[i];
-  }
-  return true;
-};
+  : log.slice(0, start).match(/Target: cli\.original\.cjs \(v(\d+\.\d+\.\d+)\)[^\n]*\s*$/)?.[1];
+const ranges = new Map(upstreamPatches.filter(p => p.versions).map(p => [p.name, p.versions]));
 
 // Known gaps in Claude 2.1.316: actions/runs/41206844027, also shared by stable 2.1.309.
 const baseline = new Map([
@@ -38,18 +28,13 @@ const baseline = new Map([
   ['Neutralize apostrophe steganography (odp)', 'absent'],
   ['Remove cautious actions section', 'unverified'],
 ]);
-for (const [name, bound] of RETIRED_BEFORE) {
-  if (!versionAtLeast(bound)) baseline.set(name, 'absent');
-}
+if (installedVersion && Bun.semver.satisfies(installedVersion, '<2.1.214'))
+  baseline.set('Message list filter bypass (legacy ternary)', 'absent');
 if (platform !== 'macos') {
   baseline.set('Computer Use default enabled', 'unverified');
   baseline.set('Computer Use subscription bypass', 'unverified');
 }
 
-const bytes = readFileSync(logPath);
-const log = bytes.toString(bytes[0] === 0xff && bytes[1] === 0xfe ? 'utf16le' : 'utf8')
-  .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
-const start = log.lastIndexOf('Mode: APPLY');
 const summary = start < 0 ? null : log.slice(start)
   .match(/Result:\s*(\d+) applied,\s*(\d+) skipped,\s*(\d+) failed/);
 if (!summary) throw new Error('Patch APPLY result is missing from the install log');
@@ -72,6 +57,9 @@ for (const raw of body.split(/\r?\n/)) {
   records++;
   observed[icon === '✅' ? 'applied' : icon === '❌' ? 'failed' : 'skipped']++;
   if (icon === '✅' || / \(covered by applied rule: [\w-]+\)$/.test(message)) continue;
+  const outOfRange = message.match(/^(.*) \(outside supported versions: (.+)\)$/);
+  if (icon === '⏭' && outOfRange && installedVersion && ranges.get(outOfRange[1]) === outOfRange[2] &&
+      !Bun.semver.satisfies(installedVersion, outOfRange[2])) continue;
   if (icon === '❌') {
     errors.push(message);
     continue;

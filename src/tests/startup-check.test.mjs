@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { runInNewContext } from 'node:vm';
 
 const require = createRequire(import.meta.url);
-const sourceDir = dirname(fileURLToPath(import.meta.url));
+const sourceDir = fileURLToPath(new URL('../shared/', import.meta.url));
 const checker = join(sourceDir, 'startup-check.cjs');
 const wrapper = fs.readFileSync(join(sourceDir, 'cli.cjs'), 'utf8');
 const root = fs.mkdtempSync(join(tmpdir(), 'clawgod startup test-'));
@@ -126,7 +126,7 @@ try {
           if (name === 'os') return { homedir: () => profile };
           if (name === './openai-proxy.cjs') throw new Error('version must not start a provider');
           if (name === './feature-gates.cjs' || name === './bun-ant-shim.cjs') { modules.push(name); return {}; }
-          if (name === './runtime-helpers.cjs') { modules.push(name); return require('./runtime-helpers.cjs'); }
+          if (name === './runtime-helpers.cjs') { modules.push(name); return require('../shared/runtime-helpers.cjs'); }
           if (name === './cli.original.cjs') { loaded = true; return {}; }
           return require(name);
         },

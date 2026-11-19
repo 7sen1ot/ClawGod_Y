@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
-import { terminalReplyDelay } from './runtime-helpers.cjs';
+import { terminalReplyDelay } from '../shared/runtime-helpers.cjs';
 import { requiredRuntime } from './required-runtime.fixture.mjs';
 
 const pending = { queue: [{ kind: 'sentinel', written: true }] };
@@ -28,7 +28,7 @@ assert.equal(terminalReplyDelay(pending, reader('\x1b['), NaN), 0);
 const dir = mkdtempSync(join(tmpdir(), 'clawgod-terminal-reply-test-'));
 try {
   for (const name of ['patch.mjs', 'patch-rules.mjs', 'patch-registry.mjs', 'ast-patches.mjs', 'ast-helpers.mjs', 'acorn.mjs', 'pentest-patches.mjs', 'pentest-scanners.mjs', 'pentest-prompts.mjs', 'pentest-trimming.mjs', 'pentest-policy-text.mjs', 'pentest-pruner.mjs', 'runtime-helpers.cjs', 'prompt-runtime.cjs']) {
-    copyFileSync(new URL(`./${name}`, import.meta.url), join(dir, name));
+    copyFileSync(new URL(`../shared/${name}`, import.meta.url), join(dir, name));
   }
   for (const graph of [false, true]) {
     if (graph) {

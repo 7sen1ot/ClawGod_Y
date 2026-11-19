@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { runInNewContext } from 'node:vm';
-import { applyAstEdits } from './ast-patches.mjs';
-import { scanPentestPatches } from './pentest-patches.mjs';
-import * as helpers from './runtime-helpers.cjs';
-import { startProxy } from './openai-proxy.cjs';
+import { applyAstEdits } from '../shared/ast-patches.mjs';
+import { scanPentestPatches } from '../shared/pentest-patches.mjs';
+import * as helpers from '../shared/runtime-helpers.cjs';
+import { startProxy } from '../shared/openai-proxy.cjs';
 
 test('system instructions survive HTTP transport, tools, streaming and snapshot rebuild', { skip: typeof Bun === 'undefined' }, async () => {
   const options = Object.freeze({ customPrompt: 'Opaque transport fixture rules.', requireCustomPrompt: true });

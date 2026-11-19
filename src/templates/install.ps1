@@ -75,24 +75,7 @@ try {
     }
 } catch {}
 if (-not $BunVersionOk) {
-    Write-Host ""
-    Write-Err "Bun $BunVersionRaw is below the required minimum ($MinBunVersion)."
-    Write-Err ""
-    Write-Err "  Anthropic builds claude-code with Bun's canary channel. Older Bun"
-    Write-Err "  panics on cli.original.cjs with 'Expected CommonJS module to have"
-    Write-Err "  a function wrapper'. This is a hard requirement, not a warning."
-    Write-Err ""
-    Write-Err "  Upgrade with one of:"
-    Write-Err "    bun upgrade --canary"
-    Write-Err "    powershell -c ""iex & {`$(irm https://bun.sh/install.ps1)} -Version canary"""
-    Write-Err ""
-    Write-Err "  If your bun is from scoop (the binary is behind a shim and refuses"
-    Write-Err "  to self-replace, so 'bun upgrade' silently hangs):"
-    Write-Err "    scoop uninstall bun"
-    Write-Err "    irm https://bun.sh/install.ps1 | iex"
-    Write-Err "    bun upgrade --canary"
-    Write-Err ""
-    Write-Err "  Then re-run this installer."
+    Write-Err "Bun $MinBunVersion or later is required (found $BunVersionRaw). Use bun upgrade or update Bun with your package manager."
     exit 1
 }
 
@@ -155,7 +138,6 @@ if ((Test-Path $cand) -and (Get-Item $cand).Length -gt 10MB) {
 } else {
     Remove-Item -Recurse -Force $NativeBinTmpDir -ErrorAction SilentlyContinue
     Write-Err "Tarball downloaded but expected package\claude.exe was missing or too small."
-    Write-Err "  Tempdir kept for inspection: $NativeBinTmpDir"
     exit 1
 }
 Write-OK "Downloaded $npmPkg@$NativeBinLabel"
@@ -249,14 +231,9 @@ $postProc = Join-Path $ClawDir "post-process.mjs"
 @'
 {{CLAWGOD:post-process.mjs}}
 '@ | Set-Content $postProc -Encoding UTF8
-try { $ProxySource = Get-Content (Join-Path $PSScriptRoot "openai-proxy.cjs") -Raw -ErrorAction Stop } catch { $ProxySource = $null }
-if (-not $ProxySource) {
-
-  $ProxySource = @'
+@'
 {{CLAWGOD:openai-proxy.cjs}}
-'@
-}
-$ProxySource | Set-Content (Join-Path $ClawDir "openai-proxy.cjs") -Encoding UTF8
+'@ | Set-Content (Join-Path $ClawDir "openai-proxy.cjs") -Encoding UTF8
 Write-OK "OpenAI-compatible proxy created (openai-proxy.cjs)"
 
 @'
@@ -474,25 +451,7 @@ $sanity = Invoke-StartupProbe
 $sanityOut = $sanity.Output
 $sanityExitCode = $sanity.ExitCode
 if ($sanityOut -match "Expected CommonJS module to have a function wrapper") {
-    Write-Host ""
-    Write-Err "The selected Bun runtime cannot load Anthropic's cli.original.cjs."
-    Write-Err ""
-    Write-Err "  Anthropic builds with Bun's canary channel (currently ~1.3.14), while"
-    Write-Err "  bun.sh's main download is on stable (currently 1.3.13). The canary build"
-    Write-Err "  is NOT visible on bun.sh's download page -- it lives on GitHub Releases"
-    Write-Err "  and is reachable only via 'bun upgrade --canary'."
-    Write-Err ""
-    Write-Err "  If your bun is from bun.sh:"
-    Write-Err "    bun upgrade --canary"
-    Write-Err "    or: powershell -c ""iex & {`$(irm https://bun.sh/install.ps1)} -Version canary"""
-    Write-Err ""
-    Write-Err "  If your bun is from scoop (the binary is behind a shim and refuses to"
-    Write-Err "  self-replace, so 'bun upgrade' silently hangs):"
-    Write-Err "    scoop uninstall bun"
-    Write-Err "    irm https://bun.sh/install.ps1 | iex"
-    Write-Err "    bun upgrade --canary"
-    Write-Err ""
-    Write-Err "  Then re-run .\install.ps1 -- this sanity check will pass."
+    Write-Err "Bun $BunVersionRaw could not load this CLI. Use bun upgrade or update Bun with your package manager."
     Restore-Install
     exit 1
 }
@@ -582,21 +541,7 @@ $sourceLaunch
 $launcherContent = $launcherContent.Replace($sourceLaunch, $compiledLaunch)
 $launcherContent | Set-Content (Join-Path $BinDir "clawgod.cmd.tmp") -Encoding Default
 
-$selfPath = $MyInvocation.MyCommand.Path
-$uninstallerPath = if ($selfPath) { Join-Path (Split-Path -Parent $selfPath) "uninstall.ps1" } else { $null }
-if ($uninstallerPath -and (Test-Path -LiteralPath $uninstallerPath -PathType Leaf)) {
-    Copy-Item -LiteralPath $uninstallerPath -Destination (Join-Path $ClawDir "uninstall.ps1.tmp") -Force -ErrorAction Stop
-} else {
-    $uninstallerUrl = if ($ClawSelfVersion -eq "0.0.0-dev") {
-        "https://raw.githubusercontent.com/7sen1ot/ClawGod_Y/main/uninstall.ps1"
-    } else {
-        "https://github.com/7sen1ot/ClawGod_Y/releases/download/v$ClawSelfVersion/uninstall.ps1"
-    }
-    $uninstallerSource = Invoke-RestMethod $uninstallerUrl
-    if ([string]::IsNullOrWhiteSpace($uninstallerSource)) { throw 'Downloaded uninstaller is empty' }
-    [System.IO.File]::WriteAllText((Join-Path $ClawDir "uninstall.ps1.tmp"), $uninstallerSource,
-        (New-Object System.Text.UTF8Encoding $false))
-}
+[IO.File]::WriteAllBytes((Join-Path $ClawDir "uninstall.ps1.tmp"), [Convert]::FromBase64String('{{CLAWGOD:standalone-uninstaller}}'))
 if (-not (Test-Path -LiteralPath (Join-Path $ClawDir "uninstall.ps1.tmp") -PathType Leaf) -or
     (Get-Item -LiteralPath (Join-Path $ClawDir "uninstall.ps1.tmp")).Length -eq 0) { throw 'Uninstaller is missing or empty' }
 Move-Item -LiteralPath (Join-Path $ClawDir "uninstall.ps1.tmp") -Destination (Join-Path $ClawDir "uninstall.ps1") -Force
@@ -650,10 +595,4 @@ Write-Dim "  If 'clawgod' is not found, restart your terminal."
 Write-Host ""
 Write-Dim "  Config: ~/.clawgod/provider.json"
 Write-Dim "  Flags:  ~/.clawgod/features.json"
-Write-Host ""
-Write-Dim "  If 'claude' panics with 'Expected CommonJS module to have a function wrapper',"
-Write-Dim "  your Bun lags Anthropic's embedded Bun. Upgrade with one of:"
-Write-Dim "    bun upgrade --canary           (if installed from bun.sh)"
-Write-Dim "    scoop update bun               (scoop -- may lag stable)"
-Write-Dim "    irm https://bun.sh/install.ps1 | iex   (re-install latest)"
 Write-Host ""

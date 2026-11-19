@@ -55,7 +55,7 @@ try {
   const check = (bytes, ok, pattern) => {
     const path = join(root, `binary-${i}`), out = join(root, `out-${i++}`);
     writeFileSync(path, bytes);
-    const child = spawnSync(process.execPath, [fileURLToPath(new URL('./extract-natives.mjs', import.meta.url)), path, out], { encoding: 'utf8' });
+    const child = spawnSync(process.execPath, [fileURLToPath(new URL('../shared/extract-natives.mjs', import.meta.url)), path, out], { encoding: 'utf8' });
     assert.ok(Number.isInteger(child.status), child.error?.message || 'Extractor did not exit normally');
     assert.equal(child.status === 0, ok, child.stdout + child.stderr);
     if (ok) {
