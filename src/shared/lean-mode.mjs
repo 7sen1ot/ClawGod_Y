@@ -1,3 +1,6 @@
+import * as fs from 'node:fs';
+import { dirname } from 'node:path';
+import { readJsonConfig } from './runtime-helpers.mjs';
 
 const DENY = ["DesignSync","NotebookEdit","PushNotification","RemoteTrigger","EnterPlanMode","ExitPlanMode","Projects"];
 const LOOP_TOOLS = ["CronCreate","CronDelete","CronList","ScheduleWakeup"];
@@ -26,18 +29,21 @@ const FEATURES_LOCKED_ON = [
 ];
 
 function leanApply(clawgodSettingsPath, sharedSettingsPath, patchesJsonPath) {
-  const fs = require("fs");
   const writeSettings = (file, value) => {
     try {
-      fs.mkdirSync(require("path").dirname(file), { recursive: true });
+      fs.mkdirSync(dirname(file), { recursive: true });
       fs.writeFileSync(file, JSON.stringify(value, null, 2) + "\n");
-    } catch {}
+    } catch (error) {
+      throw new Error('[clawgod] Cannot write ' + file + ': ' + error.message, { cause: error });
+    }
   };
-  let s = {};
-  try { s = JSON.parse(fs.readFileSync(clawgodSettingsPath, "utf8")); } catch {}
-  if (typeof s !== "object" || !s) s = {};
-  if (!s.permissions || typeof s.permissions !== "object") s.permissions = {};
-  if (!Array.isArray(s.permissions.deny)) s.permissions.deny = [];
+  const s = readJsonConfig(clawgodSettingsPath);
+  if (s.permissions === undefined) s.permissions = {};
+  if (!s.permissions || typeof s.permissions !== 'object' || Array.isArray(s.permissions)) throw new Error('[clawgod] Invalid ' + clawgodSettingsPath + ': permissions must be an object.');
+  if (s.permissions.deny === undefined) s.permissions.deny = [];
+  if (!Array.isArray(s.permissions.deny)) throw new Error('[clawgod] Invalid ' + clawgodSettingsPath + ': permissions.deny must be an array.');
+  const p = patchesJsonPath ? readJsonConfig(patchesJsonPath) : undefined;
+  const shared = sharedSettingsPath ? readJsonConfig(sharedSettingsPath) : undefined;
   let changed = false;
   if (!("tui" in s)) {
     s.tui = "fullscreen";
@@ -57,9 +63,6 @@ function leanApply(clawgodSettingsPath, sharedSettingsPath, patchesJsonPath) {
   for (const t of DENY) { if (!ex.has(t)) { s.permissions.deny.push(t); changed = true; } }
   if (changed) writeSettings(clawgodSettingsPath, s);
   if (patchesJsonPath) {
-    let p = {};
-    try { p = JSON.parse(fs.readFileSync(patchesJsonPath, "utf8")); } catch {}
-    if (typeof p !== "object" || !p) p = {};
     let pchanged = false;
     for (const k of FEATURES_LOCKED_ON) {
       if (!(k in p)) { p[k] = true; pchanged = true; }
@@ -67,21 +70,17 @@ function leanApply(clawgodSettingsPath, sharedSettingsPath, patchesJsonPath) {
     if (pchanged) writeSettings(patchesJsonPath, p);
   }
   if (sharedSettingsPath) {
-    try {
-      let shared = JSON.parse(fs.readFileSync(sharedSettingsPath, "utf8"));
-      if (typeof shared !== "object" || !shared) return;
-      let touched = false;
-      for (const k of FLAGS) { if (shared[k] === true) { delete shared[k]; touched = true; } }
-      if (Array.isArray(shared.permissions?.deny)) {
-        const kept = shared.permissions.deny.filter(t => !LEGACY_SHARED_DENY.includes(t));
-        if (kept.length !== shared.permissions.deny.length) {
-          shared.permissions.deny = kept;
-          touched = true;
-        }
+    let touched = false;
+    for (const k of FLAGS) { if (shared[k] === true) { delete shared[k]; touched = true; } }
+    if (Array.isArray(shared.permissions?.deny)) {
+      const kept = shared.permissions.deny.filter(t => !LEGACY_SHARED_DENY.includes(t));
+      if (kept.length !== shared.permissions.deny.length) {
+        shared.permissions.deny = kept;
+        touched = true;
       }
-      if (touched) fs.writeFileSync(sharedSettingsPath, JSON.stringify(shared, null, 2) + "\n");
-    } catch {}
+    }
+    if (touched) writeSettings(sharedSettingsPath, shared);
   }
 }
 
-module.exports = { leanApply, DENY, FLAGS, SETTINGS, LEGACY_SHARED_DENY };
+export { leanApply, DENY, FLAGS, SETTINGS, LEGACY_SHARED_DENY };

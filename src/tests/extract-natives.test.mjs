@@ -1,9 +1,12 @@
+import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+
+test('extract-natives.test', async () => {
 
 const root = mkdtempSync(join(tmpdir(), 'clawgod binary formats-'));
 const name = Buffer.from('/$bunfs/root/cli.js');
@@ -79,3 +82,5 @@ try {
   check(Buffer.from('not an executable'), false);
 } finally { rmSync(root, { recursive: true, force: true }); }
 console.log('[extract-natives.test] ELF/Mach-O/PE x64/ARM64 and malformed binary rejection passed');
+
+});

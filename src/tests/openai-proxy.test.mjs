@@ -1,9 +1,10 @@
+import { runRuntimeFixture } from './runtime-sandbox.fixture.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
-import { test } from 'node:test';
+import { test } from 'bun:test';
 
-const source = readFileSync(new URL('../shared/openai-proxy.cjs', import.meta.url), 'utf8');
+const source = readFileSync(new URL('../shared/openai-proxy.mjs', import.meta.url), 'utf8');
 const success = (extra = {}) => ({ id: 'chat-fixture', model: 'upstream-model', choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }], usage: { prompt_tokens: 123, completion_tokens: 7 }, ...extra });
 const jsonResponse = (body = success(), options) => new Response(JSON.stringify(body), options);
 const chunk = (delta = {}, finish_reason = null) => ({ id: 'chat-fixture', choices: [{ index: 0, delta, finish_reason }] });
@@ -24,7 +25,7 @@ function streamResponse(text, byteSize = Infinity, onCancel = () => {}) {
 function setup(upstream = () => jsonResponse(), config = {}) {
   let handler, stopped = false;
   const calls = [], module = { exports: {} };
-  runInNewContext(source, {
+  runRuntimeFixture(source, {
     module, URL, Response, ReadableStream, TextEncoder, TextDecoder, AbortController, setTimeout, clearTimeout,
     Bun: { hash: Bun.hash, serve(options) { handler = options.fetch; return { port: 12345, stop() { stopped = true; } }; } },
     async fetch(url, options) { calls.push({ url, ...options, body: JSON.parse(options.body) }); return upstream(options); },

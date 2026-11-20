@@ -1,4 +1,3 @@
-'use strict';
 
 const SCREEN_DEFAULTS = {
   widthMask: 3, narrow: 0, wide: 1, spacerTail: 2, spacerHead: 3,
@@ -324,7 +323,7 @@ function install() {
   return true;
 }
 
-module.exports = { CellSegmenter, install, scanChunks };
+export { CellSegmenter, install, scanChunks };
 
 if (install() && process.env.CLAWGOD_BUN_ANT_SHIM_DEBUG === '1') {
   process.stderr.write('[clawgod] Bun.ant shim active (ClawGod_Y runtime >= 2.1.271 renderer on stock Bun)\n');

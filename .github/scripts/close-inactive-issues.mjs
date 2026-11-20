@@ -1,4 +1,3 @@
-'use strict';
 
 const DAYS = 30;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -8,7 +7,7 @@ function inactive(issue, cutoff) {
   return !issue.closed && last <= cutoff;
 }
 
-module.exports = async function closeInactiveIssues({ github, context, core, dryRun, now = Date.now() }) {
+export default async function closeInactiveIssues({ github, context, core, dryRun, now = Date.now() }) {
   const cutoff = now - DAYS * MS_PER_DAY;
   const repo = { owner: context.repo.owner, name: context.repo.repo };
   const candidates = [];
@@ -58,4 +57,4 @@ module.exports = async function closeInactiveIssues({ github, context, core, dry
     .write();
   return { eligible: confirmed, closed };
 };
-module.exports.inactive = inactive;
+export { inactive };

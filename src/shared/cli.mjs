@@ -1,22 +1,21 @@
 #!/usr/bin/env bun
-const { readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync } = require('fs');
-const { join } = require('path');
-const { homedir } = require('os');
-const { spawnSync } = require('child_process');
+import { readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { homedir } from 'node:os';
+import { fileURLToPath } from 'node:url';
+const runtimeDir = process.env.CLAWGOD_RUNTIME_DIR || (/\$bunfs|~BUN/.test(import.meta.url)
+  ? dirname(process.execPath) : dirname(fileURLToPath(import.meta.url)));
+process.env.CLAWGOD_RUNTIME_DIR ??= runtimeDir;
 
 const clawgodDir = join(homedir(), '.clawgod');
+if (process.argv[2] === 'import') {
+  try { await (await import('./import.mjs')).runImport(process.argv.slice(3)); }
+  catch (error) { console.error('[clawgod] ' + error.message); process.exit(1); }
+  process.exit(0);
+}
 if (process.argv.length === 3 && process.argv[2] === '--uninstall') {
-  const windows = process.platform === 'win32';
-  const uninstaller = join(__dirname, windows ? 'uninstall.ps1' : 'uninstall.sh');
-  if (!existsSync(uninstaller)) {
-    process.stderr.write('[clawgod] Local uninstaller is missing. Download and run uninstall.ps1 (Windows) or uninstall.sh (macOS/Linux) from the ClawGod_Y release.\n');
-    process.exit(1);
-  }
-  const result = spawnSync(windows ? 'powershell' : 'bash', windows
-    ? ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', uninstaller]
-    : [uninstaller], { stdio: 'inherit', env: process.env });
-  if (result.error) process.stderr.write('[clawgod] Uninstall failed: ' + result.error.message + '\n');
-  process.exit(Number.isInteger(result.status) ? result.status : 1);
+  await (await import('./install-runtime.mjs')).uninstallRuntime();
+  process.exit(0);
 }
 if (['update', 'upgrade'].includes(process.argv[2])) {
   process.stderr.write('[clawgod] This command has been removed. Use --version to query the version or --uninstall to uninstall.\n');
@@ -28,35 +27,36 @@ const probeTools = process.argv.length === 3 && process.argv[2] === '--probe-too
 
 // Share Claude configuration; redirect session files through the direct-file backend.
 process.env.CLAUDE_CODE_HOVER_REST = '0';
-const { defaultProviderConfig: defaultConfig, resolveProviderConfig } = require('./runtime-helpers.cjs');
+const { defaultProviderConfig: defaultConfig, resolveProviderConfig, readJsonConfig, detectGrokKey } = await import('./runtime-helpers.mjs');
 
 let config = defaultConfig;
+let resolved;
 if (!versionOnly && !probeTools) {
   mkdirSync(join(clawgodDir, 'state'), { recursive: true });
   const configFile = join(clawgodDir, 'provider.json');
-  if (existsSync(configFile)) {
-    try { config = JSON.parse(readFileSync(configFile, 'utf8')); } catch {}
-  } else {
-    writeFileSync(configFile, JSON.stringify(defaultConfig, null, 2) + '\n');
+  try {
+    if (existsSync(configFile)) {
+      config = JSON.parse(readFileSync(configFile, 'utf8').replace(/^\uFEFF/, ''));
+    } else {
+      writeFileSync(configFile, JSON.stringify(defaultConfig, null, 2) + '\n');
+    }
+    resolved = resolveProviderConfig(config);
+  } catch (error) {
+    throw new Error('[clawgod] Cannot load ' + configFile + ': ' + error.message);
   }
+} else {
+  resolved = resolveProviderConfig(defaultConfig);
 }
 
-const resolved = resolveProviderConfig(config);
 if (!probeTools && resolved.useProxy) {
   let _proxyKey = resolved.apiKey || '';
-  if (!_proxyKey && resolved.type === 'grok') {
-    try {
-      const _gs = JSON.parse(readFileSync(join(homedir(), '.grok', 'user-settings.json'), 'utf8'));
-      _proxyKey = _gs.apiKey || '';
-    } catch {}
-    if (!_proxyKey) _proxyKey = process.env.GROK_API_KEY || '';
-  }
+  if (!_proxyKey && resolved.legacyType === 'grok') _proxyKey = detectGrokKey(process.env, homedir());
   if (resolved.baseURL === 'https://api.anthropic.com' || !resolved.baseURL) {
-    if (resolved.type === 'grok') resolved.baseURL = 'https://api.x.ai/v1';
+    if (resolved.legacyType === 'grok') resolved.baseURL = 'https://api.x.ai/v1';
     else throw new Error('[clawgod] openai-chat requires an explicit baseURL, for example https://example.com/v1');
   }
   if (_proxyKey) {
-    const { startProxy } = require('./openai-proxy.cjs');
+    const { startProxy } = await import('./openai-proxy.mjs');
     const _proxy = startProxy({
       apiKey: _proxyKey,
       baseURL: resolved.baseURL,
@@ -74,7 +74,7 @@ if (!probeTools && resolved.useProxy) {
     process.on('exit', function () { try { _proxy.stop(); } catch {} });
     process.stderr.write('[clawgod] OpenAI Chat Completions proxy on port ' + _proxy.port + '\n');
   } else {
-    throw new Error('[clawgod] openai-chat requires an API key (grok also accepts GROK_API_KEY or ~/.grok/user-settings.json)');
+    throw new Error('[clawgod] openai-chat requires an API key (grok also accepts GROK_API_KEY, XAI_API_KEY or ~/.grok/user-settings.json)');
   }
 } else if (!probeTools && resolved.apiKey) {
   if (resolved.baseURL) process.env.ANTHROPIC_BASE_URL = resolved.baseURL;
@@ -120,12 +120,9 @@ process.env.MAX_THINKING_TOKENS ??= '31999';
 process.env.MAX_MCP_OUTPUT_TOKENS ??= '200000';
 
 const featuresFile = join(clawgodDir, 'features.json');
-if (!process.env.CLAUDE_INTERNAL_FC_OVERRIDES && existsSync(featuresFile)) {
-  try {
-    const raw = readFileSync(featuresFile, 'utf8');
-    JSON.parse(raw);
-    process.env.CLAUDE_INTERNAL_FC_OVERRIDES = raw;
-  } catch {}
+if (!process.env.CLAUDE_INTERNAL_FC_OVERRIDES) {
+  const features = readJsonConfig(featuresFile, null);
+  if (features !== null) process.env.CLAUDE_INTERNAL_FC_OVERRIDES = JSON.stringify(features);
 }
 
 const _realExecPath = process.env.CLAUDE_CODE_EXECPATH || process.execPath;
@@ -136,22 +133,21 @@ if (_realExecPath !== process.execPath) {
   });
 }
 
-require('./feature-gates.cjs');
+await import('./feature-gates.mjs');
 
-require('./bun-ant-shim.cjs');
+await import('./bun-ant-shim.mjs');
 
 const leanSettings = join(clawgodDir, 'lean-settings.json');
 if (!versionOnly && !probeTools) {
   if (!existsSync(leanSettings)) {
-    try { require('./lean-mode.cjs').leanApply(leanSettings, undefined, join(clawgodDir, 'patches.json')); } catch {}
+    (await import('./lean-mode.mjs')).leanApply(leanSettings, undefined, join(clawgodDir, 'patches.json'));
   }
   if (!process.argv.some(a => a === '--settings' || a.startsWith('--settings='))) {
-    let tui = 'fullscreen';
-    try { tui = JSON.parse(readFileSync(leanSettings, 'utf8')).tui ?? tui; } catch {}
+    const tui = readJsonConfig(leanSettings).tui ?? 'fullscreen';
     process.env.CLAUDE_CODE_NO_FLICKER ??= tui === 'default' ? '0' : '1';
     if (existsSync(leanSettings)) process.argv.push('--settings', leanSettings);
   }
-  const builtinPromptFile = join(__dirname, 'system-prompt.md');
+  const builtinPromptFile = join(runtimeDir, 'system-prompt.md');
   let _customPrompt = '';
   try {
     _customPrompt = readFileSync(builtinPromptFile, 'utf8').trim();
@@ -162,11 +158,9 @@ if (!versionOnly && !probeTools) {
   }
   let _identityMarkers;
   let _stripMemory;
-  try {
-    const _extra = JSON.parse(readFileSync(join(clawgodDir, 'assembly.json'), 'utf8'));
-    if (Array.isArray(_extra?.identityMarkers)) _identityMarkers = _extra.identityMarkers;
-    if (_extra && typeof _extra === 'object') _stripMemory = _extra.stripMemory;
-  } catch {}
+  const _extra = readJsonConfig(join(clawgodDir, 'assembly.json'));
+  if (Array.isArray(_extra.identityMarkers)) _identityMarkers = _extra.identityMarkers;
+  _stripMemory = _extra.stripMemory;
   globalThis.__clawgodAssembly = Object.freeze({
     customPrompt: _customPrompt,
     requireCustomPrompt: true,
@@ -178,15 +172,11 @@ if (!versionOnly && !probeTools) {
 if (probeTools) {
   (async () => {
     try {
-      const source = readFileSync(join(__dirname, 'cli.original.cjs'), 'utf8');
-      const manifest = source.match(/^\/\/ clawgod:probe-modules (.+)$/m);
-      const modules = manifest && JSON.parse(manifest[1]);
-      if (!Array.isArray(modules) || !modules.length) throw new Error('probe module manifest missing; repatch this installation');
-      for (const name of modules) require(join(__dirname, name));
+      await (await import('./generated-probes.mjs')).loadProbes();
       process.exit(await globalThis.__clawgodHelpers.probeToolTables());
     } catch (error) {
       process.stderr.write('[clawgod] probe-tools error: ' + error.message + '\n');
       process.exit(1);
     }
   })();
-} else require('./cli.original.cjs');
+} else await import('./cli.original.cjs');

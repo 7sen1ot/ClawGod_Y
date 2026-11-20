@@ -52,6 +52,12 @@ function fixAssetRequires(c, assets) {
     if (node.type === 'CallExpression' && isRequire(node.callee)) {
       const id = node.arguments[0]?.value;
       const key = typeof id === 'string' && process.platform === 'win32' ? id.toLowerCase() : id;
+      // Normalize extracted module loads once, before patching and compilation.
+      // The compiler can then discover these dependencies without rewriting source.
+      if (typeof id === 'string' && /\.[cm]?js$/.test(id) && !assets.has(key)) {
+        edits.push({ ...node.callee, moduleRequire: true });
+        return;
+      }
       if (typeof id !== 'string' || assets.has(key)) edits.push(node.callee);
     }
   });
@@ -71,7 +77,7 @@ function fixAssetRequires(c, assets) {
       return import.meta.require(id);
     };
   })()`;
-  return applyAstEdits(c, edits.map(({ start, end }) => ({ start, end, replacement: loader })));
+  return applyAstEdits(c, edits.map(({ start, end, moduleRequire }) => ({ start, end, replacement: moduleRequire ? 'require' : loader })));
 }
 
 if (existsSync(pathMapFile)) {

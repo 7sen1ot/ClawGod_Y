@@ -2,15 +2,27 @@
   "name": "clawgod-dev",
   "private": true,
   "packageManager": "bun@1.4.3",
+  "engines": {
+    "bun": ">=1.3.14"
+  },
   "scripts": {
     "build": "bun build.js",
     "build:check": "bun build.js --check",
-    "test": "bun run test:unit && bun run test:proxy && bun run test:issues",
-    "test:unit": "bun run test:source && bun src/tests/startup-check.test.mjs && bun src/tests/post-process.test.mjs && bun src/tests/bun-ant-shim.test.mjs && bun run test:installer:fixtures && bun src/tests/native-refresh.test.mjs",
-    "test:source": "bun run build && bun src/tests/ast-patches.test.mjs && bun src/tests/patch.test.mjs && bun src/tests/pentest-patches.test.mjs && bun src/tests/pentest-pruner.test.mjs && bun src/tests/source-backup.test.mjs && bun src/tests/terminal-reply.test.mjs && bun src/tests/lean.test.mjs && bun src/tests/updater.test.mjs && bun src/tests/provider.test.mjs && bun src/tests/prompt-assembly.test.mjs && bun .github/scripts/ci-gates.test.cjs",
-    "test:installer": "bun run build && bun run test:installer:fixtures",
-    "test:installer:fixtures": "bun src/tests/installer-lifecycle.test.mjs && bun src/tests/npm-fetch.test.mjs && bun src/tests/extract-natives.test.mjs && bun src/tests/compile-runtime.test.mjs",
-    "test:proxy": "bun test ./src/tests/openai-proxy.test.mjs ./src/tests/openai-proxy.integration.test.mjs",
-    "test:issues": "bun .github/scripts/close-inactive-issues.test.cjs"
+    "test": "bun test ./src/tests ./.github/scripts",
+    "test:unit": "bun test ./src/tests",
+    "test:source": "bun test src/tests/ast-patches.test.mjs src/tests/patch.test.mjs src/tests/pentest-patches.test.mjs src/tests/pentest-pruner.test.mjs src/tests/source-backup.test.mjs src/tests/terminal-reply.test.mjs src/tests/lean.test.mjs src/tests/updater.test.mjs src/tests/provider.test.mjs src/tests/prompt-assembly.test.mjs .github/scripts/ci-gates.test.mjs",
+    "test:installer": "bun run test:installer:fixtures",
+    "test:installer:fixtures": "bun test src/tests/installer-lifecycle.test.mjs src/tests/npm-fetch.test.mjs src/tests/extract-natives.test.mjs src/tests/compile-runtime.test.mjs",
+    "test:proxy": "bun test src/tests/openai-proxy.test.mjs src/tests/openai-proxy.integration.test.mjs",
+    "test:issues": "bun test ./.github/scripts/close-inactive-issues.test.mjs",
+    "check": "tsc --noEmit && biome lint src/shared src/ci build.js"
+  },
+  "type": "module",
+  "devDependencies": {
+    "@biomejs/biome": "2.3.8",
+    "@lydell/node-pty": "1.2.0-beta.18",
+    "@types/bun": "1.3.14",
+    "@xterm/headless": "6.0.0",
+    "typescript": "5.9.3"
   }
 }

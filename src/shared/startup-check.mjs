@@ -1,12 +1,11 @@
-'use strict';
-const { spawn, spawnSync } = require('node:child_process');
-const { existsSync, readFileSync, writeFileSync } = require('node:fs');
-const { dirname, join } = require('node:path');
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 const [bun, cli, probeMode] = process.argv.slice(2);
 const timeoutMs = Number(process.env.CLAWGOD_STARTUP_TIMEOUT_MS || 30000);
 if (!bun || !cli || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2147483647) {
-  process.stderr.write('Usage: bun startup-check.cjs <bun> <cli.cjs> [--probe-tools]; CLAWGOD_STARTUP_TIMEOUT_MS must be a positive integer <= 2147483647.\n');
+  process.stderr.write('Usage: bun startup-check.mjs <bun> <cli.mjs> [--probe-tools]; CLAWGOD_STARTUP_TIMEOUT_MS must be a positive integer <= 2147483647.\n');
   process.exitCode = 1;
 } else {
   const probeTools = probeMode === '--probe-tools';

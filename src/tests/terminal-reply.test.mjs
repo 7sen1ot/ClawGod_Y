@@ -1,11 +1,14 @@
+import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, copyFileSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runInNewContext } from 'node:vm';
-import { terminalReplyDelay } from '../shared/runtime-helpers.cjs';
+import { terminalReplyDelay } from '../shared/runtime-helpers.mjs';
 import { requiredRuntime } from './required-runtime.fixture.mjs';
+
+test('terminal-reply.test', async () => {
 
 const pending = { queue: [{ kind: 'sentinel', written: true }] };
 const reader = (incomplete, mode = 'NORMAL') => ({ parse: { mode, incomplete }, lastInputAt: 100 });
@@ -27,7 +30,7 @@ assert.equal(terminalReplyDelay(pending, reader('\x1b['), NaN), 0);
 
 const dir = mkdtempSync(join(tmpdir(), 'clawgod-terminal-reply-test-'));
 try {
-  for (const name of ['patch.mjs', 'patch-rules.mjs', 'patch-registry.mjs', 'ast-patches.mjs', 'ast-helpers.mjs', 'acorn.mjs', 'pentest-patches.mjs', 'pentest-scanners.mjs', 'pentest-prompts.mjs', 'pentest-trimming.mjs', 'pentest-policy-text.mjs', 'pentest-pruner.mjs', 'runtime-helpers.cjs', 'prompt-runtime.cjs']) {
+  for (const name of ['patch.mjs', 'patch-rules.mjs', 'patch-registry.mjs', 'ast-patches.mjs', 'ast-helpers.mjs', 'acorn.mjs', 'pentest-patches.mjs', 'pentest-scanners.mjs', 'pentest-prompts.mjs', 'pentest-trimming.mjs', 'pentest-policy-text.mjs', 'pentest-pruner.mjs', 'runtime-helpers.mjs', 'prompt-runtime.mjs']) {
     copyFileSync(new URL(`../shared/${name}`, import.meta.url), join(dir, name));
   }
   for (const graph of [false, true]) {
@@ -88,3 +91,5 @@ try {
   rmSync(dir, { recursive: true, force: true });
 }
 console.log('[terminal-reply.test] pending DA1 fragments, keyboard fallback, timeout, and patch composition ok');
+
+});

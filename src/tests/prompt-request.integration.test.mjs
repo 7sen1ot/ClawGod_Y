@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test } from 'bun:test';
 import { runInNewContext } from 'node:vm';
 import { applyAstEdits } from '../shared/ast-helpers.mjs';
 import { scanPentestPatches } from '../shared/pentest-patches.mjs';
-import * as helpers from '../shared/runtime-helpers.cjs';
-import { startProxy } from '../shared/openai-proxy.cjs';
+import * as helpers from '../shared/runtime-helpers.mjs';
+import { startProxy } from '../shared/openai-proxy.mjs';
 
-test('system instructions survive HTTP transport, tools, streaming and snapshot rebuild', { skip: typeof Bun === 'undefined' }, async () => {
+test('system instructions survive HTTP transport, tools, streaming and snapshot rebuild', async () => {
   const options = Object.freeze({ customPrompt: 'Opaque transport fixture rules.', requireCustomPrompt: true });
   const source = 'class Messages{create(body,options){return this._client.post("/v1/messages",{body,...options})}}';
   const scanned = scanPentestPatches(source)['pentest-prompt-request'];
@@ -92,7 +92,7 @@ test('system instructions survive HTTP transport, tools, streaming and snapshot 
   }
 });
 
-test('SDK sends thread deltas unchanged and full rules on create or stateless fallback', { skip: typeof Bun === 'undefined' }, async () => {
+test('SDK sends thread deltas unchanged and full rules on create or stateless fallback', async () => {
   const requests = [];
   const upstream = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
     requests.push(await request.json());

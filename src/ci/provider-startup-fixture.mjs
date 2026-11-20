@@ -1,8 +1,7 @@
-'use strict';
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const { join } = require('node:path');
-const { homedir } = require('node:os');
+import assert from 'node:assert/strict';
+import * as fs from 'node:fs';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
 if (process.env.CI !== 'true') throw new Error('This fixture may only modify a disposable CI runner profile');
 const dir = join(homedir(), '.clawgod');
 const path = join(dir, 'provider.json');
@@ -23,4 +22,4 @@ if (process.argv[2] === 'seed') {
   }
   assert.match(fs.readFileSync(logs[0], 'utf8'), /^\d+\.\d+\.\d+[^\r\n]*\(ClawGod_Y\)\s*$/m);
   console.log('Installed ClawGod_Y version check passed with configured provider; settings preserved');
-} else throw new Error('Usage: provider-startup-fixture.cjs seed|verify [installer logs...]');
+} else throw new Error('Usage: provider-startup-fixture.mjs seed|verify [installer logs...]');

@@ -1,9 +1,9 @@
-const { readFileSync } = require('node:fs');
-const { upstreamPatches } = require('../shared/patch-rules.mjs');
+import { readFileSync } from 'node:fs';
+import { upstreamPatches } from '../shared/patch-rules.mjs';
 
 const [logPath, platform, versionArg] = process.argv.slice(2);
 if (!logPath || !['linux', 'macos', 'windows'].includes(platform)) {
-  throw new Error('Usage: bun check-patch-coverage.cjs <install-log> <linux|macos|windows> [claude-version]');
+  throw new Error('Usage: bun check-patch-coverage.mjs <install-log> <linux|macos|windows> [claude-version]');
 }
 
 const bytes = readFileSync(logPath);
@@ -28,8 +28,6 @@ const baseline = new Map([
   ['Neutralize apostrophe steganography (odp)', 'absent'],
   ['Remove cautious actions section', 'unverified'],
 ]);
-if (installedVersion && Bun.semver.satisfies(installedVersion, '>=2.1.214'))
-  baseline.set('Message list filter bypass (legacy ternary)', 'absent');
 if (platform !== 'macos') {
   baseline.set('Computer Use default enabled', 'unverified');
   baseline.set('Computer Use subscription bypass', 'unverified');

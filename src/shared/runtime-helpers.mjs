@@ -1,4 +1,3 @@
-'use strict';
 
 function classifierTimeoutFloor(envValue) {
   if (typeof envValue === 'string' && envValue.trim() === '') return null;
@@ -27,9 +26,39 @@ function enablePredicate(original, id) {
   };
 }
 
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+
+function parseJsonConfig(text, source) {
+  try {
+    const value = JSON.parse(text.replace(/^\uFEFF/, ''));
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('expected a JSON object');
+    return value;
+  } catch (error) {
+    throw new Error('[clawgod] Cannot load ' + source + ': ' + error.message, { cause: error });
+  }
+}
+
+function readJsonConfig(file, fallback = {}) {
+  let text;
+  try { text = fs.readFileSync(file, 'utf8'); }
+  catch (error) {
+    if (error.code === 'ENOENT') return fallback;
+    throw new Error('[clawgod] Cannot read ' + file + ': ' + error.message, { cause: error });
+  }
+  return parseJsonConfig(text, file);
+}
+
+function detectGrokKey(env = process.env, home = os.homedir()) {
+  if (env.GROK_API_KEY) return env.GROK_API_KEY;
+  const file = path.join(home, '.grok', 'user-settings.json');
+  const settings = readJsonConfig(file);
+  if (settings.apiKey !== undefined && typeof settings.apiKey !== 'string') {
+    throw new Error('[clawgod] Invalid ' + file + ': apiKey must be a string.');
+  }
+  return settings.apiKey || env.XAI_API_KEY || '';
+}
 
 const sharedConfigDir = path.resolve(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'));
 const sessionStateDir = path.join(os.homedir(), '.clawgod', 'state');
@@ -72,15 +101,9 @@ const FLAG_OVERRIDES = (() => {
     tengu_vscode_review_upsell: false,
     tengu_c4e_slash_upsell: false,
   };
-  for (const source of [
-    () => JSON.parse(fs.readFileSync(path.join(os.homedir(), '.clawgod', 'flags.json'), 'utf8')),
-    () => JSON.parse(process.env.CLAWGOD_FLAGS || '{}'),
-  ]) {
-    try {
-      const extra = source();
-      if (extra && typeof extra === 'object' && !Array.isArray(extra)) Object.assign(base, extra);
-    } catch {}
-  }
+  Object.assign(base,
+    readJsonConfig(path.join(os.homedir(), '.clawgod', 'flags.json')),
+    parseJsonConfig(process.env.CLAWGOD_FLAGS || '{}', 'CLAWGOD_FLAGS'));
   return base;
 })();
 
@@ -89,11 +112,11 @@ function flagOverride(flag) {
   return flag in FLAG_OVERRIDES ? FLAG_OVERRIDES[flag] : NO_OVERRIDE;
 }
 
-const {
+import {
   rewritePromptAssembly, cleanPromptIdentity, prepareIdentityTemplate, cleanSummaryContent, cleanSummaryMessages,
   brandApplicationText, brandApplicationPattern, matchesApplicationText,
   filterDefaultPromptSections, refreshPromptSnapshot, finalizeSystemRequest, validateExtraBody,
-} = require('./prompt-runtime.cjs');
+} from './prompt-runtime.mjs';
 
 const DEFAULT_PROVIDER_CONFIG = {
   protocol: 'anthropic',
@@ -106,20 +129,42 @@ const DEFAULT_PROVIDER_CONFIG = {
 };
 
 function resolveProviderConfig(raw) {
-  const config = raw && typeof raw === 'object' ? raw : {};
+  const config = raw === undefined ? {} : raw;
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    throw new Error('[clawgod] Provider config must be a JSON object.');
+  }
+  for (const key of Object.keys(config)) {
+    if (!Object.hasOwn(DEFAULT_PROVIDER_CONFIG, key) && key !== 'type') {
+      throw new Error('[clawgod] Unknown provider field: ' + key + '.');
+    }
+  }
   const protocol = config.protocol;
   if (protocol !== undefined && !['anthropic', 'openai-chat'].includes(protocol)) {
     throw new Error('[clawgod] Unsupported provider protocol: ' + protocol + '. Use anthropic or openai-chat; auto and Responses are not supported.');
   }
   const type = config.type;
-  const useProxy = protocol === 'openai-chat' ||
-    (protocol === undefined && ['grok', 'openai-compat'].includes(type));
+  if (type !== undefined && !['anthropic', 'grok', 'openai-compat'].includes(type)) {
+    throw new Error('[clawgod] Unsupported legacy provider type. Use protocol: anthropic or openai-chat.');
+  }
+  for (const [key, fallback] of Object.entries(DEFAULT_PROVIDER_CONFIG)) {
+    if (Object.hasOwn(config, key) && typeof config[key] !== typeof fallback) {
+      throw new Error('[clawgod] Provider field ' + key + ' must be a ' + typeof fallback + '.');
+    }
+  }
+  const timeout = config.timeoutMs ?? DEFAULT_PROVIDER_CONFIG.timeoutMs;
+  if (!Number.isSafeInteger(timeout) || timeout <= 0 || timeout > 2147483647) {
+    throw new Error('[clawgod] Provider field timeoutMs must be an integer between 1 and 2147483647.');
+  }
+  // protocol is the transport selector. type is a compatibility input only:
+  // explicit protocol wins, even when the legacy label describes another API.
+  const resolvedProtocol = protocol ?? (['grok', 'openai-compat'].includes(type) ? 'openai-chat' : 'anthropic');
+  const { type: legacyType, ...values } = config;
   return {
-    ...Object.fromEntries(Object.entries(DEFAULT_PROVIDER_CONFIG).map(([key, fallback]) =>
-      [key, typeof config[key] === typeof fallback ? config[key] : fallback])),
-    protocol: protocol || undefined,
-    type: type || undefined,
-    useProxy,
+    ...DEFAULT_PROVIDER_CONFIG,
+    ...values,
+    protocol: resolvedProtocol,
+    legacyType,
+    useProxy: resolvedProtocol === 'openai-chat',
   };
 }
 
@@ -151,7 +196,7 @@ async function probeToolTables() {
   }
 }
 
-module.exports = {
+export const runtimeHelpers = {
   classifierTimeoutFloor, terminalReplyDelay, enablePredicate, sessionPath, instructionFileFilter,
   NO_OVERRIDE, flagOverride, flagOverrides: FLAG_OVERRIDES,
   rewritePromptAssembly, selectApplicationPrompt: rewritePromptAssembly,
@@ -160,4 +205,14 @@ module.exports = {
   filterDefaultPromptSections, refreshPromptSnapshot, finalizeSystemRequest, validateExtraBody,
   defaultProviderConfig: DEFAULT_PROVIDER_CONFIG, resolveProviderConfig, probeToolTables,
 };
-globalThis.__clawgodHelpers = module.exports;
+export {
+  parseJsonConfig, readJsonConfig, detectGrokKey,
+  DEFAULT_PROVIDER_CONFIG as defaultProviderConfig, resolveProviderConfig, probeToolTables,
+  classifierTimeoutFloor, terminalReplyDelay, enablePredicate, sessionPath, instructionFileFilter,
+  NO_OVERRIDE, flagOverride, FLAG_OVERRIDES as flagOverrides,
+  rewritePromptAssembly, rewritePromptAssembly as selectApplicationPrompt,
+  cleanPromptIdentity, prepareIdentityTemplate, cleanSummaryContent, cleanSummaryMessages,
+  brandApplicationText, brandApplicationPattern, matchesApplicationText,
+  filterDefaultPromptSections, refreshPromptSnapshot, finalizeSystemRequest, validateExtraBody,
+};
+globalThis.__clawgodHelpers = runtimeHelpers;

@@ -1,3 +1,6 @@
+// @ts-check
+/** @typedef {import('./patch-types.js').PatchNode} PatchNode */
+/** @typedef {import('./patch-types.js').PatchScan} PatchScan */
 import {
   AST_HELPERS, contains, containsOwn, createPatchCandidateFilter, createPatchContext,
   hasPatchAnchors, ownReturns, parsePatchSource, walk, walkScope,
@@ -157,7 +160,14 @@ function scanSessionPaths(tree, code, context, results, edit) {
   });
 }
 
+/**
+ * @param {string} code
+ * @param {() => PatchNode} [readTree]
+ * @param {() => ReturnType<typeof createPatchContext>} [readContext]
+ * @returns {Record<string, PatchScan>}
+ */
 export function scanAstPatches(code, readTree = () => parsePatchSource(code), readContext) {
+  /** @type {Record<string, PatchScan>} */
   const results = Object.fromEntries(AST_PATCH_IDS.map(id => [id, { matches: [], protected: [], present: false, patched: false }]));
   if (!hasPatchAnchors(code, anchors)) return results;
   const tree = readTree();

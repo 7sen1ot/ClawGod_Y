@@ -1,16 +1,18 @@
-'use strict';
-const assert = require('node:assert/strict');
-const closeIssues = require('./close-inactive-issues.cjs');
+import { test } from 'bun:test';
+import assert from 'node:assert/strict';
+import closeIssues, { inactive } from './close-inactive-issues.mjs';
+
+test('close-inactive-issues.test', async () => {
 const now = Date.parse('2026-09-18T12:00:00Z');
 const daysAgo = (days) => new Date(now - days * 86400000).toISOString();
 const issue = (number, age, replyAge) => ({ number, title: `Issue ${number}`, closed: false,
   createdAt: daysAgo(age), comments: { nodes: replyAge === undefined ? [] : [{ createdAt: daysAgo(replyAge) }] } });
 const cutoff = now - 30 * 86400000;
-assert.equal(closeIssues.inactive(issue(1, 30), cutoff), true, 'exactly 30 days qualifies');
-assert.equal(closeIssues.inactive(issue(1, 29.99), cutoff), false);
-assert.equal(closeIssues.inactive(issue(1, 90, 1), cutoff), false, 'new reply keeps an old issue open');
-assert.equal(closeIssues.inactive({ ...issue(1, 90), updatedAt: daysAgo(0) }, cutoff), true, 'labels/edits do not reset reply age');
-assert.equal(closeIssues.inactive({ ...issue(1, 90), createdAt: 'bad date' }, cutoff), false);
+assert.equal(inactive(issue(1, 30), cutoff), true, 'exactly 30 days qualifies');
+assert.equal(inactive(issue(1, 29.99), cutoff), false);
+assert.equal(inactive(issue(1, 90, 1), cutoff), false, 'new reply keeps an old issue open');
+assert.equal(inactive({ ...issue(1, 90), updatedAt: daysAgo(0) }, cutoff), true, 'labels/edits do not reset reply age');
+assert.equal(inactive({ ...issue(1, 90), createdAt: 'bad date' }, cutoff), false);
 
 async function run(dryRun) {
   const changes = [];
@@ -35,8 +37,7 @@ async function run(dryRun) {
   assert.deepEqual(changes.map((x) => x.issue_number), dryRun ? [] : [1, 6]);
   for (const change of changes) assert.equal(change.state_reason, 'not_planned');
 }
-(async () => {
-  await run(true);
-  await run(false);
-  console.log('inactive issue policy: age, replies, pagination, recheck and dry-run passed');
-})().catch((error) => { console.error(error); process.exitCode = 1; });
+await run(true);
+await run(false);
+
+});

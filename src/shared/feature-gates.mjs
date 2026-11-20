@@ -1,12 +1,16 @@
-'use strict';
-const CLAWGOD_FEATURES_META = {};
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { readJsonConfig } from './runtime-helpers.mjs';
+const runtimeDir = process.env.CLAWGOD_RUNTIME_DIR || dirname(fileURLToPath(import.meta.url));
+const CLAWGOD_FEATURES_META = JSON.parse(readFileSync(join(runtimeDir, 'features-meta.json'), 'utf8'));
 
 var CLAWGOD_RUNTIME_FEATURES = ['bun-ant-shim'];
 
-var clawgodDir = require('path').join(require('os').homedir(), '.clawgod');
+var clawgodDir = join(homedir(), '.clawgod');
 
-var _cfg = {};
-try { _cfg = JSON.parse(require('fs').readFileSync(require('path').join(clawgodDir, 'patches.json'), 'utf8')); } catch {}
+var _cfg = readJsonConfig(join(clawgodDir, 'patches.json'));
 for (var _name in process.env) {
   if (_name.indexOf('CLAWGOD_FEATURE_') !== 0) continue;
   var _val = process.env[_name];

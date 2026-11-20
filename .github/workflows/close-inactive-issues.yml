@@ -5,14 +5,20 @@ on:
     paths:
       - .bun-version
       - package.json
-      - .github/scripts/close-inactive-issues*.cjs
+      - tsconfig.json
+      - biome.json
+      - bunfig.toml
+      - .github/scripts/close-inactive-issues*.mjs
       - .github/workflows/close-inactive-issues.yml
   push:
     branches: [main]
     paths:
       - .bun-version
       - package.json
-      - .github/scripts/close-inactive-issues*.cjs
+      - tsconfig.json
+      - biome.json
+      - bunfig.toml
+      - .github/scripts/close-inactive-issues*.mjs
       - .github/workflows/close-inactive-issues.yml
   schedule:
     - cron: '35 7 * * 0'
@@ -59,5 +65,6 @@ jobs:
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
         with:
           script: |
-            const closeInactiveIssues = require('./.github/scripts/close-inactive-issues.cjs');
+            const { pathToFileURL } = await import('node:url');
+            const { default: closeInactiveIssues } = await import(pathToFileURL(process.env.GITHUB_WORKSPACE + '/.github/scripts/close-inactive-issues.mjs').href);
             await closeInactiveIssues({ github, context, core, dryRun: process.env.DRY_RUN === 'true' });

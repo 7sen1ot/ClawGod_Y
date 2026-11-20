@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["bun"]
+  },
+  "files": ["src/shared/ast-patches.mjs", "src/shared/pentest-pruner.mjs", "src/shared/openai-proxy.mjs", "src/ci/tui-smoke.mjs"]
+}

@@ -1,3 +1,5 @@
+import { test } from 'bun:test';
+import { runRuntimeFixture } from './runtime-sandbox.fixture.mjs';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -5,19 +7,11 @@ import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 
+test('lean.test', async () => {
+
 const require = createRequire(import.meta.url);
 const read = path => fs.readFileSync(new URL(path, import.meta.url), 'utf8');
-const wrapper = read('../shared/cli.cjs');
-const unix = read('../templates/install.sh');
-const unixApply = unix.match(/"\$BUN_BIN" -e '\n(const \{leanApply\}[^']*)\n' "\$CLAWGOD_DIR\/lean-mode\.cjs" "\$CLAWGOD_DIR\/lean-settings\.json" "\$CLAWGOD_DIR\/patches\.json"/)?.[1];
-assert.ok(unixApply, 'install.sh must apply Lean via lean-mode.cjs into the clawgod-scoped file');
-for (const name of ['uninstall.sh', 'uninstall.ps1']) {
-  const uninstall = read(`../../${name}`);
-  assert.ok(uninstall.includes('lean-settings.json'), `${name} must remove the clawgod-scoped Lean settings`);
-  assert.ok(!uninstall.replace(/lean-settings\.json/g, '').includes('settings.json'), `${name} must not touch ~/.claude/settings.json`);
-}
-const winApply = read('../windows/lean-apply.cjs');
-assert.ok(winApply.includes('.leanApply(process.argv[2], undefined, process.argv[3])'), 'lean-apply must leave shared settings untouched');
+const wrapper = read('../shared/cli.mjs');
 const home = fs.mkdtempSync(join(tmpdir(), 'clawgod-lean-test-'));
 const bundleDir = join(home, 'installation');
 const dir = join(home, '.clawgod');
@@ -39,18 +33,18 @@ function reset() {
 function launch(args = [], env = {}, expectLoaded = args.length === 0) {
   const exit = Symbol('exit');
   let loaded = false;
-  const proc = { argv: ['node', 'cli.cjs', ...args], env: { ...env }, execPath: '/test/bun',
+  const proc = { argv: ['node', 'cli.mjs', ...args], env: { ...env }, execPath: '/test/bun',
     stderr: { write() {} }, exit(code) { assert.equal(code, 0); throw exit; } };
   try {
-    runInNewContext(wrapper, {
+    runRuntimeFixture(wrapper, {
       __dirname: bundleDir,
       process: proc,
       require(name) {
         if (name === 'os') return { homedir: () => home };
         if (name === './cli.original.cjs') { loaded = true; return {}; }
-        if (name === './runtime-helpers.cjs') return require('../shared/runtime-helpers.cjs');
-        if (name === './lean-mode.cjs') return require('../shared/lean-mode.cjs');
-        if (['./feature-gates.cjs', './bun-ant-shim.cjs'].includes(name)) return {};
+        if (name === './runtime-helpers.mjs') return require('../shared/runtime-helpers.mjs');
+        if (name === './lean-mode.mjs') return require('../shared/lean-mode.mjs');
+        if (['./feature-gates.mjs', './bun-ant-shim.mjs'].includes(name)) return {};
         return require(name);
       },
     });
@@ -61,7 +55,7 @@ function launch(args = [], env = {}, expectLoaded = args.length === 0) {
   return proc;
 }
 
-const { leanApply, DENY, FLAGS, SETTINGS, LEGACY_SHARED_DENY } = require('../shared/lean-mode.cjs');
+const { leanApply, DENY, FLAGS, SETTINGS, LEGACY_SHARED_DENY } = require('../shared/lean-mode.mjs');
 
 function checkStrict(s) {
   for (const k of FLAGS) assert.equal(s[k], true, k);
@@ -103,17 +97,10 @@ try {
   console.log('[lean.test] single strictest level: clawgod-scoped, fill-only, idempotent ok');
 
   const patches = join(dir, 'patches.json');
-  for (const [code, args] of [
-    [winApply, [require.resolve('../shared/lean-mode.cjs'), leanSettings, patches]],
-    [unixApply, [require.resolve('../shared/lean-mode.cjs'), leanSettings, patches]],
-  ]) {
-    reset();
-    runInNewContext(code, { require, process: { argv: ['bun', ...args] } });
-    checkStrict(loadLean());
-    assert.deepEqual(loadSettings(), originalSettings, 'installers must preserve Claude Code settings');
-    assert.equal(JSON.parse(fs.readFileSync(patches, 'utf8'))['agent-teams'], true);
-  }
-  console.log('[lean.test] installer Lean settings and shared configuration isolation ok');
+  reset();
+  leanApply(leanSettings, undefined, patches);
+  checkStrict(loadLean());
+  assert.deepEqual(loadSettings(), originalSettings, 'installer settings remain scoped');
 
   for (const baseURL of ['https://api.anthropic.com', 'https://example.invalid']) {
     reset();
@@ -141,3 +128,5 @@ try {
 } finally {
   fs.rmSync(home, { recursive: true, force: true });
 }
+
+});

@@ -1,9 +1,12 @@
+import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { featuresMeta } from '../shared/patch-registry.mjs';
+
+test('compile-runtime.test', async () => {
 
 const root = mkdtempSync(join(tmpdir(), 'clawgod compile-'));
 const home = join(root, 'profile space \u6d4b\u8bd5');
@@ -18,23 +21,21 @@ const run = (command, args) => {
 };
 try {
   mkdirSync(join(dir, 'bunfs'), { recursive: true });
-  for (const name of ['compile-runtime.mjs', 'cli.cjs', 'runtime-helpers.cjs', 'prompt-runtime.cjs', 'feature-gates.cjs', 'lean-mode.cjs', 'openai-proxy.cjs', 'ast-helpers.mjs', 'acorn.mjs']) {
+  for (const name of ['compile-runtime.mjs', 'cli.mjs', 'runtime-helpers.mjs', 'prompt-runtime.mjs', 'feature-gates.mjs', 'lean-mode.mjs', 'openai-proxy.mjs', 'import.mjs', 'install-runtime.mjs', 'runtime-files.mjs']) {
     copyFileSync(new URL('../shared/' + name, import.meta.url), join(dir, name));
   }
-  const gates = join(dir, 'feature-gates.cjs');
-  writeFileSync(gates, readFileSync(gates, 'utf8').replace('const CLAWGOD_FEATURES_META = {};',
-    `const CLAWGOD_FEATURES_META = ${JSON.stringify(featuresMeta())};`));
-  writeFileSync(join(dir, 'bun-ant-shim.cjs'), '');
+  writeFileSync(join(dir, 'features-meta.json'), JSON.stringify(featuresMeta()));
+  writeFileSync(join(dir, 'bun-ant-shim.mjs'), '');
   writeFileSync(join(dir, 'system-prompt.md'), 'Fixture prompt.\n');
-  const original = `// clawgod:probe-modules ["bunfs/probe.cjs"]
-if(['--version','-v'].includes(process.argv[2]))console.log('2.1.316 (ClawGod_Y)');
+  const original = `if(['--version','-v'].includes(process.argv[2]))console.log('2.1.316 (ClawGod_Y)');
 else console.log(JSON.stringify({args:process.argv.slice(2),text:require('fs').readFileSync(${JSON.stringify(join(dir, 'asset.txt'))},'utf8')}));`;
   writeFileSync(join(dir, 'cli.original.cjs'), original);
   writeFileSync(join(dir, 'asset.txt'), 'external text asset');
   writeFileSync(join(dir, 'bunfs/answer.cjs'), 'module.exports="FixtureTool";');
-  writeFileSync(join(dir, 'bunfs/probe.cjs'), `const name=import.meta.require('./answer.cjs');
+  writeFileSync(join(dir, 'bunfs/probe.cjs'), `const name=require('./answer.cjs');
 globalThis.__clawgodTables={tools:[()=>[{name}]],commands:[()=>[{name:'fixture-command'}]]};`);
-  const source = ['--version', '--probe-tools'].map(arg => run(bun, [join(dir, 'cli.cjs'), arg]));
+  writeFileSync(join(dir, 'generated-probes.mjs'), 'export async function loadProbes(){await import("./bunfs/probe.cjs");}');
+  const source = ['--version', '--probe-tools'].map(arg => run(bun, [join(dir, 'cli.mjs'), arg]));
   const compiler = join(dir, 'compile-runtime.mjs');
   assert.match(run(bun, [compiler]), /Compiled startup runtime ready/);
   const marker = join(dir, '.compiled-runtime');
@@ -42,18 +43,14 @@ globalThis.__clawgodTables={tools:[()=>[{name}]],commands:[()=>[{name:'fixture-c
   assert.ok(existsSync(compiled));
   for (const [i, arg] of ['--version', '--probe-tools'].entries()) assert.equal(run(compiled, [arg]), source[i]);
   const args = ['fixture-argument', 'two words'];
-  assert.equal(run(compiled, args), run(bun, [join(dir, 'cli.cjs'), ...args]), 'Compiled/source behavior and external assets must agree');
-  writeFileSync(join(dir, 'cli.original.cjs'), original.replace(/^\/\/ clawgod:probe-modules.*\n/, ''));
+  assert.equal(run(compiled, args), run(bun, [join(dir, 'cli.mjs'), ...args]), 'Compiled/source behavior and external assets must agree');
+  rmSync(join(dir, 'generated-probes.mjs'));
   assert.match(run(bun, [compiler]), /Startup compilation skipped/);
   assert.equal(existsSync(marker), false, 'Failed compilation must invalidate the compiled marker');
-  assert.equal(run(bun, [join(dir, 'cli.cjs'), '--version']), source[0], 'Source startup must remain usable');
-  writeFileSync(join(dir, 'cli.original.cjs'), original);
-  const wrapper = readFileSync(join(dir, 'cli.cjs'), 'utf8');
-  writeFileSync(join(dir, 'cli.cjs'), wrapper.replace('for (const name of modules) require(join(__dirname, name));', 'for (const name of modules) { require(join(__dirname, name)); }'));
-  assert.match(run(bun, [compiler]), /Startup compilation skipped/);
-  assert.equal(existsSync(marker), false);
-  assert.equal(run(bun, [join(dir, 'cli.cjs'), '--probe-tools']), source[1]);
+  assert.equal(run(bun, [join(dir, 'cli.mjs'), '--version']), source[0], 'Source startup must remain usable');
   assert.deepEqual(readdirSync(dir).filter(name => name.startsWith('cli.compiled-')), [compiled.split(/[\\/]/).at(-1)], 'Failed builds must remove their partial output');
   assert.equal(readdirSync(dir).some(name => name.endsWith('.tmp')), false);
 } finally { rmSync(root, { recursive: true, force: true }); }
 console.log('[compile-runtime.test] compiled/source parity, local modules, external assets and failure fallback passed');
+
+});

@@ -471,11 +471,8 @@ if (!dryRun && !verify && applied > 0) {
   const probeModules = Object.entries(files)
     .filter(([, content]) => content.includes('/*clawgod:runtime-table-probe*/'))
     .map(([name]) => relative(__dirname, name).replaceAll('\\', '/')).sort();
-  const previousEntry = files[TARGET];
-  files[TARGET] = files[TARGET].replace(/^\/\/ clawgod:probe-modules .+\r?\n/gm, '');
-  if (probeModules.length) files[TARGET] = `// clawgod:probe-modules ${JSON.stringify(probeModules)}\n${files[TARGET]}`;
-  parsePatchSource(files[TARGET]);
-  if (previousEntry !== files[TARGET]) releasePatchSource(previousEntry);
+  const probeEntry = 'export async function loadProbes() {\n' + probeModules
+    .map(name => `  await import(${JSON.stringify('./' + name)});`).join('\n') + '\n}\n';
   if (!existsSync(BACKUP)) {
     copyFileSync(TARGET, BACKUP);
     console.log(`  📦 Backup: ${BACKUP}`);
@@ -483,6 +480,10 @@ if (!dryRun && !verify && applied > 0) {
   const staged = [];
   try {
     if (existsSync(join(__dirname, '.compiled-runtime'))) unlinkSync(join(__dirname, '.compiled-runtime'));
+    const probePath = join(__dirname, 'generated-probes.mjs');
+    const probeTmp = `${probePath}.clawgod-${process.pid}.tmp`;
+    writeFileSync(probeTmp, probeEntry, 'utf8');
+    staged.push([probeTmp, probePath]);
     for (const [fname, content] of Object.entries(files)) {
       if (content === installedFiles[fname]) continue;
       const tmp = `${fname}.clawgod-${process.pid}.tmp`;

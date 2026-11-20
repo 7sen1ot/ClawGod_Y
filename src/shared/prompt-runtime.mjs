@@ -1,4 +1,3 @@
-'use strict';
 
 const CUSTOM_PROMPT_MARK = 'clawgod:custom-prompt';
 const IDENTITY_POLICY_VERSION = 10;
@@ -419,8 +418,8 @@ function validateExtraBody(body) {
   return body;
 }
 
-module.exports = {
-  rewritePromptAssembly, selectApplicationPrompt: rewritePromptAssembly,
+export {
+  rewritePromptAssembly, rewritePromptAssembly as selectApplicationPrompt,
   cleanPromptIdentity, prepareIdentityTemplate, cleanSummaryContent, cleanSummaryMessages,
   brandApplicationText, brandApplicationPattern, matchesApplicationText,
   filterDefaultPromptSections, refreshPromptSnapshot, finalizeSystemRequest, validateExtraBody,

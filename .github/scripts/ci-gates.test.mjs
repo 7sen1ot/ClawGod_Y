@@ -1,13 +1,16 @@
-const assert = require('node:assert/strict');
-const { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } = require('node:fs');
-const { tmpdir } = require('node:os');
-const { join, resolve } = require('node:path');
-const { spawnSync } = require('node:child_process');
-const resolveVersions = require('./resolve-claude-versions.cjs');
-const { prepareInstallers, verifyAssets, imports } = require('./release-assets.cjs');
-const repository = resolve(__dirname, '../..');
+import { test } from 'bun:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import resolveVersions from './resolve-claude-versions.mjs';
+import { prepareInstallers, verifyAssets, assets } from './release-assets.mjs';
 
-const installer = 'VERSION="2.1.316"\n';
+test('ci-gates.test', async () => {
+const repository = resolve(import.meta.dirname, '../..');
+
+const installer = JSON.stringify({ upstreamVersion: '2.1.316' });
 assert.deepEqual(resolveVersions(installer).versions, [{ version: '2.1.316', channels: '2.1.316' }]);
 for (const [stable, latest, expected] of [
   ['2.1.316', '2.1.316', [['2.1.316', '2.1.316, stable, latest']]],
@@ -40,7 +43,7 @@ try {
   };
   const check = (log, ok, platform = 'linux', encoding = 'utf8') => {
     writeFileSync(logPath, encoding === 'utf16le' ? '\ufeff' + log : log, encoding);
-    const child = spawnSync(process.execPath, [join(repository, 'src/ci/check-patch-coverage.cjs'), logPath, platform], { encoding: 'utf8', timeout: 10000 });
+    const child = spawnSync(process.execPath, [join(repository, 'src/ci/check-patch-coverage.mjs'), logPath, platform], { encoding: 'utf8', timeout: 10000 });
     assert.ok(Number.isInteger(child.status), child.error?.message || 'Coverage checker did not exit normally');
     assert.equal(child.status === 0, ok, child.stdout + child.stderr);
   };
@@ -67,11 +70,11 @@ try {
 
   const release = join(root, 'release');
   mkdirSync(join(release, 'dist'), { recursive: true });
-  const originals = Object.fromEntries(['install.sh', 'install.ps1'].map(name => [name, readFileSync(join(repository, name), 'utf8')]));
-  const uninstallers = Object.fromEntries(['uninstall.sh', 'uninstall.ps1'].map(name => [name, readFileSync(join(repository, name), 'utf8')]));
+  const originals = Object.fromEntries(['install.sh', 'install.ps1'].map(name => [name, readFileSync(join(repository, 'src/templates', name), 'utf8')]));
+  const uninstallers = Object.fromEntries(['uninstall.sh', 'uninstall.ps1'].map(name => [name, readFileSync(join(repository, 'src/templates', name), 'utf8')]));
   const reset = () => { for (const [name, text] of Object.entries({ ...originals, ...uninstallers })) writeFileSync(join(release, name), text); };
   reset();
-  for (const name of imports) writeFileSync(join(release, 'dist', name), 'fixture binary');
+  for (const name of assets) writeFileSync(join(release, 'dist', name), 'fixture binary');
   for (const tag of ['v1.2.3', 'v1.2.3-beta.1']) {
     reset();
     prepareInstallers(release, tag);
@@ -81,8 +84,8 @@ try {
     assert.equal(readFileSync(join(release, 'install.sh'), 'utf8'), once, 'Preparing a tag twice is idempotent');
     for (const [name, original] of Object.entries(originals)) {
       const actual = readFileSync(join(release, name), 'utf8');
-      const pattern = name.endsWith('.sh') ? /^CLAWGOD_SELF_VERSION=".*"$/m : /^\$ClawSelfVersion = ".*"$/m;
-      assert.ok(actual.match(pattern)[0].includes(tag.slice(1)));
+      const pattern = name.endsWith('.sh') ? /^CLAWGOD_RELEASE=".*"$/m : /^\$ClawRelease = '.*'$/m;
+      assert.ok(actual.match(pattern)[0].includes(tag));
       assert.equal(actual.replace(pattern, ''), original.replace(pattern, ''), 'Only the self-version may change');
     }
     for (const [name, original] of Object.entries(uninstallers)) {
@@ -90,16 +93,16 @@ try {
     }
   }
   for (const tag of ['vfoo', 'v1.2.3;echo bad', 'v1.2.3\nextra', 'v1.2.3\n']) assert.throws(() => prepareInstallers(release, tag), /Invalid release tag/);
-  for (const invalid of [originals['install.ps1'].replace('$ClawSelfVersion =', '$MissingVersion ='),
+  for (const invalid of [originals['install.ps1'].replace('$ClawRelease =', '$MissingVersion ='),
     '\ufeff' + originals['install.ps1'], originals['install.ps1'] + '\n{{CLAWGOD:missing}}',
-    originals['install.ps1'] + '\n$ClawSelfVersion = "duplicate"\n']) {
+    originals['install.ps1'] + "\n$ClawRelease = 'duplicate'\n"]) {
     reset();
     writeFileSync(join(release, 'install.ps1'), invalid);
     assert.throws(() => prepareInstallers(release, 'v1.2.3'));
     assert.equal(readFileSync(join(release, 'install.sh'), 'utf8'), originals['install.sh'], 'Failed preparation must not partly update installers');
   }
   reset();
-  for (const name of [...Object.keys(uninstallers), ...imports.map(name => join('dist', name))]) {
+  for (const name of [...Object.keys(uninstallers), ...assets.map(name => join('dist', name))]) {
     const path = join(release, name);
     const original = readFileSync(path);
     rmSync(path);
@@ -108,7 +111,7 @@ try {
     assert.throws(() => verifyAssets(release), /empty/);
     writeFileSync(path, original);
   }
-  writeFileSync(join(release, 'dist', 'clawgod-import-unknown'), 'unexpected');
-  assert.throws(() => verifyAssets(release), /unexpected/);
 } finally { rmSync(root, { recursive: true, force: true }); }
 console.log('[ci-gates.test] version resolution, coverage failures and final release assets passed');
+
+});

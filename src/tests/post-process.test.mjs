@@ -1,9 +1,11 @@
+import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
+test('post-process.test', async () => {
 const root = mkdtempSync(join(tmpdir(), 'clawgod text assets-'));
 const bun = process.env.CLAWGOD_TEST_BUN || (process.versions.bun ? process.execPath : 'bun');
 const run = (command, args) => {
@@ -83,3 +85,5 @@ for (const requireAsset of [load, entryLoad]) {
 } finally {
   rmSync(root, { recursive: true, force: true });
 }
+
+});

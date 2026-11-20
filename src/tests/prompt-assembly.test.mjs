@@ -1,7 +1,10 @@
-
+import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { rewritePromptAssembly, selectApplicationPrompt, filterDefaultPromptSections, refreshPromptSnapshot, finalizeSystemRequest,
-  cleanPromptIdentity, cleanSummaryContent, cleanSummaryMessages, prepareIdentityTemplate, validateExtraBody, brandApplicationText } from '../shared/runtime-helpers.cjs';
+  cleanPromptIdentity, cleanSummaryContent, cleanSummaryMessages, prepareIdentityTemplate, validateExtraBody, brandApplicationText } from '../shared/runtime-helpers.mjs';
+
+test('prompt-assembly.test', async () => {
+
 
 const MARK = '<!-- clawgod:custom-prompt -->';
 const END = '\n<!-- /clawgod:custom-prompt -->';
@@ -374,3 +377,5 @@ const legacyFrame = prompt => MARK + '\n# Application identity\nThe application 
 }
 
 console.log('[prompt-assembly.test] source sections, application identity, context preservation, required rules and idempotence ok');
+
+});

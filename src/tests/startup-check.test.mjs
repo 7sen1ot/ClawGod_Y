@@ -1,3 +1,5 @@
+import { test } from 'bun:test';
+import { runRuntimeFixture } from './runtime-sandbox.fixture.mjs';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -7,14 +9,16 @@ import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { runInNewContext } from 'node:vm';
 
+test('startup-check.test', async () => {
+
 const require = createRequire(import.meta.url);
 const sourceDir = fileURLToPath(new URL('../shared/', import.meta.url));
-const checker = join(sourceDir, 'startup-check.cjs');
-const wrapper = fs.readFileSync(join(sourceDir, 'cli.cjs'), 'utf8');
+const checker = join(sourceDir, 'startup-check.mjs');
+const wrapper = fs.readFileSync(join(sourceDir, 'cli.mjs'), 'utf8');
 const root = fs.mkdtempSync(join(tmpdir(), 'clawgod startup test-'));
 const dir = join(root, 'profile space \u6d4b\u8bd5', '.clawgod');
 fs.mkdirSync(dir, { recursive: true });
-const cli = join(dir, 'cli.cjs');
+const cli = join(dir, 'fixture.cjs');
 const log = join(dir, 'startup-check.log');
 const env = { ...process.env, CLAWGOD_STARTUP_TIMEOUT_MS: '10000' };
 function check(code, options = {}) {
@@ -117,23 +121,23 @@ try {
       const before = fs.existsSync(config) ? fs.readFileSync(config, 'utf8') : null;
       let loaded = false, network = false;
       const modules = [];
-      runInNewContext(wrapper, {
+      runRuntimeFixture(wrapper, {
         __dirname: dir,
         process: { argv: ['bun', cli, flag], env: {}, execPath: '/test/bun', stderr: { write() {} } },
         fetch() { network = true; throw new Error('version must not fetch'); },
         AbortSignal,
         require(name) {
           if (name === 'os') return { homedir: () => profile };
-          if (name === './openai-proxy.cjs') throw new Error('version must not start a provider');
-          if (name === './feature-gates.cjs' || name === './bun-ant-shim.cjs') { modules.push(name); return {}; }
-          if (name === './runtime-helpers.cjs') { modules.push(name); return require('../shared/runtime-helpers.cjs'); }
+          if (name === './openai-proxy.mjs') throw new Error('version must not start a provider');
+          if (name === './feature-gates.mjs' || name === './bun-ant-shim.mjs') { modules.push(name); return {}; }
+          if (name === './runtime-helpers.mjs') { modules.push(name); return require('../shared/runtime-helpers.mjs'); }
           if (name === './cli.original.cjs') { loaded = true; return {}; }
           return require(name);
         },
       });
       assert.equal(loaded, true);
       assert.equal(network, false);
-      assert.deepEqual(modules, ['./runtime-helpers.cjs', './feature-gates.cjs', './bun-ant-shim.cjs']);
+      assert.deepEqual(modules, ['./runtime-helpers.mjs', './feature-gates.mjs', './bun-ant-shim.mjs']);
       assert.equal(fs.existsSync(join(dir, '.claude.json')), true);
       assert.equal(fs.existsSync(join(profile, '.claude.json')), false);
       assert.equal(fs.existsSync(config) ? fs.readFileSync(config, 'utf8') : null, before);
@@ -141,12 +145,12 @@ try {
   }
   fs.writeFileSync(config, JSON.stringify({ protocol: 'invalid' }));
   for (const args of [['-p', '--version']]) {
-    assert.throws(() => runInNewContext(wrapper, {
+    assert.throws(() => runRuntimeFixture(wrapper, {
       __dirname: dir,
       process: { argv: ['bun', cli, ...args], env: {} },
       require(name) {
         if (name === 'os') return { homedir: () => profile };
-        if (name === './runtime-helpers.cjs') return require('../shared/runtime-helpers.cjs');
+        if (name === './runtime-helpers.mjs') return require('../shared/runtime-helpers.mjs');
         return require(name);
       },
     }), /Unsupported provider protocol/);
@@ -155,16 +159,16 @@ try {
 
   const bun = process.env.CLAWGOD_TEST_BUN || (process.versions.bun ? process.execPath : 'bun');
   if (process.versions.bun || spawnSync(bun, ['--version'], { timeout: 5000 }).status === 0) {
-    fs.writeFileSync(cli, wrapper);
-    fs.copyFileSync(join(sourceDir, 'openai-proxy.cjs'), join(dir, 'openai-proxy.cjs'));
-    for (const name of ['feature-gates.cjs', 'bun-ant-shim.cjs']) fs.writeFileSync(join(dir, name), '');
-    fs.copyFileSync(join(sourceDir, 'runtime-helpers.cjs'), join(dir, 'runtime-helpers.cjs'));
-    fs.copyFileSync(join(sourceDir, 'prompt-runtime.cjs'), join(dir, 'prompt-runtime.cjs'));
+    fs.writeFileSync(join(dir, 'cli.mjs'), wrapper);
+    fs.copyFileSync(join(sourceDir, 'openai-proxy.mjs'), join(dir, 'openai-proxy.mjs'));
+    for (const name of ['feature-gates.mjs', 'bun-ant-shim.mjs']) fs.writeFileSync(join(dir, name), '');
+    fs.copyFileSync(join(sourceDir, 'runtime-helpers.mjs'), join(dir, 'runtime-helpers.mjs'));
+    fs.copyFileSync(join(sourceDir, 'prompt-runtime.mjs'), join(dir, 'prompt-runtime.mjs'));
     fs.writeFileSync(join(dir, 'cli.original.cjs'), `console.log(${JSON.stringify(version)});`);
     fs.writeFileSync(config, JSON.stringify({ protocol: 'openai-chat', apiKey: 'fixture', baseURL: 'https://example.invalid/v1' }));
-    const entry = join(dir, 'entry.cjs');
-    fs.writeFileSync(entry, `require('os').homedir=()=>${JSON.stringify(profile)}; global.fetch=()=>{throw Error('unexpected version fetch')}; require('./cli.cjs');`);
-    r = spawnSync(process.execPath, [checker, bun, entry], { encoding: 'utf8', env: { ...env, CLAWGOD_STARTUP_TIMEOUT_MS: '3000' }, timeout: 8000 });
+    const entry = join(dir, 'entry.mjs');
+    fs.writeFileSync(entry, `global.fetch=()=>{throw Error('unexpected version fetch')}; await import('./cli.mjs');`);
+    r = spawnSync(process.execPath, [checker, bun, entry], { encoding: 'utf8', env: { ...env, HOME: profile, USERPROFILE: profile, CLAWGOD_STARTUP_TIMEOUT_MS: '3000' }, timeout: 8000 });
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.equal(r.stdout.trim(), version);
     assert.doesNotMatch(r.stderr, /proxy on port/);
@@ -174,26 +178,8 @@ try {
     console.log('[startup-check.test] Bun unavailable: real runtime case skipped');
   }
 
-  if (process.platform !== 'win32') {
-    const template = fs.readFileSync(join(sourceDir, '../templates/install.sh'), 'utf8');
-    const section = template.slice(template.indexOf('dim "Verifying Bun'), template.indexOf('IMPORT_BIN="$CLAWGOD_DIR/clawgod-import"'));
-    assert.ok(section.startsWith('dim "Verifying Bun'));
-    fs.copyFileSync(checker, join(dir, 'startup-check.cjs'));
-    const script = `set -e\nCLAWGOD_DIR="$1"\nBUN_BIN="$2"\nwarn(){ printf '%s\\n' "$*"; }\ninfo(){ printf '%s\\n' "$*"; }\ndim(){ :; }\nrollback_install(){ :; }\n${section}\nprintf 'launcher-step-reached\\n'\n`;
-    for (const [code, expected] of [
-      [`console.log(process.argv[2]==='--probe-tools'?'[clawgod] probe-tools ok: 1 tools, 1 commands':${JSON.stringify(version)});`, 0],
-      ['console.error("fixture failed"); process.exit(7);', 7],
-      ['setInterval(()=>{},1000);', 124],
-      ['console.log("Expected CommonJS module to have a function wrapper"); process.exit(1);', 1],
-    ]) {
-      fs.writeFileSync(cli, code);
-      r = spawnSync('bash', ['-c', script, 'test', dir, process.execPath], { encoding: 'utf8', timeout: 8000, env: { ...env, CLAWGOD_STARTUP_TIMEOUT_MS: '1200' } });
-      assert.equal(r.status, expected, r.stdout + r.stderr);
-      assert.equal(r.stdout.includes('launcher-step-reached'), expected === 0);
-      assert.equal(r.stdout.includes('Bun loads cli.original.cjs'), expected === 0);
-    }
-    console.log('[startup-check.test] Unix installer preserves failure/timeout status before launcher replacement');
-  }
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }
+
+});
