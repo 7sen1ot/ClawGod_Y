@@ -34,7 +34,6 @@ export function runRuntimeFixture(source, sandbox) {
     }
     if (node.type === 'MetaProperty') edits.push({ start: node.start, end: node.end, replacement: '__moduleMeta' });
   });
-  return runInNewContext(applyAstEdits(source, edits), {
-    __moduleMeta: { url: pathToFileURL(join(sandbox.__dirname || '.', 'cli.mjs')).href, main: false }, ...sandbox,
-  });
+  sandbox.__moduleMeta ??= { url: pathToFileURL(join(sandbox.__dirname || '.', 'cli.mjs')).href, main: false };
+  return runInNewContext(applyAstEdits(source, edits), sandbox);
 }

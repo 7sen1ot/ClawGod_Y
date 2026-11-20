@@ -14,7 +14,6 @@ on:
       - package.json
       - tsconfig.json
       - biome.json
-      - bunfig.toml
       - src/**
       - '!src/README.md'
       - .github/workflows/compat-daily.yml
@@ -30,7 +29,6 @@ on:
       - package.json
       - tsconfig.json
       - biome.json
-      - bunfig.toml
       - src/**
       - '!src/README.md'
       - .github/workflows/compat-daily.yml
@@ -78,7 +76,7 @@ jobs:
                   source=true ;;
                 src/README.md|.github/scripts/close-inactive-issues*.mjs)
                   ;;
-                .bun-version|build.js|package.json|tsconfig.json|biome.json|bunfig.toml|src/*|.github/workflows/compat-daily.yml|.github/workflows/installer-checks.yml|.github/workflows/platform-compat.yml|.github/workflows/release.yml|.github/scripts/*)
+                .bun-version|build.js|package.json|tsconfig.json|biome.json|src/*|.github/workflows/compat-daily.yml|.github/workflows/installer-checks.yml|.github/workflows/platform-compat.yml|.github/workflows/release.yml|.github/scripts/*)
                   source=true installer=true proxy=true smoke=true ;;
               esac
             done <<< "$changed"

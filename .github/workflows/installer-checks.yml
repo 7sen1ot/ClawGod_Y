@@ -28,7 +28,7 @@ jobs:
           bun-version-file: .bun-version
       - run: bun run test:proxy
       - name: Check prompt transport through the proxy
-        run: bun test ./src/tests/prompt-request.integration.test.mjs
+        run: bun test --timeout 120000 ./src/tests/prompt-request.integration.test.mjs
 
   lifecycle:
     if: inputs.installer_checks
@@ -65,16 +65,16 @@ jobs:
         if: '!matrix.minimum'
         shell: bash
         run: |
-          bun test ./src/tests/startup-check.test.mjs
-          bun test ./src/tests/post-process.test.mjs
+          bun test --timeout 120000 ./src/tests/startup-check.test.mjs
+          bun test --timeout 120000 ./src/tests/post-process.test.mjs
       - name: Check proxy and prompt transport
         if: '!matrix.minimum && inputs.proxy_checks'
         run: |
           bun run test:proxy
-          bun test ./src/tests/prompt-request.integration.test.mjs
+          bun test --timeout 120000 ./src/tests/prompt-request.integration.test.mjs
       - name: Check the renderer shim under Bun on Unix
         if: runner.os != 'Windows' && !matrix.minimum
-        run: bun test ./src/tests/bun-ant-shim.test.mjs
+        run: bun test --timeout 120000 ./src/tests/bun-ant-shim.test.mjs
       - run: bun run test:installer
       - name: Check release archive packaging
         run: |

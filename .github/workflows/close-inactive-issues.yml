@@ -7,7 +7,6 @@ on:
       - package.json
       - tsconfig.json
       - biome.json
-      - bunfig.toml
       - .github/scripts/close-inactive-issues*.mjs
       - .github/workflows/close-inactive-issues.yml
   push:
@@ -17,7 +16,6 @@ on:
       - package.json
       - tsconfig.json
       - biome.json
-      - bunfig.toml
       - .github/scripts/close-inactive-issues*.mjs
       - .github/workflows/close-inactive-issues.yml
   schedule:
