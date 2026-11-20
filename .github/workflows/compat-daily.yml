@@ -21,7 +21,6 @@ on:
       - .github/workflows/platform-compat.yml
       - .github/workflows/release.yml
       - .github/scripts/**
-      - '!.github/scripts/close-inactive-issues*.mjs'
   pull_request:
     paths:
       - .bun-version
@@ -36,7 +35,6 @@ on:
       - .github/workflows/platform-compat.yml
       - .github/workflows/release.yml
       - .github/scripts/**
-      - '!.github/scripts/close-inactive-issues*.mjs'
 
 permissions:
   contents: read
@@ -74,7 +72,7 @@ jobs:
                   installer=true ;;
                 src/tests/*)
                   source=true ;;
-                src/README.md|.github/scripts/close-inactive-issues*.mjs)
+                src/README.md)
                   ;;
                 .bun-version|build.js|package.json|tsconfig.json|biome.json|src/*|.github/workflows/compat-daily.yml|.github/workflows/installer-checks.yml|.github/workflows/platform-compat.yml|.github/workflows/release.yml|.github/scripts/*)
                   source=true installer=true proxy=true smoke=true ;;
