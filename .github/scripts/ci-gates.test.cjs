@@ -7,17 +7,27 @@ const resolveVersions = require('./resolve-claude-versions.cjs');
 const { prepareInstallers, verifyAssets, imports } = require('./release-assets.cjs');
 const repository = resolve(__dirname, '../..');
 
-for (const latest of ['2.1.316', '2.1.317']) {
+const installer = 'VERSION="2.1.316"\n';
+assert.deepEqual(resolveVersions(installer).versions, [{ version: '2.1.316', channels: '2.1.316' }]);
+for (const [stable, latest, expected] of [
+  ['2.1.316', '2.1.316', [['2.1.316', '2.1.316, stable, latest']]],
+  ['2.1.309', '2.1.316', [['2.1.316', '2.1.316, latest'], ['2.1.309', 'stable']]],
+  ['2.1.317', '2.1.317', [['2.1.316', '2.1.316'], ['2.1.317', 'stable, latest']]],
+  ['2.1.309', '2.1.317', [['2.1.316', '2.1.316'], ['2.1.309', 'stable'], ['2.1.317', 'latest']]],
+]) {
   const calls = [];
-  const result = resolveVersions(channel => { calls.push(channel); return latest + '\n'; });
-  assert.equal(result.latestVersion, latest);
-  assert.deepEqual(result.versions, [{ version: latest, channels: 'latest' }]);
-  assert.deepEqual(calls, ['latest']);
+  const result = resolveVersions(installer, channel => { calls.push(channel); return (channel === 'stable' ? stable : latest) + '\n'; });
+  assert.equal(result.defaultVersion, '2.1.316');
+  assert.deepEqual(result.versions.map(row => [row.version, row.channels]), expected);
+  assert.deepEqual(calls, ['stable', 'latest']);
 }
+assert.equal(resolveVersions(installer.replace('\n', '\r\n'), () => '2.1.316').versions.length, 1);
+assert.throws(() => resolveVersions('', () => '2.1.316'), /Default Claude version/);
 for (const bad of ['', 'latest', '2.1.316\n2.1.317', '2.1.316; exit 0']) {
-  assert.throws(() => resolveVersions(() => bad), /Invalid latest version/);
+  assert.throws(() => resolveVersions(installer, () => bad), /Invalid stable version/);
+  assert.throws(() => resolveVersions(installer, channel => channel === 'stable' ? '2.1.309' : bad), /Invalid latest version/);
 }
-assert.throws(() => resolveVersions(() => { throw new Error('registry offline'); }), /registry offline/);
+assert.throws(() => resolveVersions(installer, () => { throw new Error('registry offline'); }), /registry offline/);
 
 const root = mkdtempSync(join(tmpdir(), 'clawgod-ci-gates-'));
 try {

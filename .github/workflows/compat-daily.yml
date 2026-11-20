@@ -72,7 +72,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       versions: ${{ steps.resolve.outputs.versions }}
-      latest: ${{ steps.resolve.outputs.latest }}
+      tested: ${{ steps.resolve.outputs.tested }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Set up Bun
@@ -336,7 +336,7 @@ jobs:
       - name: Publish supported-Claude-version badge after all checks pass
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CLAUDE_VERSION: ${{ needs.build-sources.outputs.latest }}
+          CLAUDE_VERSION: ${{ needs.build-sources.outputs.tested }}
         run: |
           version="$CLAUDE_VERSION"
           tmp=$(mktemp -d)

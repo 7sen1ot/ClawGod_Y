@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   native:
-    name: Latest Claude on ${{ matrix.os }}
+    name: Default Claude on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -33,12 +33,13 @@ jobs:
               brew install ripgrep
             fi
           fi
-      - name: Install and probe latest on the native architecture
+      - name: Install and probe the default version on the native architecture
         shell: bash
         run: |
           set -euo pipefail
-          bash install.sh latest
-          version=$(cat "$HOME/.clawgod/.source-version")
+          version=$(bun -e 'console.log(require("fs").readFileSync("src/templates/install.sh","utf8").match(/^VERSION="([\d.]+)"$/m)[1])')
+          bash install.sh "$version"
+          [[ "$(cat "$HOME/.clawgod/.source-version")" == "$version" ]]
           [[ "$("$HOME/.clawgod/claude.fallback" --version)" == "$version (Claude Code)" ]]
           "$HOME/.local/bin/clawgod" --version
           bun "$HOME/.clawgod/startup-check.cjs" "$(command -v bun)" "$HOME/.clawgod/cli.cjs" --probe-tools
@@ -56,8 +57,9 @@ jobs:
           apk add --no-cache bash ripgrep coreutils
           bash -eu <<'BASH'
           bun run build
-          bash install.sh latest
-          version=$(cat "$HOME/.clawgod/.source-version")
+          version=$(bun -e 'console.log(require("fs").readFileSync("src/templates/install.sh","utf8").match(/^VERSION="([\d.]+)"$/m)[1])')
+          bash install.sh "$version"
+          [[ "$(cat "$HOME/.clawgod/.source-version")" == "$version" ]]
           [[ "$("$HOME/.clawgod/claude.fallback" --version)" == "$version (Claude Code)" ]]
           "$HOME/.local/bin/clawgod" --version
           bun "$HOME/.clawgod/startup-check.cjs" "$(command -v bun)" "$HOME/.clawgod/cli.cjs" --probe-tools
