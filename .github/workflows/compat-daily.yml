@@ -475,8 +475,16 @@ jobs:
           New-Item -ItemType Directory -Force -Path $runtime | Out-Null
           tar -xzf dist/clawgod-runtime.tar.gz -C $runtime
           if ($LASTEXITCODE -ne 0) { throw 'Runtime extraction failed' }
-          bun (Join-Path $runtime 'install-runtime.mjs') $env:CLAUDE_VERSION *>&1 | Tee-Object -FilePath $log
-          if ($LASTEXITCODE -ne 0) { throw 'Runtime installation failed' }
+          $previousErrorAction = $ErrorActionPreference
+          try {
+            $ErrorActionPreference = 'Continue'
+            bun (Join-Path $runtime 'install-runtime.mjs') $env:CLAUDE_VERSION *>&1 |
+              ForEach-Object { "$_" } | Tee-Object -FilePath $log
+            $installExit = $LASTEXITCODE
+          } finally {
+            $ErrorActionPreference = $previousErrorAction
+          }
+          if ($installExit -ne 0) { throw "Runtime installation failed (exit $installExit)" }
 
       - name: Verify install artifacts
         shell: powershell

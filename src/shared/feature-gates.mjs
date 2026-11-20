@@ -3,8 +3,9 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readJsonConfig } from './runtime-helpers.mjs';
-const runtimeDir = process.env.CLAWGOD_RUNTIME_DIR || (typeof Bun !== 'undefined' && Bun.isStandaloneExecutable
-  ? dirname(process.execPath) : dirname(fileURLToPath(import.meta.url)));
+const modulePath = fileURLToPath(import.meta.url);
+const runtimeDir = process.env.CLAWGOD_RUNTIME_DIR || (/(?:^|[\\/])(?:\$bunfs|~BUN)[\\/]/.test(modulePath)
+  ? dirname(process.execPath) : dirname(modulePath));
 const CLAWGOD_FEATURES_META = JSON.parse(readFileSync(join(runtimeDir, 'features-meta.json'), 'utf8'));
 
 var CLAWGOD_RUNTIME_FEATURES = ['bun-ant-shim'];
