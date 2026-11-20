@@ -3,7 +3,7 @@ import { readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from '
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-const runtimeDir = process.env.CLAWGOD_RUNTIME_DIR || (/\$bunfs|~BUN/.test(import.meta.url)
+const runtimeDir = process.env.CLAWGOD_RUNTIME_DIR || (typeof Bun !== 'undefined' && Bun.isStandaloneExecutable
   ? dirname(process.execPath) : dirname(fileURLToPath(import.meta.url)));
 process.env.CLAWGOD_RUNTIME_DIR ??= runtimeDir;
 

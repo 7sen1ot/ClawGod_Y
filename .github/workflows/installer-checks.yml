@@ -69,6 +69,7 @@ jobs:
           bun test --timeout 120000 ./src/tests/post-process.test.mjs
       - name: Check proxy and prompt transport
         if: '!matrix.minimum && inputs.proxy_checks'
+        shell: bash
         run: |
           bun run test:proxy
           bun test --timeout 120000 ./src/tests/prompt-request.integration.test.mjs

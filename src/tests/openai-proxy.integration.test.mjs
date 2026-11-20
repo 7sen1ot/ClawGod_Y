@@ -91,8 +91,11 @@ test('Bun HTTP integration: tool round trip, streaming usage, errors, count and 
       assert.deepEqual(calls.at(-1).messages.at(-1), { role: 'tool', tool_call_id: 'call-1', content: 'README contents' });
       const beforeCount = calls.length;
       const count = await send(first, '/v1/messages/count_tokens');
-      assert.equal(count.headers.get('x-clawgod-token-count'), 'estimate');
-      assert.ok((await count.json()).input_tokens > 0);
+      assert.equal(count.headers.get('x-clawgod-token-count'), 'upstream');
+      assert.equal((await count.json()).input_tokens, 42);
+      const uncached = await send({ ...first, model: 'uncached-model' }, '/v1/messages/count_tokens');
+      assert.equal(uncached.headers.get('x-clawgod-token-count'), 'estimate');
+      assert.ok((await uncached.json()).input_tokens > 0);
       assert.equal(calls.length, beforeCount);
       mode = 'error';
       const error = await send(first);
