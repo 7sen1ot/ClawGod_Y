@@ -11,9 +11,7 @@ permissions:
 jobs:
   compat:
     permissions:
-      actions: read
       contents: write
-      issues: write
     uses: ./.github/workflows/compat-daily.yml
 
   extended-platforms:

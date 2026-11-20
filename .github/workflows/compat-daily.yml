@@ -373,41 +373,6 @@ jobs:
           git push -fq "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:badges
           echo "Published badge: claude $version"
 
-  report-failures:
-    needs: [build-sources, smoke, windows-smoke]
-    if: ${{ !cancelled() && github.event_name == 'schedule' && (needs.smoke.result == 'failure' || needs.windows-smoke.result == 'failure') }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      actions: read
-      issues: write
-    steps:
-      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
-        env:
-          VERSIONS: ${{ needs.build-sources.outputs.versions }}
-        with:
-          script: |
-            const repo = context.repo;
-            const versions = new Map(JSON.parse(process.env.VERSIONS).map(row => [row.channels, row.version]));
-            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRunAttempt, {
-              ...repo, run_id: context.runId, attempt_number: Number(process.env.GITHUB_RUN_ATTEMPT),
-            });
-            const open = await github.paginate(github.rest.issues.listForRepo, {
-              ...repo, labels: 'compat-broken', state: 'open', per_page: 100,
-            });
-            for (const job of jobs) {
-              if (!['failure', 'timed_out'].includes(job.conclusion)) continue;
-              const match = /^(Linux|macOS|Windows) smoke .*?\bClaude ([^)]+)\)$/.exec(job.name);
-              if (!match || !versions.has(match[2])) continue;
-              const [, platform, channels] = match;
-              const prefix = platform === 'Linux' ? 'compat-daily' : 'compat-daily/' + platform.toLowerCase();
-              const title = `${prefix}/${channels}: broke (claude ${versions.get(channels)})`;
-              const body = `${job.name} failed. [View job log](${job.html_url})`;
-              const issue = open.find(item => !item.pull_request && item.title === title);
-              if (issue) await github.rest.issues.createComment({ ...repo, issue_number: issue.number, body });
-              else await github.rest.issues.create({ ...repo, title, body, labels: ['compat-broken', 'bug'] });
-            }
-
   windows-smoke:
     name: Windows smoke (PowerShell 5.1, Claude ${{ matrix.claude.channels }})
     needs: build-sources
