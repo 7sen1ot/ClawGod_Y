@@ -3,7 +3,7 @@ name: Compatibility CI
 on:
   workflow_call:
   schedule:
-    - cron: '0 23 * * *'
+    - cron: '0 23 * * 0'
       timezone: America/Los_Angeles
   workflow_dispatch:
   push:
@@ -13,9 +13,10 @@ on:
       - build.js
       - package.json
       - src/**
-      - '!src/shared/openai-proxy.cjs'
-      - '!src/tests/openai-proxy*.test.mjs'
       - '!src/README.md'
+      - tools/provider-import/**
+      - '!tools/provider-import/**/*.md'
+      - .github/workflows/build-import.yml
       - .github/workflows/compat-daily.yml
       - .github/workflows/installer-checks.yml
       - .github/workflows/platform-compat.yml
@@ -28,8 +29,6 @@ on:
       - build.js
       - package.json
       - src/**
-      - '!src/shared/openai-proxy.cjs'
-      - '!src/tests/openai-proxy*.test.mjs'
       - '!src/README.md'
       - .github/workflows/compat-daily.yml
       - .github/workflows/installer-checks.yml
@@ -42,47 +41,61 @@ permissions:
   contents: read
 
 jobs:
-  schedule-gate:
-    runs-on: ubuntu-latest
-    timeout-minutes: 1
-    outputs:
-      due: ${{ steps.cadence.outputs.due }}
-    steps:
-      - id: cadence
-        env:
-          TZ: America/Los_Angeles
-        run: |
-          if [[ "$GITHUB_EVENT_NAME" != schedule ]]; then
-            echo 'due=true' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # Count calendar days from 2026-11-20; do not reset the cycle at month boundaries.
-          today=$(date +%F)
-          days=$(( ($(date -u -d "$today" +%s) - $(date -u -d '2026-11-20' +%s)) / 86400 ))
-          if (( days % 3 == 0 )); then
-            echo 'due=true' >> "$GITHUB_OUTPUT"
-          else
-            echo 'due=false' >> "$GITHUB_OUTPUT"
-          fi
-
   build-sources:
-    needs: schedule-gate
-    if: needs.schedule-gate.outputs.due == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       versions: ${{ steps.resolve.outputs.versions }}
       tested: ${{ steps.resolve.outputs.tested }}
+      smoke: ${{ steps.scope.outputs.smoke }}
+      installer: ${{ steps.scope.outputs.installer }}
+      proxy: ${{ steps.scope.outputs.proxy }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
+      - name: Select checks for the changed modules
+        id: scope
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          source=true installer=true proxy=true smoke=true
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            source=false installer=false proxy=false smoke=false
+            changed=$(git diff --name-only --no-renames "$PR_BASE...$PR_HEAD")
+            while IFS= read -r file; do
+              case "$file" in
+                src/shared/openai-proxy.cjs|src/tests/openai-proxy*.test.mjs|src/tests/prompt-request.integration.test.mjs)
+                  proxy=true ;;
+                src/tests/startup-check.test.mjs|src/tests/post-process.test.mjs|src/tests/bun-ant-shim.test.mjs|src/tests/installer-lifecycle.test.mjs|src/tests/npm-fetch.test.mjs|src/tests/extract-natives.test.mjs|src/tests/compile-runtime.test.mjs|src/tests/native-refresh.test.mjs)
+                  installer=true ;;
+                src/tests/*)
+                  source=true ;;
+                src/README.md|.github/scripts/close-inactive-issues*.cjs)
+                  ;;
+                .bun-version|build.js|package.json|src/*|.github/workflows/compat-daily.yml|.github/workflows/installer-checks.yml|.github/workflows/platform-compat.yml|.github/workflows/release.yml|.github/scripts/*)
+                  source=true installer=true proxy=true smoke=true ;;
+              esac
+            done <<< "$changed"
+          fi
+          echo "source=$source" >> "$GITHUB_OUTPUT"
+          echo "installer=$installer" >> "$GITHUB_OUTPUT"
+          echo "proxy=$proxy" >> "$GITHUB_OUTPUT"
+          echo "smoke=$smoke" >> "$GITHUB_OUTPUT"
       - name: Set up Bun
+        if: steps.scope.outputs.source == 'true' || steps.scope.outputs.smoke == 'true'
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version-file: .bun-version
       - id: resolve
+        if: steps.scope.outputs.smoke == 'true'
         run: bun .github/scripts/resolve-claude-versions.cjs
       - run: bun run test:source
+        if: steps.scope.outputs.source == 'true'
       - name: Parse JavaScript without executing it
+        if: steps.scope.outputs.source == 'true'
         run: |
           bun -e '
             const parser = new Bun.Transpiler({loader: "js"});
@@ -92,13 +105,17 @@ jobs:
           '
 
   installer-checks:
-    needs: schedule-gate
-    if: needs.schedule-gate.outputs.due == 'true'
+    needs: build-sources
+    if: needs.build-sources.outputs.installer == 'true' || needs.build-sources.outputs.proxy == 'true'
     uses: ./.github/workflows/installer-checks.yml
+    with:
+      installer_checks: ${{ needs.build-sources.outputs.installer == 'true' }}
+      proxy_checks: ${{ needs.build-sources.outputs.proxy == 'true' }}
 
   smoke:
     name: ${{ matrix.name }} (Claude ${{ matrix.claude.channels }})
     needs: build-sources
+    if: needs.build-sources.outputs.smoke == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -395,6 +412,7 @@ jobs:
   windows-smoke:
     name: Windows smoke (PowerShell 5.1, Claude ${{ matrix.claude.channels }})
     needs: build-sources
+    if: needs.build-sources.outputs.smoke == 'true'
     runs-on: windows-latest
     timeout-minutes: 25
     strategy:
