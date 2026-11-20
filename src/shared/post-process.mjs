@@ -11,7 +11,7 @@ const pathMapFile = `${here}/pathmap.json`;
 
 let code = stripPragma(readFileSync(src, 'utf8'));
 
-const isChunked = existsSync(pathMapFile);
+let graphFileCount;
 
 function stripPragma(c) { return c.replace(/^(?:\/\/[^\n]*\n)+/, ''); }
 
@@ -74,7 +74,7 @@ function fixAssetRequires(c, assets) {
   return applyAstEdits(c, edits.map(({ start, end }) => ({ start, end, replacement: loader })));
 }
 
-if (isChunked) {
+if (existsSync(pathMapFile)) {
   const pathMap = JSON.parse(readFileSync(pathMapFile, 'utf8'));
   const replaceTable = new Map();
   const assets = new Map();
@@ -105,15 +105,13 @@ if (isChunked) {
   }
 
   code = rewriteGraph(code);
-  writeFileSync(dst, code);
-  unlinkSync(src);
 
   for (const fp of graphFiles) {
     const original = readFileSync(fp, 'utf8');
     const rewritten = rewriteGraph(stripPragma(original));
     if (rewritten !== original) writeFileSync(fp, rewritten);
   }
-  console.log(`cli.original.cjs: ${code.length} bytes (chunked, processed ${graphFiles.size} graph files)`);
+  graphFileCount = graphFiles.size;
 } else {
   code = code.replace(
     /require\(['"](\/\$bunfs\/root\/([\w-]+)\.node)['"]\)/g,
@@ -124,8 +122,9 @@ if (isChunked) {
   code = fixFileURLs(code);
 
   code = code.replace(/\}\)\s*$/, '})(exports, require, module, __filename, __dirname)');
-
-  writeFileSync(dst, code);
-  unlinkSync(src);
-  console.log(`cli.original.cjs: ${code.length} bytes`);
 }
+
+writeFileSync(dst, code);
+unlinkSync(src);
+console.log(`cli.original.cjs: ${code.length} bytes` +
+  (graphFileCount === undefined ? '' : ` (chunked, processed ${graphFileCount} graph files)`));

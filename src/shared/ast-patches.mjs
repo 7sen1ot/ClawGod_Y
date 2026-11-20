@@ -2,7 +2,6 @@ import {
   AST_HELPERS, contains, containsOwn, createPatchCandidateFilter, createPatchContext,
   hasPatchAnchors, ownReturns, parsePatchSource, walk, walkScope,
 } from './ast-helpers.mjs';
-export * from './ast-helpers.mjs';
 
 const { literal, propertyName, member, boolean, staticText, functionNode, declaredNames } = AST_HELPERS;
 const thisMember = (node, name) => member(node, name) && node.object.type === 'ThisExpression';
