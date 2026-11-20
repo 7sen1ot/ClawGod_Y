@@ -1,3 +1,5 @@
+import { test } from 'bun:test';
+import { runRuntimeFixture } from './runtime-sandbox.fixture.mjs';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -5,8 +7,10 @@ import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 
+test('updater.test', async () => {
+
 const require = createRequire(import.meta.url);
-const wrapper = fs.readFileSync(new URL('../shared/cli.cjs', import.meta.url), 'utf8');
+const wrapper = fs.readFileSync(new URL('../shared/cli.mjs', import.meta.url), 'utf8');
 const home = fs.mkdtempSync(join(tmpdir(), 'clawgod-updater-test-'));
 const bundleDir = join(home, 'installation');
 const dir = join(home, '.clawgod');
@@ -21,9 +25,9 @@ try {
     for (const inherited of [undefined, '', '0', 'false', '1']) {
       const env = inherited === undefined ? {} : { DISABLE_AUTOUPDATER: inherited };
       let loaded = false;
-      runInNewContext(wrapper, {
+      runRuntimeFixture(wrapper, {
         __dirname: bundleDir,
-        process: { argv: ['bun', 'cli.cjs'], env, execPath: '/test/bun', stderr: { write() {} } },
+        process: { argv: ['bun', 'cli.mjs'], env, execPath: '/test/bun', stderr: { write() {} } },
         require(name) {
           if (name === 'os') return { homedir: () => home };
           if (name === './cli.original.cjs') {
@@ -31,8 +35,8 @@ try {
             loaded = true;
             return {};
           }
-          if (name === './runtime-helpers.cjs') return require('../shared/runtime-helpers.cjs');
-          if (['./feature-gates.cjs', './bun-ant-shim.cjs'].includes(name)) return {};
+          if (name === './runtime-helpers.mjs') return require('../shared/runtime-helpers.mjs');
+          if (['./feature-gates.mjs', './bun-ant-shim.mjs'].includes(name)) return {};
           return require(name);
         },
       });
@@ -43,3 +47,5 @@ try {
 } finally {
   fs.rmSync(home, { recursive: true, force: true });
 }
+
+});

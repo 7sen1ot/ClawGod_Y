@@ -1,3 +1,5 @@
+import { test } from 'bun:test';
+import { runRuntimeFixture } from './runtime-sandbox.fixture.mjs';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -5,10 +7,12 @@ import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 
+test('provider.test', async () => {
+
 const require = createRequire(import.meta.url);
 const read = file => fs.readFileSync(new URL(file, import.meta.url), 'utf8');
-const launcher = read('../shared/cli.cjs');
-const proxy = read('../shared/openai-proxy.cjs');
+const launcher = read('../shared/cli.mjs');
+const proxy = read('../shared/openai-proxy.mjs');
 const home = fs.mkdtempSync(join(tmpdir(), 'clawgod-provider-test-'));
 const dir = join(home, '.clawgod');
 fs.mkdirSync(dir);
@@ -21,12 +25,12 @@ function launch(config = {}, env = {}) {
   let handler, loaded = false;
   const requests = [];
   const proc = {
-    argv: ['node', 'cli.cjs'], env: { ...env }, execPath: '/test/bun',
+    argv: ['node', 'cli.mjs'], env: { ...env }, execPath: '/test/bun',
     stderr: { write() {} }, on() {},
     exit(code) { throw new Error('launcher exited: ' + code); },
   };
   const proxyModule = { exports: {} };
-  runInNewContext(proxy, {
+  runRuntimeFixture(proxy, {
     module: proxyModule, URL, Response, ReadableStream, TextEncoder, TextDecoder,
     AbortController, setTimeout, clearTimeout,
     Bun: { hash: Bun.hash, serve(options) { handler = options.fetch; return { port: 12345, stop() {} }; } },
@@ -51,14 +55,14 @@ function launch(config = {}, env = {}) {
     process: proc,
     require(name) {
       if (name === 'os') return { homedir: () => home };
-      if (name === './openai-proxy.cjs') return proxyModule.exports;
+      if (name === './openai-proxy.mjs') return proxyModule.exports;
       if (name === './cli.original.cjs') { loaded = true; return {}; }
-      if (name === './runtime-helpers.cjs') return require('../shared/runtime-helpers.cjs');
-      if (['./feature-gates.cjs', './bun-ant-shim.cjs'].includes(name)) return {};
+      if (name === './runtime-helpers.mjs') return require('../shared/runtime-helpers.mjs');
+      if (['./feature-gates.mjs', './bun-ant-shim.mjs'].includes(name)) return {};
       return require(name);
     },
   };
-  runInNewContext(launcher, sandbox);
+  runRuntimeFixture(launcher, sandbox);
   assert.ok(loaded, 'launcher must reach the Claude bundle');
   return {
     env: proc.env,
@@ -166,13 +170,13 @@ try {
     'both files: prompt text + policy merge');
 
   fs.writeFileSync(assemblyFile, 'not-json{');
-  assert.deepEqual(
-    launch({ apiKey: 'official-key' }).assembly,
-    { customPrompt: 'Custom role prompt.', requireCustomPrompt: true, stripMemory: undefined, identityMarkers: undefined },
-    'broken assembly.json: prompt still loads, policy falls back to defaults');
+  assert.throws(() => launch({ apiKey: 'official-key' }), /Cannot load .*assembly\.json/,
+    'broken assembly.json stops startup with the config path');
 
   cleanAssemblyFiles();
-  console.log('[provider.test] assembly snapshot defaults, merge, and broken-JSON fallback ok');
+  console.log('[provider.test] assembly snapshot defaults, merge, and malformed-config errors ok');
 } finally {
   fs.rmSync(home, { recursive: true, force: true });
 }
+
+});

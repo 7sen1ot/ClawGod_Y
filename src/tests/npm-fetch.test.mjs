@@ -1,3 +1,4 @@
+import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
@@ -6,6 +7,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { gzipSync } from 'node:zlib';
+
+test('npm-fetch.test', async () => {
 
 const root = mkdtempSync(join(tmpdir(), 'clawgod npm fetch-'));
 const header = (name, size) => {
@@ -72,3 +75,5 @@ globalThis.fetch = (input, init = {}) => {
   rmSync(root, { recursive: true, force: true });
 }
 console.log('[npm-fetch.test] loopback download, redirects and corrupt/truncated archives passed');
+
+});

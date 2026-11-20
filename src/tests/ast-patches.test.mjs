@@ -1,3 +1,4 @@
+import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -7,7 +8,9 @@ import { runInNewContext } from 'node:vm';
 import { AST_PATCH_IDS, scanAstPatches } from '../shared/ast-patches.mjs';
 import { applyAstEdits, parsePatchSource } from '../shared/ast-helpers.mjs';
 import { requiredRuntime } from './required-runtime.fixture.mjs';
-import { instructionFileFilter } from '../shared/runtime-helpers.cjs';
+import { instructionFileFilter } from '../shared/runtime-helpers.mjs';
+
+test('ast-patches.test', async () => {
 
 const source = `
 function projects(){return paths.join(root,'projects')}
@@ -189,7 +192,7 @@ try {
   for (const graph of [false, true]) {
     const dir = join(root, graph ? 'graph' : 'legacy');
     mkdirSync(dir);
-    for (const name of ['patch.mjs', 'patch-rules.mjs', 'patch-registry.mjs', 'ast-patches.mjs', 'ast-helpers.mjs', 'acorn.mjs', 'pentest-patches.mjs', 'pentest-scanners.mjs', 'pentest-prompts.mjs', 'pentest-trimming.mjs', 'pentest-policy-text.mjs', 'pentest-pruner.mjs', 'runtime-helpers.cjs', 'prompt-runtime.cjs']) {
+    for (const name of ['patch.mjs', 'patch-rules.mjs', 'patch-registry.mjs', 'ast-patches.mjs', 'ast-helpers.mjs', 'acorn.mjs', 'pentest-patches.mjs', 'pentest-scanners.mjs', 'pentest-prompts.mjs', 'pentest-trimming.mjs', 'pentest-policy-text.mjs', 'pentest-pruner.mjs', 'runtime-helpers.mjs', 'prompt-runtime.mjs']) {
       copyFileSync(new URL(`../shared/${name}`, import.meta.url), join(dir, name));
     }
     const entry = join(dir, 'cli.original.cjs');
@@ -244,3 +247,5 @@ try {
   rmSync(root, { recursive: true, force: true });
 }
 console.log('[ast-patches.test] semantic ranges, gates, drift, backups and failure safety passed');
+
+});

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import assert from 'node:assert/strict';
-import shim from '../shared/bun-ant-shim.cjs';
+import * as shim from '../shared/bun-ant-shim.mjs';
 
 const { CellSegmenter, install, scanChunks } = shim;
 
@@ -28,8 +28,7 @@ const makeRuns = (n = 512) => new Int32Array(n);
 
 const cellRun = (packed) => packed >>> RUN_SHIFT;
 
-const tests = [];
-const test = (name, fn) => tests.push([name, fn]);
+import { test } from 'bun:test';
 
 
 test('scanChunks splits text, SGR and OSC-8 hyperlinks', () => {
@@ -418,18 +417,3 @@ test('install respects the bun-ant-shim feature toggle', () => {
     if (saved === undefined) delete bun.ant; else bun.ant = saved;
   }
 });
-
-
-let failed = 0;
-for (const [name, fn] of tests) {
-  try {
-    fn();
-    console.log(`  ok  ${name}`);
-  } catch (error) {
-    failed++;
-    console.error(`  FAIL ${name}`);
-    console.error(`       ${error.message.split('\n').join('\n       ')}`);
-  }
-}
-console.log(`\n${tests.length - failed}/${tests.length} passed`);
-if (failed > 0) process.exit(1);

@@ -38,12 +38,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version=$(bun -e 'console.log(require("fs").readFileSync("src/templates/install.sh","utf8").match(/^VERSION="([\d.]+)"$/m)[1])')
-          bash install.sh "$version"
+          version=$(bun -e 'console.log((await Bun.file("src/shared/runtime-version.json").json()).upstreamVersion)')
+          mkdir -p dist/runtime
+          tar -xzf dist/clawgod-runtime.tar.gz -C dist/runtime
+          bun dist/runtime/install-runtime.mjs "$version"
           [[ "$(cat "$HOME/.clawgod/.source-version")" == "$version" ]]
           [[ "$("$HOME/.clawgod/claude.fallback" --version)" == "$version (Claude Code)" ]]
           "$HOME/.local/bin/clawgod" --version
-          bun "$HOME/.clawgod/startup-check.cjs" "$(command -v bun)" "$HOME/.clawgod/cli.cjs" --probe-tools
+          bun "$HOME/.clawgod/startup-check.mjs" "$(command -v bun)" "$HOME/.clawgod/cli.mjs" --probe-tools
 
   musl:
     runs-on: ubuntu-latest
@@ -55,14 +57,16 @@ jobs:
         run: |
           docker run --rm -i -v "$GITHUB_WORKSPACE:/workspace" -w /workspace "oven/bun:$(cat .bun-version)-alpine" sh <<'SH'
           set -eu
-          apk add --no-cache bash ripgrep coreutils
+          apk add --no-cache bash ripgrep coreutils tar
           bash -eu <<'BASH'
           bun run build
-          version=$(bun -e 'console.log(require("fs").readFileSync("src/templates/install.sh","utf8").match(/^VERSION="([\d.]+)"$/m)[1])')
-          bash install.sh "$version"
+          version=$(bun -e 'console.log((await Bun.file("src/shared/runtime-version.json").json()).upstreamVersion)')
+          mkdir -p dist/runtime
+          tar -xzf dist/clawgod-runtime.tar.gz -C dist/runtime
+          bun dist/runtime/install-runtime.mjs "$version"
           [[ "$(cat "$HOME/.clawgod/.source-version")" == "$version" ]]
           [[ "$("$HOME/.clawgod/claude.fallback" --version)" == "$version (Claude Code)" ]]
           "$HOME/.local/bin/clawgod" --version
-          bun "$HOME/.clawgod/startup-check.cjs" "$(command -v bun)" "$HOME/.clawgod/cli.cjs" --probe-tools
+          bun "$HOME/.clawgod/startup-check.mjs" "$(command -v bun)" "$HOME/.clawgod/cli.mjs" --probe-tools
           BASH
           SH

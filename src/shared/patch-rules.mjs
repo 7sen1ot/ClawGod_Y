@@ -357,6 +357,7 @@ export const upstreamPatches = [
     id: 'message-filter-legacy',
     toggleable: true,
     name: 'Message list filter bypass (legacy ternary)',
+    versions: '<2.1.214',
     pattern: /([\w$]+)\(\)!=="ant"\?([\w$]+)\(([\w$]+),([\w$]+)\(([\w$]+)\)\):([\w$]+)/g,
     replacer: m => m.replace(/^([\w$]+)\(\)!=="ant"\?/, (g, f) => `(${gate('message-filter-legacy')}?!1:${f}()!=="ant")?`),
     optional: true,

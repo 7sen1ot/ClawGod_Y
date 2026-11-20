@@ -3,3 +3,5 @@
 /uninstall.sh
 /uninstall.ps1
 /AGENTS.md
+/dist/
+/node_modules/

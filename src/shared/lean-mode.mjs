@@ -1,0 +1,86 @@
+import * as fs from 'node:fs';
+import { dirname } from 'node:path';
+import { readJsonConfig } from './runtime-helpers.mjs';
+
+const DENY = ["DesignSync","NotebookEdit","PushNotification","RemoteTrigger","EnterPlanMode","ExitPlanMode","Projects"];
+const LOOP_TOOLS = ["CronCreate","CronDelete","CronList","ScheduleWakeup"];
+const FLAGS = ["disableWorkflows","disableClaudeAiConnectors","disableArtifact","disableBundledSkills","disableRemoteControl"];
+const SETTINGS = {
+  sandbox: { enabled: false, autoAllowBashIfSandboxed: false, failIfUnavailable: false },
+  includeCoAuthoredBy: false,
+  cleanupPeriodDays: 3650,
+  enableAllProjectMcpServers: true,
+  fileCheckpointingEnabled: false,
+  env: {
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+    DISABLE_TELEMETRY: '1',
+    DO_NOT_TRACK: '1',
+    DISABLE_ERROR_REPORTING: '1',
+    DISABLE_AUTOUPDATER: '1',
+    DISABLE_UPDATES: '1',
+    CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING: '1',
+  },
+};
+const LEGACY_SHARED_DENY = [...DENY, ...LOOP_TOOLS, "ReportFindings"];
+
+const FEATURES_LOCKED_ON = [
+  'agent-teams', 'computer-use', 'ultraplan', 'ultrareview',
+  'remote-settings', 'wiggly-dove', 'bun-ant-shim',
+];
+
+function leanApply(clawgodSettingsPath, sharedSettingsPath, patchesJsonPath) {
+  const writeSettings = (file, value) => {
+    try {
+      fs.mkdirSync(dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify(value, null, 2) + "\n");
+    } catch (error) {
+      throw new Error('[clawgod] Cannot write ' + file + ': ' + error.message, { cause: error });
+    }
+  };
+  const s = readJsonConfig(clawgodSettingsPath);
+  if (s.permissions === undefined) s.permissions = {};
+  if (!s.permissions || typeof s.permissions !== 'object' || Array.isArray(s.permissions)) throw new Error('[clawgod] Invalid ' + clawgodSettingsPath + ': permissions must be an object.');
+  if (s.permissions.deny === undefined) s.permissions.deny = [];
+  if (!Array.isArray(s.permissions.deny)) throw new Error('[clawgod] Invalid ' + clawgodSettingsPath + ': permissions.deny must be an array.');
+  const p = patchesJsonPath ? readJsonConfig(patchesJsonPath) : undefined;
+  const shared = sharedSettingsPath ? readJsonConfig(sharedSettingsPath) : undefined;
+  let changed = false;
+  if (!("tui" in s)) {
+    s.tui = "fullscreen";
+    changed = true;
+  }
+  if (s.permissions.defaultMode !== "bypassPermissions") {
+    s.permissions.defaultMode = "bypassPermissions";
+    changed = true;
+  }
+  for (const k of FLAGS) { if (!(k in s)) { s[k] = true; changed = true; } }
+  for (const [k, v] of Object.entries(SETTINGS)) {
+    if (JSON.stringify(s[k]) !== JSON.stringify(v)) { s[k] = v; changed = true; }
+  }
+  const kept = s.permissions.deny.filter(t => !LOOP_TOOLS.includes(t));
+  if (kept.length !== s.permissions.deny.length) { s.permissions.deny = kept; changed = true; }
+  const ex = new Set(s.permissions.deny);
+  for (const t of DENY) { if (!ex.has(t)) { s.permissions.deny.push(t); changed = true; } }
+  if (changed) writeSettings(clawgodSettingsPath, s);
+  if (patchesJsonPath) {
+    let pchanged = false;
+    for (const k of FEATURES_LOCKED_ON) {
+      if (!(k in p)) { p[k] = true; pchanged = true; }
+    }
+    if (pchanged) writeSettings(patchesJsonPath, p);
+  }
+  if (sharedSettingsPath) {
+    let touched = false;
+    for (const k of FLAGS) { if (shared[k] === true) { delete shared[k]; touched = true; } }
+    if (Array.isArray(shared.permissions?.deny)) {
+      const kept = shared.permissions.deny.filter(t => !LEGACY_SHARED_DENY.includes(t));
+      if (kept.length !== shared.permissions.deny.length) {
+        shared.permissions.deny = kept;
+        touched = true;
+      }
+    }
+    if (touched) writeSettings(sharedSettingsPath, shared);
+  }
+}
+
+export { leanApply, DENY, FLAGS, SETTINGS, LEGACY_SHARED_DENY };

@@ -1,5 +1,5 @@
-
-import { classifierTimeoutFloor as floor, selectApplicationPrompt, filterDefaultPromptSections } from '../shared/runtime-helpers.cjs';
+import { test } from 'bun:test';
+import { classifierTimeoutFloor as floor, selectApplicationPrompt, filterDefaultPromptSections } from '../shared/runtime-helpers.mjs';
 import assert from 'node:assert/strict';
 import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -11,9 +11,12 @@ import { scanPentestPatches } from '../shared/pentest-patches.mjs';
 import { applyAstEdits } from '../shared/ast-helpers.mjs';
 import { requiredRuntime } from './required-runtime.fixture.mjs';
 
+test('patch.test', async () => {
+
+
 const patchFiles = [
   'patch.mjs', 'patch-rules.mjs', 'patch-registry.mjs', 'ast-patches.mjs', 'ast-helpers.mjs', 'acorn.mjs', 'pentest-patches.mjs',
-  'pentest-scanners.mjs', 'pentest-prompts.mjs', 'pentest-trimming.mjs', 'pentest-policy-text.mjs', 'pentest-pruner.mjs', 'runtime-helpers.cjs', 'prompt-runtime.cjs',
+  'pentest-scanners.mjs', 'pentest-prompts.mjs', 'pentest-trimming.mjs', 'pentest-policy-text.mjs', 'pentest-pruner.mjs', 'runtime-helpers.mjs', 'prompt-runtime.mjs',
 ];
 
 {
@@ -452,3 +455,5 @@ try {
   rmSync(privacyDir, { recursive: true, force: true });
 }
 console.log('[patch.test] wiggly-dove collection, request capture, toggles, idempotence, and stale gates ok');
+
+});

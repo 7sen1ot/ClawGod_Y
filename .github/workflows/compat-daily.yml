@@ -12,22 +12,25 @@ on:
       - .bun-version
       - build.js
       - package.json
+      - tsconfig.json
+      - biome.json
+      - bunfig.toml
       - src/**
       - '!src/README.md'
-      - tools/provider-import/**
-      - '!tools/provider-import/**/*.md'
-      - .github/workflows/build-import.yml
       - .github/workflows/compat-daily.yml
       - .github/workflows/installer-checks.yml
       - .github/workflows/platform-compat.yml
       - .github/workflows/release.yml
       - .github/scripts/**
-      - '!.github/scripts/close-inactive-issues*.cjs'
+      - '!.github/scripts/close-inactive-issues*.mjs'
   pull_request:
     paths:
       - .bun-version
       - build.js
       - package.json
+      - tsconfig.json
+      - biome.json
+      - bunfig.toml
       - src/**
       - '!src/README.md'
       - .github/workflows/compat-daily.yml
@@ -35,7 +38,7 @@ on:
       - .github/workflows/platform-compat.yml
       - .github/workflows/release.yml
       - .github/scripts/**
-      - '!.github/scripts/close-inactive-issues*.cjs'
+      - '!.github/scripts/close-inactive-issues*.mjs'
 
 permissions:
   contents: read
@@ -67,15 +70,15 @@ jobs:
             changed=$(git diff --name-only --no-renames "$PR_BASE...$PR_HEAD")
             while IFS= read -r file; do
               case "$file" in
-                src/shared/openai-proxy.cjs|src/tests/openai-proxy*.test.mjs|src/tests/prompt-request.integration.test.mjs)
+                src/shared/openai-proxy.mjs|src/tests/openai-proxy*.test.mjs|src/tests/prompt-request.integration.test.mjs)
                   proxy=true ;;
-                src/tests/startup-check.test.mjs|src/tests/post-process.test.mjs|src/tests/bun-ant-shim.test.mjs|src/tests/installer-lifecycle.test.mjs|src/tests/npm-fetch.test.mjs|src/tests/extract-natives.test.mjs|src/tests/compile-runtime.test.mjs|src/tests/native-refresh.test.mjs)
+                src/tests/startup-check.test.mjs|src/tests/post-process.test.mjs|src/tests/bun-ant-shim.test.mjs|src/tests/installer-lifecycle.test.mjs|src/tests/npm-fetch.test.mjs|src/tests/extract-natives.test.mjs|src/tests/compile-runtime.test.mjs)
                   installer=true ;;
                 src/tests/*)
                   source=true ;;
-                src/README.md|.github/scripts/close-inactive-issues*.cjs)
+                src/README.md|.github/scripts/close-inactive-issues*.mjs)
                   ;;
-                .bun-version|build.js|package.json|src/*|.github/workflows/compat-daily.yml|.github/workflows/installer-checks.yml|.github/workflows/platform-compat.yml|.github/workflows/release.yml|.github/scripts/*)
+                .bun-version|build.js|package.json|tsconfig.json|biome.json|bunfig.toml|src/*|.github/workflows/compat-daily.yml|.github/workflows/installer-checks.yml|.github/workflows/platform-compat.yml|.github/workflows/release.yml|.github/scripts/*)
                   source=true installer=true proxy=true smoke=true ;;
               esac
             done <<< "$changed"
@@ -91,18 +94,14 @@ jobs:
           bun-version-file: .bun-version
       - id: resolve
         if: steps.scope.outputs.smoke == 'true'
-        run: bun .github/scripts/resolve-claude-versions.cjs
+        run: bun .github/scripts/resolve-claude-versions.mjs
       - run: bun run test:source
         if: steps.scope.outputs.source == 'true'
-      - name: Parse JavaScript without executing it
+      - name: Check types and lint
         if: steps.scope.outputs.source == 'true'
         run: |
-          bun -e '
-            const parser = new Bun.Transpiler({loader: "js"});
-            for (const pattern of ["src/{shared,ci,tests,windows}/*.{mjs,cjs}", ".github/scripts/*.cjs"]) {
-              for (const file of new Bun.Glob(pattern).scanSync(".")) parser.transformSync(await Bun.file(file).text());
-            }
-          '
+          bun install --ignore-scripts
+          bun run check
 
   installer-checks:
     needs: build-sources
@@ -177,20 +176,22 @@ jobs:
 
       - run: bun run build
       - name: Configure a provider before fresh installation
-        run: bun src/ci/provider-startup-fixture.cjs seed
+        run: bun src/ci/provider-startup-fixture.mjs seed
 
       - name: Run install.sh (registry download)
         shell: bash
         run: |
           set -euo pipefail
           echo "Testing Claude $CLAUDE_CHANNEL -> $CLAUDE_VERSION"
-          bash install.sh "$CLAUDE_VERSION" 2>&1 | tee /tmp/install.log
+          mkdir -p dist/runtime
+          tar -xzf dist/clawgod-runtime.tar.gz -C dist/runtime
+          bun dist/runtime/install-runtime.mjs "$CLAUDE_VERSION" 2>&1 | tee /tmp/install.log
 
       - name: Verify install artifacts
         shell: bash
         run: |
           ls -la "$HOME/.clawgod/" || true
-          for f in cli.cjs cli.original.cjs startup-check.cjs startup-check.log patch.mjs extract-natives.mjs post-process.mjs feature-gates.cjs runtime-helpers.cjs bun-ant-shim.cjs .source-version; do
+          for f in cli.mjs cli.original.cjs startup-check.mjs startup-check.log patch.mjs extract-natives.mjs post-process.mjs feature-gates.mjs runtime-helpers.mjs bun-ant-shim.mjs .source-version; do
             test -e "$HOME/.clawgod/$f" || { echo "::error::missing ~/.clawgod/$f"; exit 1; }
           done
           version=$(cat "$HOME/.clawgod/.source-version")
@@ -210,7 +211,7 @@ jobs:
         shell: bash
         run: |
           bun -e '
-            require(require("os").homedir() + "/.clawgod/bun-ant-shim.cjs");
+            require(require("os").homedir() + "/.clawgod/bun-ant-shim.mjs");
             if (typeof Bun.ant?.CellSegmenter !== "function") {
               console.error("::error::bun-ant-shim did not install Bun.ant.CellSegmenter");
               process.exit(1);
@@ -238,10 +239,10 @@ jobs:
       - name: Check patch coverage against the known baseline
         shell: bash
         run: |
-          bun src/ci/check-patch-coverage.cjs /tmp/install.log "$SMOKE_PLATFORM"
+          bun src/ci/check-patch-coverage.mjs /tmp/install.log "$SMOKE_PLATFORM"
 
       - name: Verify configured provider was preserved
-        run: bun src/ci/provider-startup-fixture.cjs verify /tmp/install.log
+        run: bun src/ci/provider-startup-fixture.mjs verify /tmp/install.log
 
       - name: Verify lean settings applied
         shell: bash
@@ -294,7 +295,7 @@ jobs:
         shell: bash
         run: |
           set +e
-          out=$(bun "$HOME/.clawgod/startup-check.cjs" "$(command -v bun)" "$HOME/.clawgod/cli.cjs" --probe-tools 2>&1)
+          out=$(bun "$HOME/.clawgod/startup-check.mjs" "$(command -v bun)" "$HOME/.clawgod/cli.mjs" --probe-tools 2>&1)
           rc=$?
           set -e
           echo "$out"
@@ -320,8 +321,8 @@ jobs:
           echo "  fv() patched: OK"
 
           echo "── Checking process.execPath monkey-patch in wrapper ──"
-          grep -q 'CLAUDE_CODE_EXECPATH' "$HOME/.clawgod/cli.cjs" || {
-            echo "::error::cli.cjs missing CLAUDE_CODE_EXECPATH monkey-patch"
+          grep -q 'CLAUDE_CODE_EXECPATH' "$HOME/.clawgod/cli.mjs" || {
+            echo "::error::cli.mjs missing CLAUDE_CODE_EXECPATH monkey-patch"
             exit 1
           }
           echo "  execPath patch: OK"
@@ -336,9 +337,9 @@ jobs:
             fi
           done
 
-          echo "── Checking openai-proxy.cjs exists ──"
-          test -f "$HOME/.clawgod/openai-proxy.cjs" || { echo "::error::openai-proxy.cjs missing"; exit 1; }
-          echo "  openai-proxy.cjs: OK ($(wc -c < "$HOME/.clawgod/openai-proxy.cjs") bytes)"
+          echo "── Checking openai-proxy.mjs exists ──"
+          test -f "$HOME/.clawgod/openai-proxy.mjs" || { echo "::error::openai-proxy.mjs missing"; exit 1; }
+          echo "  openai-proxy.mjs: OK ($(wc -c < "$HOME/.clawgod/openai-proxy.mjs") bytes)"
 
           echo "── All functional checks passed ──"
 
@@ -430,15 +431,10 @@ jobs:
         with:
           bun-version-file: .bun-version
 
-      - name: Set up Python for ConPTY tests
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
-        with:
-          python-version: '3.12'
-
       - name: Install terminal test dependencies
         shell: powershell
         run: |
-          python -m pip install -r src/ci/tui-requirements.txt
+          bun install --ignore-scripts
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Install ripgrep
@@ -469,7 +465,7 @@ jobs:
 
       - run: bun run build
       - name: Configure a provider before fresh installation
-        run: bun src/ci/provider-startup-fixture.cjs seed
+        run: bun src/ci/provider-startup-fixture.mjs seed
 
       - name: Run install.ps1 with version argument (registry download)
         shell: powershell
@@ -477,13 +473,12 @@ jobs:
           $ErrorActionPreference = 'Stop'
           Write-Host "Testing Claude $env:CLAUDE_CHANNEL -> $env:CLAUDE_VERSION"
           $log = Join-Path $env:RUNNER_TEMP 'install-windows.log'
-          $installerPath = "$env:GITHUB_WORKSPACE\install.ps1"
-          $installer = [System.IO.File]::ReadAllText(
-            $installerPath,
-            [System.Text.Encoding]::ASCII
-          )
-          & ([scriptblock]::Create($installer)) $env:CLAUDE_VERSION *>&1 |
-            Tee-Object -FilePath $log
+          $runtime = Join-Path $env:RUNNER_TEMP 'clawgod-runtime'
+          New-Item -ItemType Directory -Force -Path $runtime | Out-Null
+          tar -xzf dist/clawgod-runtime.tar.gz -C $runtime
+          if ($LASTEXITCODE -ne 0) { throw 'Runtime extraction failed' }
+          bun (Join-Path $runtime 'install-runtime.mjs') $env:CLAUDE_VERSION *>&1 | Tee-Object -FilePath $log
+          if ($LASTEXITCODE -ne 0) { throw 'Runtime installation failed' }
 
       - name: Verify install artifacts
         shell: powershell
@@ -491,16 +486,16 @@ jobs:
           $clawDir = Join-Path $env:USERPROFILE '.clawgod'
           Get-ChildItem -Force $clawDir
           $required = @(
-            'cli.cjs',
+            'cli.mjs',
             'cli.original.cjs',
-            'startup-check.cjs',
+            'startup-check.mjs',
             'startup-check.log',
             'patch.mjs',
             'extract-natives.mjs',
             'post-process.mjs',
-            'feature-gates.cjs',
-            'runtime-helpers.cjs',
-            'bun-ant-shim.cjs',
+            'feature-gates.mjs',
+            'runtime-helpers.mjs',
+            'bun-ant-shim.mjs',
             '.source-version'
           )
           foreach ($name in $required) {
@@ -532,7 +527,7 @@ jobs:
         run: |
           $check = Join-Path $env:RUNNER_TEMP 'bun-ant-shim-check.js'
           $code = @'
-          require(require("os").homedir() + "/.clawgod/bun-ant-shim.cjs");
+          require(require("os").homedir() + "/.clawgod/bun-ant-shim.mjs");
           if (typeof Bun.ant?.CellSegmenter !== "function") {
             console.error("bun-ant-shim did not install Bun.ant.CellSegmenter");
             process.exit(1);
@@ -566,13 +561,13 @@ jobs:
         shell: powershell
         run: |
           $log = Join-Path $env:RUNNER_TEMP 'install-windows.log'
-          bun src/ci/check-patch-coverage.cjs $log windows
+          bun src/ci/check-patch-coverage.mjs $log windows
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify configured provider was preserved
         shell: powershell
         run: |
-          bun src/ci/provider-startup-fixture.cjs verify (Join-Path $env:RUNNER_TEMP 'install-windows.log')
+          bun src/ci/provider-startup-fixture.mjs verify (Join-Path $env:RUNNER_TEMP 'install-windows.log')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Smoke test - clawgod --version
@@ -604,8 +599,8 @@ jobs:
           $previousErrorAction = $ErrorActionPreference
           try {
             $ErrorActionPreference = 'Continue'
-            $out = & bun (Join-Path $env:USERPROFILE '.clawgod\startup-check.cjs') `
-              (Get-Command bun).Source (Join-Path $env:USERPROFILE '.clawgod\cli.cjs') --probe-tools 2>&1 | Out-String
+            $out = & bun (Join-Path $env:USERPROFILE '.clawgod\startup-check.mjs') `
+              (Get-Command bun).Source (Join-Path $env:USERPROFILE '.clawgod\cli.mjs') --probe-tools 2>&1 | Out-String
             $rc = $LASTEXITCODE
           } finally {
             $ErrorActionPreference = $previousErrorAction
@@ -622,14 +617,14 @@ jobs:
           $clawDir = Join-Path $env:USERPROFILE '.clawgod'
           $version = (Get-Content (Join-Path $clawDir '.source-version') -Raw).Trim()
           $testArgs = @(
-            'src/ci/tui-smoke.py',
-            '--cli', (Join-Path $clawDir 'cli.cjs'),
+            'src/ci/tui-smoke.mjs',
+            '--cli', (Join-Path $clawDir 'cli.mjs'),
             '--bun', (Get-Command bun).Source,
             '--native', (Join-Path $clawDir 'claude.fallback.exe'),
             '--version', $version,
             '--output', (Join-Path $env:RUNNER_TEMP 'tui-artifacts')
           )
-          python @testArgs
+          node @testArgs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload terminal regression evidence
