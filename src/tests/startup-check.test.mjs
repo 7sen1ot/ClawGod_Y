@@ -144,7 +144,11 @@ try {
     assert.throws(() => runInNewContext(wrapper, {
       __dirname: dir,
       process: { argv: ['bun', cli, ...args], env: {} },
-      require(name) { return name === 'os' ? { homedir: () => profile } : require(name); },
+      require(name) {
+        if (name === 'os') return { homedir: () => profile };
+        if (name === './runtime-helpers.cjs') return require('../shared/runtime-helpers.cjs');
+        return require(name);
+      },
     }), /Unsupported provider protocol/);
   }
   console.log('[startup-check.test] standalone version skips provider side effects and still loads runtime helpers/bundle');

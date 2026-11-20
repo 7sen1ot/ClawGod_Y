@@ -181,7 +181,8 @@ rollback_install() {
       for f in "${ROLLBACK_FILES[@]}"; do rm -rf "$CLAWGOD_DIR/$f"; done
       for f in "${ROLLBACK_FILES[@]}"; do
         if [ -e "$PREV_BACKUP_DIR/$f" ]; then
-          mv "$PREV_BACKUP_DIR/$f" "$CLAWGOD_DIR/$f" || {
+          mv "$PREV_BACKUP_DIR/$f" "$CLAWGOD_DIR/$f" 2>/dev/null ||
+            cp -a "$PREV_BACKUP_DIR/$f" "$CLAWGOD_DIR/$f" || {
             warn "Rollback failed; backup kept at $PREV_BACKUP_DIR"
             return
           }

@@ -1,7 +1,6 @@
 name: Release
 
 on:
-  workflow_dispatch:
   push:
     tags:
       - 'v*'
@@ -26,8 +25,6 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
-    env:
-      RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v0.0.0-ci.{0}', github.run_id) }}
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -46,7 +43,6 @@ jobs:
           bun-version-file: .bun-version
 
       - name: Build release notes
-        if: startsWith(github.ref, 'refs/tags/')
         run: |
           tag="$GITHUB_REF_NAME"
           prev=$(git for-each-ref --sort=-version:refname --exclude="refs/tags/$tag" \
@@ -78,27 +74,14 @@ jobs:
       - name: Prepare and verify final release files
         run: |
           bun run build
-          bun .github/scripts/release-assets.cjs "$RELEASE_TAG"
+          bun .github/scripts/release-assets.cjs "$GITHUB_REF_NAME"
           bash -n install.sh
           bash -n uninstall.sh
 
       - name: Check installation and uninstall from the final release scripts
         run: bun src/tests/installer-lifecycle.test.mjs install.sh
 
-      - name: Upload branch release artifacts
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: release-${{ github.sha }}
-          path: |
-            install.sh
-            install.ps1
-            uninstall.sh
-            uninstall.ps1
-            dist/clawgod-import-*
-
       - name: Create GitHub release
-        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
