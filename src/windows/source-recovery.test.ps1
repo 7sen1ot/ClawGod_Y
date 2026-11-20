@@ -36,7 +36,7 @@ try {
     }
     Assert (((Get-Content (Join-Path $ClawDir 'bunfs\commands.js') -Raw).Trim()) -eq '// old graph') 'Graph rollback failed'
     Assert (-not (Test-Path (Join-Path $ClawDir 'claude.staged.exe'))) 'Staged binary was not cleaned up'
-    $applySection = [regex]::Match($template, '(?s)Write-Dim "Applying patches \.\.\.".*?(?=\$bunfsDir = Join-Path \$ClawDir "bunfs")').Value
+    $applySection = [regex]::Match($template, '(?s)if \(-not \$ReuseProcessed\) \{\s*Write-Dim "Applying patches \.\.\.".*?(?=Write-Dim "Compiling startup runtime \.\.\.")').Value
     Assert $applySection 'Patch application section not found'
     Set-Content (Join-Path $ClawDir 'patch.mjs') 'if(process.argv.includes("--capture-clean-source"))process.exit(0);process.stderr.write("expected diagnostic");process.exit(7)' -Encoding ASCII
     Set-Content (Join-Path $ClawDir 'old.cjs') '// previous working source' -Encoding ASCII
@@ -45,6 +45,7 @@ try {
 `$ErrorActionPreference = 'Stop'
 `$ClawDir = '$clawDirLiteral'
 `$BunBin = (Get-Command bun.exe -ErrorAction Stop).Source
+`$ReuseProcessed = `$false
 function Write-Dim(`$message) {}
 function Write-Err(`$message) {}
 `$script:restored = 0

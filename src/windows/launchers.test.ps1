@@ -22,6 +22,7 @@ try {
     New-Item -ItemType Directory -Force $BinDir | Out-Null
     $ClawDir = Join-Path $root '.clawgod'
     New-Item -ItemType Directory -Force $ClawDir | Out-Null
+    Set-Content (Join-Path $ClawDir 'compile-runtime.mjs') 'process.exit(0)' -Encoding ASCII
     $env:PATH = "$BinDir;$savedPath"
     function Invoke-WebRequest { throw 'offline' }
 

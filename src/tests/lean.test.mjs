@@ -49,6 +49,7 @@ function launch(args = [], env = {}, expectLoaded = args.length === 0) {
         if (name === 'os') return { homedir: () => home };
         if (name === './cli.original.cjs') { loaded = true; return {}; }
         if (name === './runtime-helpers.cjs') return require('../shared/runtime-helpers.cjs');
+        if (name === './lean-mode.cjs') return require('../shared/lean-mode.cjs');
         if (['./feature-gates.cjs', './bun-ant-shim.cjs'].includes(name)) return {};
         return require(name);
       },
