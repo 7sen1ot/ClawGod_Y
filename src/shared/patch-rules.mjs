@@ -35,10 +35,11 @@ export const upstreamPatches = [
     id: 'terminal-reply-fragments',
     name: 'Preserve split terminal replies while a DA1 probe is pending',
     // Match the retry block, not its condition (rewritten in 2.1.329), and reuse the flush timestamp.
-    pattern: /(\{this\.incompleteEscapeTimer=setTimeout\(this\.flushIncomplete,[\w$]+\);return\}(?:let [\w$]+=performance\.now\(\);)?)(this\.applyKeysRead\([\w$]+\(this\.keyReader,([\w$]+)\),\3\)\})/g,
+    pattern: /(\{this\.incompleteEscapeTimer=setTimeout\(this\.flushIncomplete,(?!_clawgodReplyDelay\))[\w$]+\);return\}(?:let [\w$]+=performance\.now\(\);)?)(this\.applyKeysRead\([\w$]+\(this\.keyReader,([\w$]+)\),\3\)\})/g,
     replacer: (m, prefix, suffix, now) => prefix +
       `const _clawgodReplyDelay=globalThis.__clawgodHelpers?.terminalReplyDelay?.(this.querier,this.keyReader,${now})??0;` +
       'if(_clawgodReplyDelay>0){this.incompleteEscapeTimer=setTimeout(this.flushIncomplete,_clawgodReplyDelay);return}' + suffix,
+    appliedSentinel: 'const _clawgodReplyDelay=globalThis.__clawgodHelpers?.terminalReplyDelay?.(',
     optional: true,
   },
   {
