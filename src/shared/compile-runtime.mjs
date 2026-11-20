@@ -23,13 +23,14 @@ async function fileDigest(path) {
 async function buildInputs() {
   const paths = new Set();
   // Runtime-only files; onLoad disables cache reuse if a source imports them.
-  const runtimeFiles = new Set(['source-backup.json', 'provider.json', 'features.json',
+  const runtimeFiles = new Set(['provider.json', 'features.json',
     'patches.json', 'assembly.json', 'flags.json', 'lean-settings.json', '.compiled-runtime-cache.json']);
+  const installationFiles = new Set(['.source-version', 'system-prompt.md', 'cli.original.cjs.bak']);
   const customConfig = /^(?:tsconfig\.json|jsconfig\.json|\.?bunfig\.toml)$/;
   function collect(dir) {
     for (const item of readdirSync(dir, { withFileTypes: true })) {
       if (dir === here && !['bunfs', 'vendor'].includes(item.name) &&
-          (!/\.(?:[cm]?js|jsx|tsx?|json|toml)$/.test(item.name) || runtimeFiles.has(item.name))) continue;
+          ((!installationFiles.has(item.name) && !/\.(?:[cm]?js|jsx|tsx?|json|toml)$/.test(item.name)) || runtimeFiles.has(item.name))) continue;
       const path = join(dir, item.name);
       if (item.isSymbolicLink() || customConfig.test(item.name)) throw new Error('custom build input');
       if (item.isDirectory()) collect(path);
@@ -126,8 +127,8 @@ function activate(filename) {
   renameSync(temporaryMarker, marker);
 }
 
-rmSync(marker, { force: true });
 async function compile() {
+  rmSync(marker, { force: true });
   try {
     const original = readFileSync(join(here, 'cli.original.cjs'), 'utf8');
     const manifest = original.match(/^\/\/ clawgod:probe-modules (.+)$/m);
@@ -203,4 +204,32 @@ async function compile() {
     try { rmSync(temporaryCache, { force: true }); } catch {}
   }
 }
-await compile();
+const [mode, sourceKey, version] = process.argv.slice(2);
+if (mode === '--check-installation' || mode === '--record-installation') {
+  try {
+    if (!/^[a-f0-9]{64}$/.test(sourceKey ?? '') || !/^\d+\.\d+\.\d+$/.test(version ?? '') ||
+        readFileSync(join(here, '.source-version'), 'utf8').trim() !== version) throw new Error('installation changed');
+    for (const file of ['cli.original.cjs', 'source-backup.json', 'system-prompt.md']) {
+      if (!lstatSync(join(here, file)).isFile()) throw new Error('incomplete installation');
+    }
+    const inputs = await buildInputs();
+    if (!inputs) throw new Error('custom build input');
+    let cached = {};
+    try { cached = JSON.parse(readFileSync(cacheFile, 'utf8')); } catch {}
+    if (mode === '--check-installation') {
+      if (cached.installation?.sourceKey !== sourceKey || cached.installation.version !== version ||
+          cached.installation.key !== inputs.key) throw new Error('installation changed');
+      console.log(`REUSE=${version}`);
+    } else {
+      cached.installation = { sourceKey, version, key: inputs.key };
+      writeFileSync(temporaryCache, JSON.stringify(cached) + '\n');
+      renameSync(temporaryCache, cacheFile);
+    }
+  } catch {
+    process.exitCode = 1;
+  } finally {
+    try { rmSync(temporaryCache, { force: true }); } catch {}
+  }
+} else {
+  await compile();
+}

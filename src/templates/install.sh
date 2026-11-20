@@ -6,6 +6,7 @@ CLAWGOD_DIR="$HOME/.clawgod"
 BIN_DIR="$HOME/.local/bin"
 VERSION="2.1.322"
 CLAWGOD_SELF_VERSION="0.0.0-dev"
+INSTALL_SOURCE_KEY="{{CLAWGOD:installation-key}}"
 
 if [[ $# -gt 1 || ( $# -eq 1 && ! "$1" =~ ^(latest|stable|[0-9]+\.[0-9]+\.[0-9]+)$ ) ]]; then
   printf 'Invalid installer arguments: %s\nUsage: bash install.sh [latest|stable|<version>]\n' "$*" >&2
@@ -28,23 +29,12 @@ echo ""
 echo -e "${BOLD}  ClawGod_Y Installer${NC}"
 echo ""
 
-if ! command -v node &>/dev/null; then
-  warn "Node.js is required (>= 18) for the patcher. Install from https://nodejs.org"
-  exit 1
-fi
-
-NODE_VERSION=$(node -e "console.log(process.versions.node.split('.')[0])")
-if [ "$NODE_VERSION" -lt 18 ]; then
-  warn "Node.js >= 18 required (found v$NODE_VERSION)"
-  exit 1
-fi
-
 if command -v bun &>/dev/null; then
   BUN_BIN=$(command -v bun)
 elif [ -x "$HOME/.bun/bin/bun" ]; then
   BUN_BIN="$HOME/.bun/bin/bun"
 else
-  dim "Installing Bun (required runtime for v2.1.113+ cli.js) ..."
+  dim "Installing Bun (sole runtime: patcher and CLI) ..."
   curl -fsSL https://bun.sh/install | bash >/dev/null 2>&1 || true
   BUN_BIN="$HOME/.bun/bin/bun"
   if [ ! -x "$BUN_BIN" ]; then
@@ -53,25 +43,12 @@ else
   fi
 fi
 MIN_BUN_VERSION="1.3.14"
-BUN_VERSION_RAW=$($BUN_BIN --version 2>/dev/null | head -1)
+BUN_VERSION_RAW=$("$BUN_BIN" --version 2>/dev/null) || BUN_VERSION_RAW=
 info "Bun: $BUN_VERSION_RAW"
-BUN_VERSION_NUM=$(echo "$BUN_VERSION_RAW" | sed 's/-.*//')
+BUN_VERSION_NUM=${BUN_VERSION_RAW%%-*}
 if [ -z "$BUN_VERSION_NUM" ] \
    || [ "$(printf '%s\n%s\n' "$BUN_VERSION_NUM" "$MIN_BUN_VERSION" | sort -V | head -1)" != "$MIN_BUN_VERSION" ]; then
-  warn ""
-  warn "Bun ${BUN_VERSION_RAW:-<unknown>} is below the required minimum ($MIN_BUN_VERSION)."
-  warn ""
-  warn "  Anthropic builds claude-code with Bun's canary channel. Older Bun"
-  warn "  panics on cli.original.cjs with 'Expected CommonJS module to have"
-  warn "  a function wrapper'. This is a hard requirement, not a warning."
-  warn ""
-  warn "  Upgrade with one of:"
-  warn "    bun upgrade --canary               (if installed via curl/install.sh)"
-  warn "    brew upgrade bun                   (homebrew)"
-  warn "    scoop uninstall bun && \\           (scoop — shim blocks self-replace)"
-  warn "      irm https://bun.sh/install.ps1 | iex && bun upgrade --canary"
-  warn ""
-  warn "  Then re-run this installer."
+  warn "Bun $MIN_BUN_VERSION or later is required (found ${BUN_VERSION_RAW:-unknown}). Use bun upgrade or update Bun with your package manager."
   exit 1
 fi
 
@@ -112,10 +89,6 @@ else
   PLATFORM="${os}-${arch}"
 fi
 
-if ! command -v npm &>/dev/null; then
-  warn "npm is required to download the ClawGod_Y upstream runtime from the registry."
-  exit 1
-fi
 if [ -z "$os" ] || [ -z "$arch" ]; then
   warn "Unsupported platform: $(uname -s) $(uname -m)"
   exit 1
@@ -123,17 +96,15 @@ fi
 NPM_PKG="@anthropic-ai/claude-code-${PLATFORM}"
 dim "Fetching $NPM_PKG@$VERSION from npm registry ..."
 NATIVE_BIN_TMPDIR=$(mktemp -d)
-if ( cd "$NATIVE_BIN_TMPDIR" && npm pack "$NPM_PKG@$VERSION" --silent >/dev/null 2>&1 ); then
-  TARBALL=$(ls "$NATIVE_BIN_TMPDIR"/*.tgz 2>/dev/null | head -1)
-  if [ -n "$TARBALL" ]; then
-    ( cd "$NATIVE_BIN_TMPDIR" && tar xzf "$TARBALL" )
-    cand="$NATIVE_BIN_TMPDIR/package/claude"
-    if [ -f "$cand" ]; then
-      sz=$(stat -f%z "$cand" 2>/dev/null || stat -c%s "$cand" 2>/dev/null || echo 0)
-      if [ "$sz" -gt 10000000 ]; then
-        NATIVE_BIN="$cand"
-        NATIVE_BIN_LABEL=$(node -e "console.log(require('$NATIVE_BIN_TMPDIR/package/package.json').version)" 2>/dev/null || echo "npm-latest")
-      fi
+cat > "$NATIVE_BIN_TMPDIR/fetch.mjs" << 'FETCH_EOF'
+{{CLAWGOD:npm-fetch.mjs}}
+FETCH_EOF
+if "$BUN_BIN" "$NATIVE_BIN_TMPDIR/fetch.mjs" "$NPM_PKG@$VERSION" "$NATIVE_BIN_TMPDIR"; then
+  if [ -f "$NATIVE_BIN_TMPDIR/package/claude" ]; then
+    sz=$(stat -f%z "$NATIVE_BIN_TMPDIR/package/claude" 2>/dev/null || stat -c%s "$NATIVE_BIN_TMPDIR/package/claude" 2>/dev/null || echo 0)
+    if [ "$sz" -gt 10000000 ]; then
+      NATIVE_BIN="$NATIVE_BIN_TMPDIR/package/claude"
+      NATIVE_BIN_LABEL=$("$BUN_BIN" -e "console.log(require(process.argv[1]).version)" "$NATIVE_BIN_TMPDIR/package/package.json" 2>/dev/null || echo "npm-latest")
     fi
   fi
 fi
@@ -146,14 +117,29 @@ if [ -z "$NATIVE_BIN" ]; then
 fi
 info "Downloaded $NPM_PKG@$NATIVE_BIN_LABEL"
 
+REUSE_PROCESSED=0
+if grep -Fq "$INSTALL_SOURCE_KEY" "$CLAWGOD_DIR/.compiled-runtime-cache.json" 2>/dev/null; then
+  if reuse=$("$BUN_BIN" "$CLAWGOD_DIR/compile-runtime.mjs" --check-installation "$INSTALL_SOURCE_KEY" "$NATIVE_BIN_LABEL") &&
+     [ "$reuse" = "REUSE=$NATIVE_BIN_LABEL" ]; then
+    REUSE_PROCESSED=1
+    info "Reusing unchanged processed modules ($NATIVE_BIN_LABEL)"
+  fi
+fi
+
 PREV_BACKUP_DIR=""
-ROLLBACK_FILES=(cli.original.cjs cli.original.cjs.bak cli.original.js .source-version
-  source-backup.json bunfs vendor pathmap.json extract-natives.mjs post-process.mjs
-  openai-proxy.cjs feature-gates.cjs cli.cjs .clawgod-version
-  startup-check.cjs compile-runtime.mjs .compiled-runtime .compiled-runtime-cache.json runtime-helpers.cjs prompt-runtime.cjs bun-ant-shim.cjs system-prompt.md
-  claude.fallback uninstall.sh lean-settings.json patches.json
-  patch.mjs patch-rules.mjs patch-registry.mjs ast-patches.mjs ast-helpers.mjs pentest-patches.mjs pentest-scanners.mjs pentest-prompts.mjs
-  pentest-trimming.mjs pentest-policy-text.mjs pentest-pruner.mjs lean-mode.cjs acorn.mjs acorn.LICENSE)
+ROLLBACK_FILES=(
+{{CLAWGOD:rollback-files}}
+)
+if [ "$REUSE_PROCESSED" -eq 1 ]; then
+  REUSED_ROLLBACK_FILES=()
+  for f in "${ROLLBACK_FILES[@]}"; do
+    case "$f" in
+      bunfs|vendor|pathmap.json|source-backup.json|cli.original.cjs|cli.original.cjs.bak) continue ;;
+    esac
+    REUSED_ROLLBACK_FILES+=("$f")
+  done
+  ROLLBACK_FILES=("${REUSED_ROLLBACK_FILES[@]}")
+fi
 if [ -f "$CLAWGOD_DIR/cli.original.cjs" ] && [ -f "$CLAWGOD_DIR/.source-version" ]; then
   PREV_BACKUP_DIR=$(mktemp -d "${CLAWGOD_DIR}-rollback-XXXXXX")
   MOVED_ROLLBACK_FILES=()
@@ -195,7 +181,8 @@ rollback_install() {
       for f in "${ROLLBACK_FILES[@]}"; do rm -rf "$CLAWGOD_DIR/$f"; done
       for f in "${ROLLBACK_FILES[@]}"; do
         if [ -e "$PREV_BACKUP_DIR/$f" ]; then
-          mv "$PREV_BACKUP_DIR/$f" "$CLAWGOD_DIR/$f" || {
+          mv "$PREV_BACKUP_DIR/$f" "$CLAWGOD_DIR/$f" 2>/dev/null ||
+            cp -a "$PREV_BACKUP_DIR/$f" "$CLAWGOD_DIR/$f" || {
             warn "Rollback failed; backup kept at $PREV_BACKUP_DIR"
             return
           }
@@ -212,19 +199,21 @@ cat > "$CLAWGOD_DIR/extract-natives.mjs" << 'EXTRACTOR_EOF'
 {{CLAWGOD:extract-natives.mjs}}
 EXTRACTOR_EOF
 
-rm -rf "$CLAWGOD_DIR/vendor" "$CLAWGOD_DIR/bunfs" "$CLAWGOD_DIR/pathmap.json" \
-  "$CLAWGOD_DIR/cli.original.js" 2>/dev/null
+if [ "$REUSE_PROCESSED" -eq 0 ]; then
+  rm -rf "$CLAWGOD_DIR/vendor" "$CLAWGOD_DIR/bunfs" "$CLAWGOD_DIR/pathmap.json" \
+    "$CLAWGOD_DIR/cli.original.js" 2>/dev/null
 
-dim "Extracting cli.js + modules from $NATIVE_BIN_LABEL ..."
-node "$CLAWGOD_DIR/extract-natives.mjs" "$NATIVE_BIN" "$CLAWGOD_DIR" 2>&1 | while IFS= read -r line; do echo "  $line"; done
-if [ "${PIPESTATUS[0]}" -ne 0 ]; then
-  err "Failed to extract from native binary"
-  exit 1
+  dim "Extracting cli.js + modules from $NATIVE_BIN_LABEL ..."
+  "$BUN_BIN" "$CLAWGOD_DIR/extract-natives.mjs" "$NATIVE_BIN" "$CLAWGOD_DIR" 2>&1 | while IFS= read -r line; do echo "  $line"; done
+  if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+    err "Failed to extract from native binary"
+    exit 1
+  fi
+  [ -f "$CLAWGOD_DIR/cli.original.js" ] || { err "cli.js missing after extraction"; exit 1; }
+
+
+  dim "Rewriting bunfs paths and IIFE invocation ..."
 fi
-[ -f "$CLAWGOD_DIR/cli.original.js" ] || { err "cli.js missing after extraction"; exit 1; }
-
-
-dim "Rewriting bunfs paths and IIFE invocation ..."
 cat > "$CLAWGOD_DIR/post-process.mjs" << 'POSTPROC_EOF'
 {{CLAWGOD:post-process.mjs}}
 POSTPROC_EOF
@@ -277,9 +266,11 @@ cat > "$CLAWGOD_DIR/ast-helpers.mjs" << 'AST_HELPERS_EOF'
 {{CLAWGOD:ast-helpers.mjs}}
 AST_HELPERS_EOF
 
-node "$CLAWGOD_DIR/post-process.mjs" 2>&1 | while IFS= read -r line; do echo "  $line"; done
-if [ "${PIPESTATUS[0]}" -ne 0 ]; then err "Post-process failed"; exit 1; fi
-[ -f "$CLAWGOD_DIR/cli.original.cjs" ] || { err "Post-process failed"; exit 1; }
+if [ "$REUSE_PROCESSED" -eq 0 ]; then
+  "$BUN_BIN" "$CLAWGOD_DIR/post-process.mjs" 2>&1 | while IFS= read -r line; do echo "  $line"; done
+  if [ "${PIPESTATUS[0]}" -ne 0 ]; then err "Post-process failed"; exit 1; fi
+  [ -f "$CLAWGOD_DIR/cli.original.cjs" ] || { err "Post-process failed"; exit 1; }
+fi
 
 echo "$NATIVE_BIN_LABEL" > "$CLAWGOD_DIR/.source-version"
 
@@ -338,19 +329,21 @@ PATCH_REGISTRY_EOF
 info "Patcher created (patch.mjs)"
 
 
-dim "Applying patches ..."
-node --max-old-space-size=4096 "$CLAWGOD_DIR/patch.mjs" --capture-and-apply 2>&1 | while IFS= read -r line; do echo "  $line"; done
-patch_status=${PIPESTATUS[0]}
-if [ "$patch_status" -ne 0 ]; then
-  warn "Patching failed (node exit $patch_status). Installation aborted."
-  if [ -z "$PREV_BACKUP_DIR" ]; then
-    warn "No previous working installation found to roll back."
+if [ "$REUSE_PROCESSED" -eq 0 ]; then
+  dim "Applying patches ..."
+  "$BUN_BIN" "$CLAWGOD_DIR/patch.mjs" --capture-and-apply 2>&1 | while IFS= read -r line; do echo "  $line"; done
+  patch_status=${PIPESTATUS[0]}
+  if [ "$patch_status" -ne 0 ]; then
+    warn "Patching failed (bun exit $patch_status). Installation aborted."
+    if [ -z "$PREV_BACKUP_DIR" ]; then
+      warn "No previous working installation found to roll back."
+    fi
+    warn ""
+    warn "The selected upstream runtime build (${NATIVE_BIN_LABEL:-unknown}) is not supported by this ClawGod_Y release."
+    warn "Optional unmatched patches are already skipped; required prompt injection and source errors cannot be skipped."
+    warn "Rerun the installer with a compatible upstream runtime version."
+    exit "$patch_status"
   fi
-  warn ""
-  warn "The selected upstream runtime build (${NATIVE_BIN_LABEL:-unknown}) is not supported by this ClawGod_Y release."
-  warn "Optional unmatched patches are already skipped; required prompt injection and source errors cannot be skipped."
-  warn "Rerun the installer with a compatible upstream runtime version."
-  exit "$patch_status"
 fi
 
 dim "Compiling startup runtime ..."
@@ -391,35 +384,17 @@ fi
 
 rm -f "$CLAWGOD_DIR/.lean-disabled" "$CLAWGOD_DIR/.lean-max"
 
-node -e '
-const {leanApply}=require(process.argv[2]);
-try{leanApply(process.argv[1],undefined,process.argv[3])}catch{}
-' "$CLAWGOD_DIR/lean-settings.json" "$CLAWGOD_DIR/lean-mode.cjs" "$CLAWGOD_DIR/patches.json" 2>/dev/null || true
+"$BUN_BIN" -e '
+const {leanApply}=require(process.argv[1]);
+try{leanApply(process.argv[2],undefined,process.argv[3])}catch{}
+' "$CLAWGOD_DIR/lean-mode.cjs" "$CLAWGOD_DIR/lean-settings.json" "$CLAWGOD_DIR/patches.json" 2>/dev/null || true
 info "Lean settings applied (strictest, clawgod-scoped): ~/.clawgod/lean-settings.json"
 
 dim "Verifying Bun can load patched cli.original.cjs (bounded startup check) ..."
 sanity_rc=0
-sanity_out=$(node "$CLAWGOD_DIR/startup-check.cjs" "$BUN_BIN" "$CLAWGOD_DIR/cli.cjs" 2>&1) || sanity_rc=$?
+sanity_out=$("$BUN_BIN" "$CLAWGOD_DIR/startup-check.cjs" "$BUN_BIN" "$CLAWGOD_DIR/cli.cjs" 2>&1) || sanity_rc=$?
 if echo "$sanity_out" | grep -q "Expected CommonJS module to have a function wrapper"; then
-  echo ""
-  warn "The selected Bun runtime cannot load Anthropic's cli.original.cjs."
-  warn ""
-  warn "  Anthropic builds with Bun's canary channel (currently ~1.3.14), while"
-  warn "  bun.sh's main download is on stable (currently 1.3.13). The canary build"
-  warn "  is NOT visible on bun.sh's download page — it lives on GitHub Releases"
-  warn "  and is reachable only via 'bun upgrade --canary'."
-  warn ""
-  warn "  If your bun is from bun.sh:"
-  warn "    bun upgrade --canary"
-  warn ""
-  warn "  If your bun is from a package manager (brew/apt/scoop) where the binary"
-  warn "  is behind a shim and refuses to self-replace ('bun upgrade' silently"
-  warn "  hangs or no-ops):"
-  warn "    <pkg-manager> uninstall bun"
-  warn "    curl -fsSL https://bun.sh/install | bash"
-  warn "    bun upgrade --canary"
-  warn ""
-  warn "  Then re-run install.sh — this sanity check will pass."
+  warn "Bun $BUN_VERSION_RAW could not load this CLI. Use bun upgrade or update Bun with your package manager."
   exit 1
 fi
 if [ "$sanity_rc" -ne 0 ]; then
@@ -430,7 +405,7 @@ fi
 info "Bun loads cli.original.cjs"
 dim "Verifying tool/command tables load (bounded probe) ..."
 probe_rc=0
-probe_out=$(node "$CLAWGOD_DIR/startup-check.cjs" "$BUN_BIN" "$CLAWGOD_DIR/cli.cjs" --probe-tools 2>&1) || probe_rc=$?
+probe_out=$("$BUN_BIN" "$CLAWGOD_DIR/startup-check.cjs" "$BUN_BIN" "$CLAWGOD_DIR/cli.cjs" --probe-tools 2>&1) || probe_rc=$?
 if [ "$probe_rc" -ne 0 ]; then
   warn "Patched Claude failed its tool-table probe (exit $probe_rc):"
   printf '%s\n' "$probe_out"
@@ -506,16 +481,9 @@ if [ -f "$CLAWGOD_DIR/claude.staged" ]; then
 fi
 chmod +x "$CLAWGOD_DIR/claude.fallback"
 
-if [ -f "$0" ] && [ -f "$(dirname "$0")/uninstall.sh" ]; then
-  cp "$(dirname "$0")/uninstall.sh" "$CLAWGOD_DIR/uninstall.sh.tmp"
-else
-  if [ "$CLAWGOD_SELF_VERSION" = "0.0.0-dev" ]; then
-    UNINSTALL_URL="https://raw.githubusercontent.com/7sen1ot/ClawGod_Y/main/uninstall.sh"
-  else
-    UNINSTALL_URL="https://github.com/7sen1ot/ClawGod_Y/releases/download/v$CLAWGOD_SELF_VERSION/uninstall.sh"
-  fi
-  curl -fsSL "$UNINSTALL_URL" -o "$CLAWGOD_DIR/uninstall.sh.tmp"
-fi
+cat > "$CLAWGOD_DIR/uninstall.sh.tmp" <<'CLAWGOD_UNINSTALL_EOF'
+{{CLAWGOD:standalone-uninstaller}}
+CLAWGOD_UNINSTALL_EOF
 [ -s "$CLAWGOD_DIR/uninstall.sh.tmp" ] || { err "Uninstaller is missing or empty"; exit 1; }
 chmod +x "$CLAWGOD_DIR/uninstall.sh.tmp"
 mv -f "$CLAWGOD_DIR/uninstall.sh.tmp" "$CLAWGOD_DIR/uninstall.sh"
@@ -545,6 +513,8 @@ rm -f "$BIN_DIR/claude.orig" "$CLAWGOD_DIR/install.sh" || true
 
 hash -r 2>/dev/null
 
+"$BUN_BIN" "$CLAWGOD_DIR/compile-runtime.mjs" --record-installation "$INSTALL_SOURCE_KEY" "$NATIVE_BIN_LABEL" || true
+
 echo ""
 echo -e "  ${BOLD}${GREEN}ClawGod_Y installed!${NC}"
 echo ""
@@ -560,10 +530,4 @@ dim "  If 'clawgod' is not found, restart your terminal or run: hash -r"
 echo ""
 dim "  Config: ~/.clawgod/provider.json"
 dim "  Flags:  ~/.clawgod/features.json"
-echo ""
-dim "  If 'claude' panics with 'Expected CommonJS module to have a function wrapper',"
-dim "  your Bun lags Anthropic's embedded Bun. Upgrade with one of:"
-dim "    bun upgrade --canary           (if installed via curl/install.sh)"
-dim "    scoop update bun               (scoop — may lag stable)"
-dim "    brew upgrade bun               (homebrew)"
 echo ""

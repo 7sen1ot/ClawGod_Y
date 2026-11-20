@@ -10,6 +10,7 @@ $ErrorActionPreference = "Stop"
 $ClawDir = Join-Path $env:USERPROFILE ".clawgod"
 $BinDir  = Join-Path $env:USERPROFILE ".local\bin"
 $ClawSelfVersion = "0.0.0-dev"
+$InstallSourceKey = "{{CLAWGOD:installation-key}}"
 
 function Write-OK($msg)   { Write-Host "  $([char]0x2713) $msg" -ForegroundColor Green }
 function Write-Err($msg)  { Write-Host "  $([char]0x2717) $msg" -ForegroundColor Red }
@@ -21,18 +22,6 @@ Write-Host "  ClawGod_Y Installer" -ForegroundColor White -NoNewline
 Write-Host " (Windows)" -ForegroundColor DarkGray
 Write-Host ""
 
-try { $null = Get-Command node -ErrorAction Stop }
-catch {
-    Write-Err "Node.js is required (>= 18) for the patcher. Install from https://nodejs.org"
-    exit 1
-}
-
-$nodeVer = [int](node -e "console.log(process.versions.node.split('.')[0])")
-if ($nodeVer -lt 18) {
-    Write-Err "Node.js >= 18 required (found v$nodeVer)"
-    exit 1
-}
-
 $BunBin = $null
 try { $BunBin = (Get-Command bun -ErrorAction Stop).Source } catch {}
 if (-not $BunBin) {
@@ -40,7 +29,7 @@ if (-not $BunBin) {
     if (Test-Path $homeBun) { $BunBin = $homeBun }
 }
 if (-not $BunBin) {
-    Write-Dim "Installing Bun (required runtime for v2.1.113+ cli.js) ..."
+    Write-Dim "Installing Bun (sole runtime: patcher and CLI) ..."
     try {
         Invoke-Expression "$(Invoke-RestMethod https://bun.sh/install.ps1)" 2>$null | Out-Null
     } catch {}
@@ -87,24 +76,7 @@ try {
     }
 } catch {}
 if (-not $BunVersionOk) {
-    Write-Host ""
-    Write-Err "Bun $BunVersionRaw is below the required minimum ($MinBunVersion)."
-    Write-Err ""
-    Write-Err "  Anthropic builds claude-code with Bun's canary channel. Older Bun"
-    Write-Err "  panics on cli.original.cjs with 'Expected CommonJS module to have"
-    Write-Err "  a function wrapper'. This is a hard requirement, not a warning."
-    Write-Err ""
-    Write-Err "  Upgrade with one of:"
-    Write-Err "    bun upgrade --canary"
-    Write-Err "    powershell -c ""iex & {`$(irm https://bun.sh/install.ps1)} -Version canary"""
-    Write-Err ""
-    Write-Err "  If your bun is from scoop (the binary is behind a shim and refuses"
-    Write-Err "  to self-replace, so 'bun upgrade' silently hangs):"
-    Write-Err "    scoop uninstall bun"
-    Write-Err "    irm https://bun.sh/install.ps1 | iex"
-    Write-Err "    bun upgrade --canary"
-    Write-Err ""
-    Write-Err "  Then re-run this installer."
+    Write-Err "Bun $MinBunVersion or later is required (found $BunVersionRaw). Use bun upgrade or update Bun with your package manager."
     exit 1
 }
 
@@ -137,86 +109,98 @@ if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64" -or $env:PROCESSOR_ARCHITEW6432 -eq 
 $platformSuffix = "win32-$arch"
 
 
+function Copy-VerifiedNative($source, $destination, $requestedVersion, $architecture) {
+    try {
+        $file = Get-Item -LiteralPath $source -ErrorAction Stop
+        if ($file.PSIsContainer -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return }
+        if ($requestedVersion -notin @('latest', 'stable') -and
+            $file.VersionInfo.ProductVersion -notin @($requestedVersion, "$requestedVersion.0")) { return }
+
+        # Check the copy that extraction will read, without executing the candidate.
+        [IO.File]::Copy($source, $destination)
+        $info = [Diagnostics.FileVersionInfo]::GetVersionInfo($destination)
+        if ($info.ProductName -ne 'Claude Code' -or $info.ProductVersion -notmatch '^([0-9]+\.[0-9]+\.[0-9]+)(?:\.0)?$') { return }
+        $productVersion = $Matches[1]
+        $machine = if ($architecture -eq 'arm64') { 0xAA64 } else { 0x8664 }
+        $reader = [IO.BinaryReader]::new([IO.File]::OpenRead($destination))
+        try {
+            if ($reader.ReadUInt16() -ne 0x5A4D) { return }
+            $reader.BaseStream.Position = 0x3C
+            $reader.BaseStream.Position = $reader.ReadUInt32()
+            if ($reader.ReadUInt32() -ne 0x4550 -or $reader.ReadUInt16() -ne $machine) { return }
+        } finally { $reader.Dispose() }
+
+        $signature = Get-AuthenticodeSignature -LiteralPath $destination -ErrorAction Stop
+        if ($signature.Status -eq 'Valid' -and
+            $signature.SignerCertificate.GetNameInfo([Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false) -eq 'Anthropic, PBC') {
+            return $productVersion
+        }
+    } catch { return }
+}
+
 $npmPkg = "@anthropic-ai/claude-code-$platformSuffix"
-Write-Dim "Fetching $npmPkg@$Version from npm registry ..."
+Write-Dim "Preparing $npmPkg@$Version ..."
 $NativeBinTmpDir = Join-Path $env:TEMP "clawgod-binary-$([Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Force -Path $NativeBinTmpDir | Out-Null
+$cachedCopy = Join-Path $NativeBinTmpDir "cached-claude.exe"
+$verifiedVersion = Copy-VerifiedNative (Join-Path $ClawDir "claude.fallback.exe") $cachedCopy $Version $arch
 $fetchScript = Join-Path $NativeBinTmpDir "fetch.mjs"
-$useNpmFetch = $false
-$noProxy = $env:NO_PROXY
-if ($env:HTTPS_PROXY -or $env:HTTP_PROXY) {
-    if ($noProxy -match '(?i)npmjs\.org') {
-        Write-Dim "NO_PROXY includes npmjs.org -- using direct fetch"
-    } elseif (Get-Command npm -ErrorAction SilentlyContinue) {
-        $useNpmFetch = $true
-    } else {
-        Write-Warn "HTTP proxy detected but npm not found. fetch.mjs may not work through your proxy."
-        Write-Warn "Install npm or set NO_PROXY=registry.npmjs.org to bypass."
-    }
-}
-if ($useNpmFetch) {
-    Push-Location $NativeBinTmpDir
-    try {
-        $npmOut = npm pack "$npmPkg@$Version" --silent 2>&1
-        $tarball = Get-ChildItem $NativeBinTmpDir -Filter "*.tgz" | Select-Object -First 1
-        if ($tarball) {
-            tar xzf $tarball.FullName 2>$null
-            $cand = Join-Path $NativeBinTmpDir "package\claude.exe"
-            if ((Test-Path $cand) -and (Get-Item $cand).Length -gt 10MB) {
-                $NativeBin = $cand
-                $pkgJson = Join-Path $NativeBinTmpDir "package\package.json"
-                if (Test-Path $pkgJson) {
-                    $NativeBinLabel = (Get-Content $pkgJson -Raw | ConvertFrom-Json).version
-                } else { $NativeBinLabel = "npm-latest" }
-                Write-OK "Downloaded $npmPkg@$NativeBinLabel (via npm)"
-            }
-        }
-    } finally { Pop-Location }
-    if (-not $NativeBin) {
-        Remove-Item -Recurse -Force $NativeBinTmpDir -ErrorAction SilentlyContinue
-        Write-Err "npm pack failed. Output:"
-        Write-Dim ($npmOut -join "`n")
-        exit 1
-    }
-} else {
 @'
 {{CLAWGOD:npm-fetch.mjs}}
 '@ | Set-Content $fetchScript -Encoding UTF8
 
-    $output = & node $fetchScript "$npmPkg@$Version" $NativeBinTmpDir 2>&1
-    $exitCode = $LASTEXITCODE
-    $output | ForEach-Object { Write-Host "  $_" }
-    Remove-Item -Force $fetchScript -ErrorAction SilentlyContinue
-
-    if ($exitCode -ne 0) {
-        Remove-Item -Recurse -Force $NativeBinTmpDir -ErrorAction SilentlyContinue
-        Write-Err "Fetch failed (node exit $exitCode). Install the official binary manually:"
-        Write-Err "    irm https://claude.ai/install.ps1 | iex"
-        exit 1
-    }
-
-    $cand = Join-Path $NativeBinTmpDir "package\claude.exe"
-    if ((Test-Path $cand) -and (Get-Item $cand).Length -gt 10MB) {
-        $NativeBin = $cand
-        $verLine = $output | Where-Object { $_ -match '^VERSION=' } | Select-Object -First 1
-        if ($verLine) { $NativeBinLabel = ($verLine -replace '^VERSION=', '').Trim() }
-        else { $NativeBinLabel = "npm-latest" }
+$cand = Join-Path $NativeBinTmpDir "package\claude.exe"
+$NativeBinLabel = $null
+& $BunBin $fetchScript "$npmPkg@$Version" $NativeBinTmpDir $verifiedVersion | ForEach-Object {
+    if ($verifiedVersion -and $_ -ceq "REUSE=$verifiedVersion") {
+        $cand = $cachedCopy
+        $NativeBinLabel = $verifiedVersion
+        Write-OK "Reusing verified local $npmPkg@$verifiedVersion"
+    } elseif ($_ -match '^VERSION=(.+)$') {
+        $NativeBinLabel = $Matches[1].Trim()
     } else {
-        Remove-Item -Recurse -Force $NativeBinTmpDir -ErrorAction SilentlyContinue
-        Write-Err "Tarball downloaded but expected package\claude.exe was missing or too small."
-        Write-Err "  Tempdir kept for inspection: $NativeBinTmpDir"
-        exit 1
+        Write-Dim $_
     }
-    Write-OK "Downloaded $npmPkg@$NativeBinLabel"
 }
+$exitCode = $LASTEXITCODE
+Remove-Item -Force $fetchScript -ErrorAction SilentlyContinue
+
+if ($exitCode -ne 0) {
+    Remove-Item -Recurse -Force $NativeBinTmpDir -ErrorAction SilentlyContinue
+    Write-Err "Fetch failed (bun exit $exitCode). Install the official binary manually:"
+    Write-Err "    irm https://claude.ai/install.ps1 | iex"
+    exit 1
+}
+
+if ($NativeBinLabel -and (Test-Path -LiteralPath $cand -PathType Leaf) -and (Get-Item -LiteralPath $cand).Length -gt 10MB) {
+    $NativeBin = $cand
+} else {
+    Remove-Item -Recurse -Force $NativeBinTmpDir -ErrorAction SilentlyContinue
+    Write-Err "Could not obtain the selected native executable and its version."
+    exit 1
+}
+Write-OK "$npmPkg@$NativeBinLabel ready"
+
+$ReuseProcessed = $false
+try {
+    $cache = Get-Content -LiteralPath (Join-Path $ClawDir '.compiled-runtime-cache.json') -Raw -ErrorAction Stop | ConvertFrom-Json
+    if ($cache.installation.sourceKey -eq $InstallSourceKey) {
+        $reuse = & $BunBin (Join-Path $ClawDir 'compile-runtime.mjs') --check-installation $InstallSourceKey $NativeBinLabel
+        $ReuseProcessed = $LASTEXITCODE -eq 0 -and $reuse -ceq "REUSE=$NativeBinLabel"
+    }
+} catch {}
+if ($ReuseProcessed) { Write-OK "Reusing unchanged processed modules ($NativeBinLabel)" }
 
 $RollbackDir = $null
 $script:RollbackPending = $false
-$RollbackFiles = @("cli.original.cjs","cli.original.cjs.bak","cli.original.js",".source-version",
-    "ast-helpers.mjs","patch-rules.mjs","pentest-prompts.mjs","prompt-runtime.cjs",
-    "source-backup.json","bunfs","vendor","pathmap.json","extract-natives.mjs","post-process.mjs",
-    "openai-proxy.cjs","feature-gates.cjs","cli.cjs",".clawgod-version","claude.fallback.exe","uninstall.ps1","lean-settings.json","patches.json",
-    "startup-check.cjs","compile-runtime.mjs",".compiled-runtime",".compiled-runtime-cache.json","runtime-helpers.cjs","bun-ant-shim.cjs","system-prompt.md","patch.mjs","patch-registry.mjs","ast-patches.mjs","pentest-patches.mjs","pentest-scanners.mjs","pentest-trimming.mjs","pentest-policy-text.mjs","pentest-pruner.mjs","lean-mode.cjs","acorn.mjs","acorn.LICENSE")
+$RollbackFiles = @(
+{{CLAWGOD:rollback-files}}
+)
+if ($ReuseProcessed) {
+    $RollbackFiles = $RollbackFiles | Where-Object {
+        $_ -notin @('bunfs', 'vendor', 'pathmap.json', 'source-backup.json', 'cli.original.cjs', 'cli.original.cjs.bak')
+    }
+}
 $origCjs = Join-Path $ClawDir "cli.original.cjs"
 $sourceVerFile = Join-Path $ClawDir ".source-version"
 if ((Test-Path $origCjs) -and (Test-Path $sourceVerFile)) {
@@ -277,38 +261,35 @@ $extractorPath = Join-Path $ClawDir "extract-natives.mjs"
 {{CLAWGOD:extract-natives.mjs}}
 '@ | Set-Content $extractorPath -Encoding UTF8
 
-$VendorDir = Join-Path $ClawDir "vendor"
-if (Test-Path $VendorDir) { Remove-Item -Recurse -Force $VendorDir }
+if (-not $ReuseProcessed) {
+    $VendorDir = Join-Path $ClawDir "vendor"
+    if (Test-Path $VendorDir) { Remove-Item -Recurse -Force $VendorDir }
 
-$BunfsDir = Join-Path $ClawDir "bunfs"
-if (Test-Path $BunfsDir) { Remove-Item -Recurse -Force $BunfsDir }
-$PathMap = Join-Path $ClawDir "pathmap.json"
-if (Test-Path $PathMap) { Remove-Item -Force $PathMap }
+    $BunfsDir = Join-Path $ClawDir "bunfs"
+    if (Test-Path $BunfsDir) { Remove-Item -Recurse -Force $BunfsDir }
+    $PathMap = Join-Path $ClawDir "pathmap.json"
+    if (Test-Path $PathMap) { Remove-Item -Force $PathMap }
 
-$dstCli = Join-Path $ClawDir "cli.original.js"
-if (Test-Path $dstCli) { Remove-Item -Force $dstCli }
+    $dstCli = Join-Path $ClawDir "cli.original.js"
+    if (Test-Path $dstCli) { Remove-Item -Force $dstCli }
 
-Write-Dim "Extracting cli.js + napi modules from $NativeBinLabel ..."
-& node $extractorPath $NativeBin $ClawDir 2>&1 | ForEach-Object { Write-Host "  $_" }
-if (($LASTEXITCODE -ne 0) -or -not (Test-Path $dstCli)) {
-    Write-Err "Failed to extract cli.js from native binary"
-    Restore-Install
-    exit 1
+    Write-Dim "Extracting cli.js + napi modules from $NativeBinLabel ..."
+    & $BunBin $extractorPath $NativeBin $ClawDir 2>&1 | ForEach-Object { Write-Host "  $_" }
+    if (($LASTEXITCODE -ne 0) -or -not (Test-Path $dstCli)) {
+        Write-Err "Failed to extract cli.js from native binary"
+        Restore-Install
+        exit 1
+    }
+
+    Write-Dim "Rewriting bunfs paths and IIFE invocation ..."
 }
-
-Write-Dim "Rewriting bunfs paths and IIFE invocation ..."
 $postProc = Join-Path $ClawDir "post-process.mjs"
 @'
 {{CLAWGOD:post-process.mjs}}
 '@ | Set-Content $postProc -Encoding UTF8
-try { $ProxySource = Get-Content (Join-Path $PSScriptRoot "openai-proxy.cjs") -Raw -ErrorAction Stop } catch { $ProxySource = $null }
-if (-not $ProxySource) {
-
-  $ProxySource = @'
+@'
 {{CLAWGOD:openai-proxy.cjs}}
-'@
-}
-$ProxySource | Set-Content (Join-Path $ClawDir "openai-proxy.cjs") -Encoding UTF8
+'@ | Set-Content (Join-Path $ClawDir "openai-proxy.cjs") -Encoding UTF8
 Write-OK "OpenAI-compatible proxy created (openai-proxy.cjs)"
 
 @'
@@ -354,11 +335,13 @@ Write-OK "Bun.ant runtime shim created (bun-ant-shim.cjs)"
 {{CLAWGOD:ast-helpers.mjs}}
 '@ | Set-Content (Join-Path $ClawDir "ast-helpers.mjs") -Encoding UTF8
 
-& node $postProc 2>&1 | ForEach-Object { Write-Host "  $_" }
-if (($LASTEXITCODE -ne 0) -or -not (Test-Path (Join-Path $ClawDir "cli.original.cjs"))) {
-    Write-Err "Post-process failed"
-    Restore-Install
-    exit 1
+if (-not $ReuseProcessed) {
+    & $BunBin $postProc 2>&1 | ForEach-Object { Write-Host "  $_" }
+    if (($LASTEXITCODE -ne 0) -or -not (Test-Path (Join-Path $ClawDir "cli.original.cjs"))) {
+        Write-Err "Post-process failed"
+        Restore-Install
+        exit 1
+    }
 }
 
 Set-Content -Path (Join-Path $ClawDir ".source-version") -Value $NativeBinLabel -Encoding ASCII
@@ -420,24 +403,26 @@ Set-Content (Join-Path $ClawDir "patch-registry.mjs") $patchRegistryCode -Encodi
 Write-OK "Patcher created (patch.mjs)"
 
 
-Write-Dim "Applying patches ..."
-$patchExitCode = & {
-    $ErrorActionPreference = 'Continue'
-    node (Join-Path $ClawDir "patch.mjs") --capture-and-apply 2>&1 | ForEach-Object { Write-Host "  $_" }
-    $LASTEXITCODE
-}
-if ($patchExitCode -ne 0) {
-    $exitCode = $patchExitCode
-    Write-Err "Patching failed (node exit $exitCode). Installation aborted."
-    Restore-Install
-    if (-not $RollbackDir) {
-        Write-Err "No previous working installation found to roll back."
+if (-not $ReuseProcessed) {
+    Write-Dim "Applying patches ..."
+    $patchExitCode = & {
+        $ErrorActionPreference = 'Continue'
+        & $BunBin (Join-Path $ClawDir "patch.mjs") --capture-and-apply 2>&1 | ForEach-Object { Write-Host "  $_" }
+        $LASTEXITCODE
     }
-    Write-Err ""
-    Write-Err "The selected upstream runtime build ($NativeBinLabel) is not supported by this ClawGod_Y release."
-    Write-Err "Optional unmatched patches are already skipped; required prompt injection and source errors cannot be skipped."
-    Write-Err "Rerun the installer with a compatible upstream runtime version."
-    exit $exitCode
+    if ($patchExitCode -ne 0) {
+        $exitCode = $patchExitCode
+        Write-Err "Patching failed (bun exit $exitCode). Installation aborted."
+        Restore-Install
+        if (-not $RollbackDir) {
+            Write-Err "No previous working installation found to roll back."
+        }
+        Write-Err ""
+        Write-Err "The selected upstream runtime build ($NativeBinLabel) is not supported by this ClawGod_Y release."
+        Write-Err "Optional unmatched patches are already skipped; required prompt injection and source errors cannot be skipped."
+        Write-Err "Rerun the installer with a compatible upstream runtime version."
+        exit $exitCode
+    }
 }
 
 Write-Dim "Compiling startup runtime ..."
@@ -507,7 +492,7 @@ $leanApplyScript = @'
 {{CLAWGOD:lean-apply.cjs}}
 '@
 try {
-    node -e $leanApplyScript "$leanSettings" (Join-Path $ClawDir "patches.json") 2>$null
+    & $BunBin -e $leanApplyScript (Join-Path $ClawDir "lean-mode.cjs") "$leanSettings" (Join-Path $ClawDir "patches.json") 2>$null
     Write-OK "Lean settings applied (strictest, clawgod-scoped): ~\.clawgod\lean-settings.json"
 } catch {}
 
@@ -516,7 +501,7 @@ $sanityCli = Join-Path $ClawDir "cli.cjs"
 function Invoke-StartupProbe {
     $ErrorActionPreference = 'Continue'
     try {
-        $output = (& node (Join-Path $ClawDir "startup-check.cjs") $BunBin $sanityCli @args 2>&1 | Out-String)
+        $output = (& $BunBin (Join-Path $ClawDir "startup-check.cjs") $BunBin $sanityCli @args 2>&1 | Out-String)
         return @{ Output = $output; ExitCode = $LASTEXITCODE }
     } catch {
         return @{ Output = "$_"; ExitCode = 1 }
@@ -526,25 +511,7 @@ $sanity = Invoke-StartupProbe
 $sanityOut = $sanity.Output
 $sanityExitCode = $sanity.ExitCode
 if ($sanityOut -match "Expected CommonJS module to have a function wrapper") {
-    Write-Host ""
-    Write-Err "The selected Bun runtime cannot load Anthropic's cli.original.cjs."
-    Write-Err ""
-    Write-Err "  Anthropic builds with Bun's canary channel (currently ~1.3.14), while"
-    Write-Err "  bun.sh's main download is on stable (currently 1.3.13). The canary build"
-    Write-Err "  is NOT visible on bun.sh's download page -- it lives on GitHub Releases"
-    Write-Err "  and is reachable only via 'bun upgrade --canary'."
-    Write-Err ""
-    Write-Err "  If your bun is from bun.sh:"
-    Write-Err "    bun upgrade --canary"
-    Write-Err "    or: powershell -c ""iex & {`$(irm https://bun.sh/install.ps1)} -Version canary"""
-    Write-Err ""
-    Write-Err "  If your bun is from scoop (the binary is behind a shim and refuses to"
-    Write-Err "  self-replace, so 'bun upgrade' silently hangs):"
-    Write-Err "    scoop uninstall bun"
-    Write-Err "    irm https://bun.sh/install.ps1 | iex"
-    Write-Err "    bun upgrade --canary"
-    Write-Err ""
-    Write-Err "  Then re-run .\install.ps1 -- this sanity check will pass."
+    Write-Err "Bun $BunVersionRaw could not load this CLI. Use bun upgrade or update Bun with your package manager."
     Restore-Install
     exit 1
 }
@@ -634,21 +601,7 @@ $sourceLaunch
 $launcherContent = $launcherContent.Replace($sourceLaunch, $compiledLaunch)
 $launcherContent | Set-Content (Join-Path $BinDir "clawgod.cmd.tmp") -Encoding Default
 
-$selfPath = $MyInvocation.MyCommand.Path
-$uninstallerPath = if ($selfPath) { Join-Path (Split-Path -Parent $selfPath) "uninstall.ps1" } else { $null }
-if ($uninstallerPath -and (Test-Path -LiteralPath $uninstallerPath -PathType Leaf)) {
-    Copy-Item -LiteralPath $uninstallerPath -Destination (Join-Path $ClawDir "uninstall.ps1.tmp") -Force -ErrorAction Stop
-} else {
-    $uninstallerUrl = if ($ClawSelfVersion -eq "0.0.0-dev") {
-        "https://raw.githubusercontent.com/7sen1ot/ClawGod_Y/main/uninstall.ps1"
-    } else {
-        "https://github.com/7sen1ot/ClawGod_Y/releases/download/v$ClawSelfVersion/uninstall.ps1"
-    }
-    $uninstallerSource = Invoke-RestMethod $uninstallerUrl
-    if ([string]::IsNullOrWhiteSpace($uninstallerSource)) { throw 'Downloaded uninstaller is empty' }
-    [System.IO.File]::WriteAllText((Join-Path $ClawDir "uninstall.ps1.tmp"), $uninstallerSource,
-        (New-Object System.Text.UTF8Encoding $false))
-}
+[IO.File]::WriteAllBytes((Join-Path $ClawDir "uninstall.ps1.tmp"), [Convert]::FromBase64String('{{CLAWGOD:standalone-uninstaller}}'))
 if (-not (Test-Path -LiteralPath (Join-Path $ClawDir "uninstall.ps1.tmp") -PathType Leaf) -or
     (Get-Item -LiteralPath (Join-Path $ClawDir "uninstall.ps1.tmp")).Length -eq 0) { throw 'Uninstaller is missing or empty' }
 Move-Item -LiteralPath (Join-Path $ClawDir "uninstall.ps1.tmp") -Destination (Join-Path $ClawDir "uninstall.ps1") -Force
@@ -687,6 +640,8 @@ Remove-Item -LiteralPath (Join-Path $ClawDir "install.ps1") -Force -ErrorAction 
 Get-ChildItem -LiteralPath $ClawDir -Filter "claude.fallback.*.exe" -File -ErrorAction SilentlyContinue |
     ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
 
+& $BunBin (Join-Path $ClawDir 'compile-runtime.mjs') --record-installation $InstallSourceKey $NativeBinLabel
+
 Write-Host ""
 Write-Host "  ClawGod_Y installed!" -ForegroundColor Green
 Write-Host ""
@@ -702,10 +657,4 @@ Write-Dim "  If 'clawgod' is not found, restart your terminal."
 Write-Host ""
 Write-Dim "  Config: ~/.clawgod/provider.json"
 Write-Dim "  Flags:  ~/.clawgod/features.json"
-Write-Host ""
-Write-Dim "  If 'claude' panics with 'Expected CommonJS module to have a function wrapper',"
-Write-Dim "  your Bun lags Anthropic's embedded Bun. Upgrade with one of:"
-Write-Dim "    bun upgrade --canary           (if installed from bun.sh)"
-Write-Dim "    scoop update bun               (scoop -- may lag stable)"
-Write-Dim "    irm https://bun.sh/install.ps1 | iex   (re-install latest)"
 Write-Host ""

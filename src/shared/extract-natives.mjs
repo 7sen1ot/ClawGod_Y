@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -293,6 +291,7 @@ function main() {
   const platDir = `${section.arch}-${section.os}`;
   const graphDir = join(outputDir, 'bunfs');
   const pathMap = {};
+  if (isChunked) mkdirSync(graphDir, { recursive: true });
 
   let cliCount = 0, napiCount = 0, dropped = 0;
   for (const m of modules) {
@@ -320,9 +319,7 @@ function main() {
       napiCount++;
     } else if (isChunked) {
       if (!sub) { dropped++; continue; }
-      mkdirSync(graphDir, { recursive: true });
       writeFileSync(join(graphDir, flat), m.content);
-      console.log(`  chunk    ${(m.content.length / 1024).toFixed(0).padStart(6)} KB → bunfs/${flat}`);
       dropped++;
     } else {
       dropped++;

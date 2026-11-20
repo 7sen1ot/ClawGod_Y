@@ -5,9 +5,6 @@ const SCREEN_DEFAULTS = {
   emptyCharIndex: 0, spacerCharIndex: 1, tabWidth: 8,
 };
 
-const STYLE_SHIFT = 17;
-const LINK_SHIFT = 2;
-const LINK_MASK = 32767;
 const WIDTH_MASK = 255;
 const TAB_FLAG = 256;
 const RUN_SHIFT = 10;
@@ -253,9 +250,8 @@ class CellSegmenter {
         runCount += 1;
         previous = item;
       }
-      item.run = runCount - 1;
       cells[i * 2] = item.graphemeIndex;
-      cells[i * 2 + 1] = (item.run << RUN_SHIFT) | (item.tab ? TAB_FLAG : 0) | (item.width & WIDTH_MASK);
+      cells[i * 2 + 1] = ((runCount - 1) << RUN_SHIFT) | (item.tab ? TAB_FLAG : 0) | (item.width & WIDTH_MASK);
     }
     return count;
   }
@@ -271,10 +267,7 @@ class CellSegmenter {
     for (let i = 0; i < (count | 0); i += 1) {
       const packed = cells[i * 2 + 1];
       const run = packed >>> RUN_SHIFT;
-      const word = (words ? words[run] : 0) | 0;
-      const style = (word >>> STYLE_SHIFT) << STYLE_SHIFT;
-      const link = (word >>> LINK_SHIFT) & LINK_MASK;
-      const styleBits = style | (link << LINK_SHIFT);
+      const styleBits = (words?.[run] ?? 0) & ~SCREEN_DEFAULTS.widthMask;
 
       if ((packed & TAB_FLAG) !== 0) {
         const stop = this.tabWidth - (((column % this.tabWidth) + this.tabWidth) % this.tabWidth);

@@ -6,7 +6,7 @@ const { dirname, join } = require('node:path');
 const [bun, cli, probeMode] = process.argv.slice(2);
 const timeoutMs = Number(process.env.CLAWGOD_STARTUP_TIMEOUT_MS || 30000);
 if (!bun || !cli || !Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2147483647) {
-  process.stderr.write('Usage: node startup-check.cjs <bun> <cli.cjs> [--probe-tools]; CLAWGOD_STARTUP_TIMEOUT_MS must be a positive integer <= 2147483647.\n');
+  process.stderr.write('Usage: bun startup-check.cjs <bun> <cli.cjs> [--probe-tools]; CLAWGOD_STARTUP_TIMEOUT_MS must be a positive integer <= 2147483647.\n');
   process.exitCode = 1;
 } else {
   const probeTools = probeMode === '--probe-tools';

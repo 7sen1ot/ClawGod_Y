@@ -1,0 +1,454 @@
+
+import { classifierTimeoutFloor as floor, selectApplicationPrompt, filterDefaultPromptSections } from '../shared/runtime-helpers.cjs';
+import assert from 'node:assert/strict';
+import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { runInNewContext } from 'node:vm';
+import { createServer, request } from 'node:http';
+import { scanPentestPatches } from '../shared/pentest-patches.mjs';
+import { applyAstEdits } from '../shared/ast-patches.mjs';
+import { requiredRuntime } from './required-runtime.fixture.mjs';
+
+const patchFiles = [
+  'patch.mjs', 'patch-rules.mjs', 'patch-registry.mjs', 'ast-patches.mjs', 'ast-helpers.mjs', 'acorn.mjs', 'pentest-patches.mjs',
+  'pentest-scanners.mjs', 'pentest-prompts.mjs', 'pentest-trimming.mjs', 'pentest-policy-text.mjs', 'pentest-pruner.mjs', 'runtime-helpers.cjs', 'prompt-runtime.cjs',
+];
+
+{
+  const tool = name => `defineTool({name:"${name}",searchHint:"fixture",get inputSchema(){return{}},create(){return{}}})`;
+  const source = `const read=${tool('Read')},write=${tool('Write')},edit=${tool('Edit')};` +
+    'function baseTools(){return[read,write,edit]}' +
+    'const help={type:"local",name:"help"},compact={type:"local",name:"compact"};' +
+    'function commands(){return[help,compact]}' +
+    'function decoy(){return[{name:"Read"},{name:"Write"},{name:"Edit"}]}';
+  const scan = scanPentestPatches(source)['runtime-table-probe'];
+  assert.equal(scan.matches.length, 2, 'both actual factories must be registered');
+  const patched = applyAstEdits(source, scan.matches);
+  const sandbox = { process: { argv: ['bun', 'cli', '--probe-tools'] }, defineTool: value => value };
+  runInNewContext(patched, sandbox);
+  assert.equal(sandbox.__clawgodTables.tools.length, 1, 'named-object decoy must not register');
+  assert.equal(JSON.stringify(sandbox.__clawgodTables.tools[0]().map(tool => tool.name)), '["Read","Write","Edit"]');
+  assert.equal(JSON.stringify(sandbox.__clawgodTables.commands[0]().map(command => command.name)), '["help","compact"]');
+  assert.equal(scanPentestPatches(patched)['runtime-table-probe'].matches.length, 0, 'registration is idempotent');
+}
+
+{
+  const protectedGate = 'function protectedGate(){return requireConfirmation===true}';
+  const source = 'function classifier(tool){return tool.classifierOnly()}' +
+    'function warning(){const settings={unknownModelWindowWarning:"fixture"};return workspaceTrust===true}' +
+    'function shell(){return{behavior:"ask",decisionReason:{type:"safetyCheck",circuitBreaker:"dangerousRemoval",classifierApprovable:false}}}' +
+    protectedGate;
+  const start = source.indexOf(protectedGate);
+  const scanned = scanPentestPatches(source, [[start, start + protectedGate.length]]);
+  assert.equal(scanned['permission-classifier-off'].matches.length, 1);
+  assert.equal(scanned['security-warnings-off'].matches.length, 1);
+  assert.equal(scanned['permission-shell-pattern-off'].matches.length, 1);
+  assert.equal(scanned['permission-decisions-allow'].matches.length, 0,
+    'generic decision edits must not overlap a specific shell replacement');
+  assert.equal(scanned['permission-confirmations-off'].matches.length, 0,
+    'specific warning edits and upstream protected ranges take precedence over catch-all rules');
+  const patched = applyAstEdits(source, Object.values(scanned).flatMap(result => result.matches));
+  const result = runInNewContext(`${patched};[classifier({classifierOnly(){throw new Error("must not run")}}),warning(),protectedGate(),shell().behavior]`,
+    { workspaceTrust: false, requireConfirmation: false });
+  assert.deepEqual(Array.from(result), [undefined, false, false, 'passthrough']);
+  assert.ok(patched.includes(protectedGate));
+}
+
+assert.equal(floor('200000'), 200000);
+assert.equal(floor('5000'), 5000);
+assert.equal(floor('-100000'), -100000);
+assert.equal(floor('0'), 0);
+assert.equal(floor('Infinity'), null);
+assert.equal(floor('1e309'), null);
+assert.equal(floor('abc'), null);
+assert.equal(floor(''), null);
+assert.equal(floor('   '), null);
+assert.equal(floor(undefined), null);
+
+const patchRes = (env, gateOn, formula) => {
+  const _ct = gateOn ? floor(env) : null;
+  return _ct === null ? formula : Math.max(formula, _ct);
+};
+assert.equal(patchRes('200000', true, 100), 200000);
+assert.equal(patchRes('5000', true, 80000), 80000);
+assert.equal(patchRes('0', true, 80000), 80000);
+assert.equal(patchRes('0', true, 0), 0);
+assert.equal(patchRes('200000', false, 100), 100);
+assert.equal(patchRes('Infinity', true, 80000), 80000);
+assert.equal(patchRes('1e309', true, 80000), 80000);
+assert.equal(patchRes('', true, 80000), 80000);
+assert.equal(patchRes(undefined, true, 80000), 80000);
+
+console.log('[patch.test] classifierTimeoutFloor semantics ok');
+
+const ultraplanFixtures = [
+  { label: 'legacy literal', description: 'description:`Draft a plan`', original: '!1' },
+  { label: 'getter and flag helper', description: 'get description(){return`Draft a plan (${estimate()})`}', original: '$flag()' },
+  { label: '2.1.268 availability', description: 'get description(){return`Draft a plan (${estimate()})`}', original: '$flag()', metadata: 'availability:["claude-ai"],' },
+];
+const testDir = mkdtempSync(join(tmpdir(), 'clawgod-patch-test-'));
+try {
+  for (const name of patchFiles) {
+    copyFileSync(new URL(`../shared/${name}`, import.meta.url), join(testDir, name));
+  }
+  writeFileSync(join(testDir, 'pathmap.json'), JSON.stringify(Object.fromEntries(
+    ['commands.js', 'mixed.js', 'auto-mode.js'].map(name =>
+      [`/$bunfs/root/${name}`, { path: `bunfs/${name}`, loader: 'js' }]),
+  )));
+  for (const graph of [false, true]) {
+    if (graph) mkdirSync(join(testDir, 'bunfs'));
+    for (const fixture of ultraplanFixtures) {
+      const source = requiredRuntime + `var command={type:"local-jsx",name:"ultraplan",${fixture.description},argumentHint:"<prompt>",${fixture.metadata || ''}isEnabled:()=>${fixture.original},policyGate:policy,load:()=>load()};var neighbor={name:"other",argumentHint:"<prompt>",isEnabled:()=>!1};`;
+      const target = join(testDir, graph ? 'bunfs/commands.js' : 'cli.original.cjs');
+      if (graph) writeFileSync(join(testDir, 'cli.original.cjs'), '// entry');
+      writeFileSync(target, source);
+      const output = execFileSync(process.execPath, [join(testDir, 'patch.mjs')], { encoding: 'utf8' });
+      assert.match(output, /Ultraplan enable \(1 replacement in 1 file\)/, fixture.label);
+      const patched = readFileSync(target, 'utf8');
+      const enabled = `isEnabled:()=>${fixture.original}`;
+      assert.equal(patched, source.replace(enabled, `isEnabled:()=>(globalThis.__clawgodPatches?.["ultraplan"]!==!1?!0:(${fixture.original}))`));
+      for (const toggle of [undefined, true, false]) {
+        for (const upstream of [false, true]) {
+          let calls = 0;
+          const context = {
+            $flag: () => { calls++; return upstream; },
+            estimate: () => 'a few minutes', policy: () => false, load: () => 'loaded',
+            ...(toggle === undefined ? {} : { __clawgodPatches: { ultraplan: toggle } }),
+          };
+          const result = runInNewContext(`${patched};[command.isEnabled(),neighbor.isEnabled(),command.description,command.policyGate(),command.load()]`, context);
+          const originalValue = fixture.original === '!1' ? false : upstream;
+          assert.equal(result[0], toggle === false ? originalValue : true, fixture.label);
+          assert.equal(result[1], false);
+          assert.match(result[2], /^Draft a plan/);
+          assert.equal(result[3], false);
+          assert.equal(result[4], 'loaded');
+          assert.equal(calls, toggle === false && fixture.original !== '!1' ? 1 : 0);
+        }
+      }
+    }
+    for (const body of [
+      'description:"Future gate",argumentHint:"<prompt>",newMetadata:!0,isEnabled:futureGate',
+      'description:"Cloud command stub"',
+    ]) {
+      const source = requiredRuntime + `var command={name:"ultraplan",${body}};var neighbor={name:"other",argumentHint:"<prompt>",isEnabled:()=>!1};`;
+      const target = join(testDir, graph ? 'bunfs/commands.js' : 'cli.original.cjs');
+      writeFileSync(target, source);
+      const result = spawnSync(process.execPath, [join(testDir, 'patch.mjs')], { encoding: 'utf8' });
+      assert.equal(result.status, 0, result.stderr);
+      if (body.includes('isEnabled:futureGate')) {
+        assert.match(result.stderr, /Runtime fallback installed/);
+        assert.equal(readFileSync(target, 'utf8'), source.replace('isEnabled:futureGate',
+          'isEnabled:globalThis.__clawgodHelpers.enablePredicate(futureGate,"ultraplan")'));
+      } else {
+        assert.match(result.stdout, /Ultraplan enable — AST matcher stale/);
+        assert.equal(readFileSync(target, 'utf8'), source);
+      }
+    }
+    const minimal = requiredRuntime + 'function userType(){return "external"}';
+    const target = join(testDir, graph ? 'bunfs/commands.js' : 'cli.original.cjs');
+    writeFileSync(target, minimal);
+    const missing = spawnSync(process.execPath, [join(testDir, 'patch.mjs')], { encoding: 'utf8' });
+    assert.equal(missing.status, 0, `${graph ? 'graph' : 'legacy'}: absent optional anchors do not abort the install`);
+    assert.match(missing.stdout, /0 failed/);
+    assert.match(missing.stdout, /not present in this version/);
+    assert.match(missing.stdout, /unverified or partial coverage/);
+    const drifted = requiredRuntime + 'async function decide(a,b,c,d,e,f){return a.checkPermissions("tengu_mcp_server_policy_bypass_exempt")}';
+    writeFileSync(target, drifted);
+    const strict = spawnSync(process.execPath, [join(testDir, 'patch.mjs')], { encoding: 'utf8' });
+    assert.equal(strict.status, 0, strict.stderr);
+    assert.match(strict.stdout, /skipped, upstream behavior kept/);
+    assert.equal(readFileSync(target, 'utf8'), drifted, 'unmatched patch leaves its source untouched');
+  }
+
+  for (const graph of [false, true]) {
+    rmSync(join(testDir, 'bunfs'), { recursive: true, force: true });
+    if (graph) mkdirSync(join(testDir, 'bunfs'));
+    const target = join(testDir, graph ? 'bunfs/mixed.js' : 'cli.original.cjs');
+    if (graph) writeFileSync(join(testDir, 'cli.original.cjs'), '// entry');
+    const source = requiredRuntime +
+      'var command={name:"ultraplan",description:"Cloud command stub"};' +
+      'function isThirdParty(){return provider!=="firstParty"&&!isAws(provider)}' +
+      'function isAws(value){return value==="anthropicAws"}' +
+      'function supports(model){if(isThirdParty()&&(model==="claude-opus-4-6"||model==="claude-sonnet-4-6"||model.includes("haiku")))return!1;return!0}';
+    const layout = graph ? 'graph' : 'legacy';
+
+    writeFileSync(target, source);
+    const strict = spawnSync(process.execPath, [join(testDir, 'patch.mjs')], { encoding: 'utf8' });
+    assert.equal(strict.status, 0, strict.stderr);
+    assert.match(strict.stdout, /Ultraplan enable — AST matcher stale/);
+    assert.match(strict.stdout, /skipped, upstream behavior kept/);
+    const patched = readFileSync(target, 'utf8');
+    assert.match(patched, /name:"ultraplan",description:"Cloud command stub"/, `${layout}: stale patch kept upstream behavior`);
+    assert.match(patched, /globalThis\.__clawgodPatches\?\.\["auto-mode-inline-gate"\]/, `${layout}: remaining patches still applied`);
+  }
+
+  for (const graph of [false, true]) {
+    rmSync(join(testDir, 'bunfs'), { recursive: true, force: true });
+    if (graph) mkdirSync(join(testDir, 'bunfs'));
+    for (const [label, condition] of [
+      ['inline provider', 'provider!=="firstParty"&&!isAws(provider)&&(model==="claude-opus-4-6"||model==="claude-sonnet-4-6"||model.includes("haiku"))'],
+      ['provider helper', 'isThirdParty()&&(model==="claude-opus-4-6"||model==="claude-sonnet-4-6"||model.includes("haiku"))'],
+      ['provider helper with haiku exemption (v2.1.293+)', 'isThirdParty()&&(model==="claude-opus-4-6"||model==="claude-sonnet-4-6"||model.includes("haiku")&&model!=="claude-haiku-5-5")'],
+      ['provider helper with future exclusions', 'isThirdParty()&&(model==="claude-opus-4-6"||model==="claude-sonnet-4-6"||model.includes("haiku")&&model!=="claude-haiku-5-5"&&!isExcluded(model))'],
+    ]) {
+      const source = requiredRuntime + `function isThirdParty(){return provider!=="firstParty"&&!isAws(provider)}function isAws(value){return value==="anthropicAws"}function supports(model){if(${condition})return!1;return!0}`;
+      const target = join(testDir, graph ? 'bunfs/auto-mode.js' : 'cli.original.cjs');
+      if (graph) writeFileSync(join(testDir, 'cli.original.cjs'), '// entry');
+      writeFileSync(target, source);
+      const output = execFileSync(process.execPath, [join(testDir, 'patch.mjs')], { encoding: 'utf8' });
+      assert.match(output, /Auto-mode unlock for third-party API \(inline gate\) \(1 replacement in 1 file\)/, label);
+      const patched = readFileSync(target, 'utf8');
+      for (const toggle of [false, true]) {
+        for (const provider of ['firstParty', 'anthropicAws', 'proxy']) {
+          const context = { provider, __clawgodPatches: { 'auto-mode-inline-gate': toggle } };
+          const result = runInNewContext(`${patched};supports("claude-sonnet-4-6")`, context);
+          assert.equal(result, toggle || provider !== 'proxy', `${label}: ${provider}, toggle ${toggle}`);
+        }
+      }
+    }
+  }
+} finally {
+  rmSync(testDir, { recursive: true, force: true });
+}
+console.log('[patch.test] ultraplan bundle/graph compatibility and toggle semantics ok');
+console.log('[patch.test] auto-mode provider gate compatibility and toggle semantics ok');
+
+const promptDir = mkdtempSync(join(tmpdir(), 'clawgod-prompt-hook-test-'));
+try {
+  for (const name of patchFiles) {
+    copyFileSync(new URL(`../shared/${name}`, import.meta.url), join(promptDir, name));
+  }
+  writeFileSync(join(promptDir, 'system-prompt.md'), 'Fixture role.\n');
+  writeFileSync(join(promptDir, 'pathmap.json'), JSON.stringify(Object.fromEntries(
+    ['assembly.js', 'legacy.js'].map(name => [`/$bunfs/root/${name}`, { path: `bunfs/${name}`, loader: 'js' }]),
+  )));
+  const central = 'function combine(defaultSystemPrompt,appendSystemPrompt,replaceSystemPrompt){' +
+    'const index=replaceSystemPrompt?defaultSystemPrompt.indexOf(replaceSystemPrompt):-1;' +
+    'if(index<0)return[...defaultSystemPrompt,...split(appendSystemPrompt)];' +
+    'return[...defaultSystemPrompt.slice(0,index),...split(appendSystemPrompt),...defaultSystemPrompt.slice(index+1)]}';
+  const legacy = 'function legacy({customSystemPrompt,appendSystemPrompt,defaultSystemPrompt}){' +
+    'return{prompt:defaultSystemPrompt,servesDefault:true}}';
+  const authority = {
+    runtime: requiredRuntime,
+    identity: 'function identity(){return "You are Claude Code. Keep specialist duties."}',
+    prefix: 'function* query(messages,system){return wire(system,true,{skipGlobalCacheForSystemPrompt:false})}',
+    summary: 'function compact(content){return message({content,isCompactSummary:true})}',
+    request: 'class Messages{create(body,options){return this._client.post("/v1/messages",{body,...options})}}',
+    snapshot: 'function snapshot(history,current,{stamp}){const saved=loadSnapshot(history);' +
+      'if(saved)return{systemPrompt:saved.systemPrompt,source:"from_snapshot",snapshotHash:saved.systemPromptHash};' +
+      'return{systemPrompt:current,source:"live_recorded",snapshotHash:fingerprint(current),' +
+      'record:record({type:"prompt_snapshot",systemPrompt:current},stamp)}}',
+    extraBody: 'function extraBody(){const raw=process.env.CLAUDE_CODE_EXTRA_BODY;let body={};' +
+      'if(raw)try{body=JSON.parse(raw)}catch{}return body}',
+    base: 'function select(custom,fallback){return typeof custom==="string"?split(custom):Array.isArray(custom)?custom:fallback}',
+    defaults: 'function defaults(sections,excluded){return sections.filter(section=>' +
+      '(section.scope==="shared"||section.scope==="session")&&section.text!==excluded)}',
+    sections: 'function sections(lean){return lean?[["lean_body","Combined."]]:' +
+      '[["intro","Host identity."],["doing_tasks","Host workflow."],["tools","Tool protocol."],["tone","Host style."]]}',
+    modelGuidance: 'function catalogGuidance(models){return models.join(", ")}' +
+      'function environmentText(models){return[catalogGuidance(models),"Runtime details."].filter(value=>value!==null).join("\\n")}' +
+      'const renderers={latestModels:models=>environmentText(models)};',
+    context: 'function context({customSystemPrompt,tools,mainLoopModel}){' +
+      'return{defaultSystemPrompt:customSystemPrompt?[]:["Runtime."],userContext:{cwd:"/fixture"},systemContext:{model:mainLoopModel}}}',
+  };
+  const run = (...args) => spawnSync(process.execPath, [join(promptDir, 'patch.mjs'), ...args], {
+    encoding: 'utf8', timeout: 30000,
+  });
+  for (const graph of [false, true]) {
+    if (graph) mkdirSync(join(promptDir, 'bunfs'));
+    const entry = join(promptDir, 'cli.original.cjs');
+    const target = graph ? join(promptDir, 'bunfs/assembly.js') : entry;
+    const fallback = graph ? join(promptDir, 'bunfs/legacy.js') : entry;
+    const paths = graph ? [entry, target, fallback] : [entry];
+    const readSources = () => Object.fromEntries(paths.map(path => [path, readFileSync(path, 'utf8')]));
+    for (const scenario of ['primary', 'fallback', 'missing', ...Object.keys(authority).map(id => `missing:${id}`)]) {
+      const requiredSource = Object.entries(authority).filter(([id]) => scenario !== `missing:${id}`)
+        .map(([, source]) => source).join('\n');
+      const primarySource = scenario === 'missing' ? 'function userType(){return"external"}' :
+        scenario === 'fallback' ? '' : central + '\n' + requiredSource;
+      const fallbackSource = scenario === 'missing' ? '' : legacy +
+        (scenario === 'fallback' ? '\n' + requiredSource : '');
+      if (graph) {
+        writeFileSync(entry, '');
+        writeFileSync(target, primarySource);
+        writeFileSync(fallback, fallbackSource);
+      } else writeFileSync(entry, primarySource + '\n' + fallbackSource);
+      const before = readSources();
+      const result = run();
+      const label = `${graph ? 'graph' : 'bundle'}: ${scenario}`;
+      assert.ok(Number.isInteger(result.status), result.error?.message || label);
+      if (scenario.startsWith('missing')) {
+        assert.notEqual(result.status, 0, label);
+        assert.match(result.stdout, /required runtime hook did not match/);
+        assert.deepEqual(readSources(), before,
+          `${label}: a required hook failure must not partially write other patches`);
+        continue;
+      }
+      assert.equal(result.status, 0, `${label}: ${result.stderr}`);
+      const patched = readSources();
+      let injections = 0;
+      const functions = runInNewContext(`${patched[target]}\n${graph ? patched[fallback] : ''}\n` +
+        '({combine:typeof combine==="function"?combine:undefined,legacy,select,defaults,sections,context})', {
+        split: value => value ? [value] : [],
+        __clawgodAssembly: { customPrompt: 'Fixture rules.', requireCustomPrompt: true },
+        __clawgodHelpers: { selectApplicationPrompt, filterDefaultPromptSections, rewritePromptAssembly: sections => {
+          injections++;
+          return ['Fixture injected.', ...sections];
+        } },
+      });
+      if (scenario === 'primary') {
+        assert.match(patched[fallback], /rewritePromptAssembly/, `${label}: legacy entry points must also be covered`);
+        assert.deepEqual(Array.from(functions.combine(['Header.'], 'Append.')), ['Fixture injected.', 'Header.', 'Append.']);
+        assert.deepEqual(Array.from(functions.legacy({ defaultSystemPrompt: ['Header.'] }).prompt), ['Fixture injected.', 'Header.']);
+      } else {
+        assert.deepEqual(Array.from(functions.legacy({ defaultSystemPrompt: ['Header.'] }).prompt), ['Fixture injected.', 'Header.']);
+        assert.match(result.stdout, /1 legacy-assembly/);
+      }
+      assert.equal(injections, scenario === 'primary' ? 2 : 1, `${label}: each assembly entry point injects once`);
+      const selected = functions.select('Custom override.', ['Tool protocol.']);
+      assert.match(selected[0], /\nFixture rules\.\n<!-- \/clawgod:custom-prompt -->$/);
+      assert.deepEqual(selected.slice(1), ['Tool protocol.']);
+      const kept = functions.defaults([
+        { id: 'intro', scope: 'shared', text: 'Host identity.' },
+        { id: 'tools', scope: 'shared', text: 'Tool protocol.' },
+        { id: 'runtime', scope: 'session', text: 'Runtime.' },
+      ], 'Excluded.');
+      assert.deepEqual(Array.from(kept, section => section.id), ['tools', 'runtime']);
+      assert.deepEqual(Array.from(functions.sections(true), section => section[0]), ['intro', 'doing_tasks', 'tools', 'tone']);
+      const context = functions.context({ customSystemPrompt: 'Custom override.', tools: [], mainLoopModel: 'fixture-model' });
+      assert.deepEqual(Array.from(context.defaultSystemPrompt), ['Runtime.']);
+      assert.equal(context.userContext.cwd, '/fixture');
+      assert.equal(context.systemContext.model, 'fixture-model');
+      const repeated = run();
+      assert.equal(repeated.status, 0, repeated.stderr);
+      assert.deepEqual(readSources(), patched, `${label}: repatching is idempotent`);
+      if (scenario === 'primary') {
+        assert.equal(run('--verify').status, 0, `${label}: verify accepts fully patched source`);
+        writeFileSync(target, patched[target] + '\nconst addedDescription="Restart Claude Code after setup.";');
+        const unpatched = readSources();
+        const verification = run('--verify');
+        assert.notEqual(verification.status, 0, `${label}: verify must reject newly introduced branding sites`);
+        assert.match(verification.stderr, /Unpatched application prompt sites: cli-branding/);
+        assert.deepEqual(readSources(), unpatched, 'verification must not modify sources');
+      }
+    }
+  }
+} finally {
+  rmSync(promptDir, { recursive: true, force: true });
+}
+console.log('[patch.test] pentest rules and prompt hooks ok');
+
+const privacyDir = mkdtempSync(join(tmpdir(), 'clawgod-wiggly-dove-test-'));
+const fixtures = [
+  ['2.1.299', 'rw', 'mm'],
+  ['2.1.301', 'tw', 'pm'],
+  ['2.1.303', 'aw', '_m'],
+  ['renamed', '$flag', '$gate'],
+];
+function privacyFixture(version, flag, check) {
+  return requiredRuntime + `var ${flag}="tengu_wiggly_dove";var other="tengu_other";` +
+    'function neighbor(){if(!isFirstParty())return!1;if(!feature(other,!1))return!1;return routeAllowed()}' +
+    `function ${check}(){if(!isFirstParty())return!1;if(!feature(${flag},!1))return!1;return routeAllowed()}` +
+    `async function collect(){if(!${check}())return;return 'jy="'+readOrigin()+'", ob="${version}"'}` +
+    'function header(value){if(value===void 0)return{};return{"x-claude-code-wiggly-dove":value}}' +
+    'async function buildRequest(){return{headers:{"x-unrelated":"preserved",...header(await collect())},body:{messages:[{role:"user",content:"hello"}]}}}';
+}
+try {
+  for (const name of patchFiles) {
+    copyFileSync(new URL(`../shared/${name}`, import.meta.url), join(privacyDir, name));
+  }
+  writeFileSync(join(privacyDir, 'pathmap.json'), JSON.stringify({
+    '/$bunfs/root/privacy.js': { path: 'bunfs/privacy.js', loader: 'js' },
+  }));
+  let lastPatched;
+  for (const graph of [false, true]) {
+    if (graph) mkdirSync(join(privacyDir, 'bunfs'));
+    const target = join(privacyDir, graph ? 'bunfs/privacy.js' : 'cli.original.cjs');
+    if (graph) writeFileSync(join(privacyDir, 'cli.original.cjs'), '// graph entry');
+    for (const [version, flag, check] of fixtures) {
+      const source = privacyFixture(version, flag, check);
+      writeFileSync(target, source);
+      const output = execFileSync(process.execPath, [join(privacyDir, 'patch.mjs')], { encoding: 'utf8' });
+      assert.match(output, /Block wiggly-dove Git\/environment collection \(1 replacement in 1 file\)/);
+      const patched = readFileSync(target, 'utf8');
+      assert.equal(patched, source.replace(`function ${check}(){`,
+        `function ${check}(){;if(globalThis.__clawgodPatches?.["wiggly-dove"]!==!1)return !1;`));
+      execFileSync(process.execPath, [join(privacyDir, 'patch.mjs')]);
+      assert.equal(readFileSync(target, 'utf8'), patched, 'repatch without a snapshot is idempotent');
+      for (const toggle of [undefined, true, false]) {
+        for (const firstParty of [false, true]) {
+          for (const upstreamFlag of [false, true]) {
+            for (const route of [false, true]) {
+              let reads = 0, evaluations = 0;
+              const result = await runInNewContext(`${patched};buildRequest()`, {
+                ...(toggle === undefined ? {} : { __clawgodPatches: { 'wiggly-dove': toggle } }),
+                isFirstParty: () => firstParty,
+                feature: (key) => { assert.equal(key, 'tengu_wiggly_dove'); evaluations++; return upstreamFlag; },
+                routeAllowed: () => route,
+                readOrigin: () => { reads++; return 'git.example.test/team/private-repo'; },
+              });
+              const expected = toggle === false && firstParty && upstreamFlag && route;
+              assert.equal(reads, Number(expected), 'blocked before collecting Git metadata');
+              assert.equal(evaluations, Number(toggle === false && firstParty), 'does not consult the rollout when blocked');
+              assert.equal('x-claude-code-wiggly-dove' in result.headers, expected);
+              assert.equal(result.headers['x-unrelated'], 'preserved');
+              assert.equal(JSON.stringify(result.body), '{"messages":[{"role":"user","content":"hello"}]}');
+            }
+          }
+        }
+      }
+      lastPatched = patched;
+    }
+    writeFileSync(target, requiredRuntime + '// no wiggly-dove in this version');
+    execFileSync(process.execPath, [join(privacyDir, 'patch.mjs')]);
+    for (const declaration of ['var', 'let', 'const']) {
+      const stale = requiredRuntime + `function userType(){return"external"}${declaration} flag="tengu_wiggly_dove";function changed(){return feature(flag,!1)}`;
+      writeFileSync(target, stale);
+      const result = spawnSync(process.execPath, [join(privacyDir, 'patch.mjs')], { encoding: 'utf8' });
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /Block wiggly-dove Git\/environment collection — AST matcher stale/);
+      assert.match(result.stdout, /skipped, upstream behavior kept/);
+      const output = readFileSync(target, 'utf8');
+      assert.match(output, /return\s*"ant"/);
+      assert.ok(output.includes(stale.slice(stale.indexOf(declaration))), 'unmatched collector remains unchanged');
+    }
+  }
+
+  const received = [];
+  const server = createServer((req, res) => {
+    let body = '';
+    req.setEncoding('utf8');
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => { received.push({ headers: req.headers, body }); res.end('ok'); });
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    for (const toggle of [undefined, true, false]) {
+      const outgoing = await runInNewContext(`${lastPatched};buildRequest()`, {
+        ...(toggle === undefined ? {} : { __clawgodPatches: { 'wiggly-dove': toggle } }),
+        isFirstParty: () => true, feature: () => true, routeAllowed: () => true,
+        readOrigin: () => 'git.example.test/team/private-repo',
+      });
+      await new Promise((resolve, reject) => {
+        const req = request({ hostname: '127.0.0.1', port: server.address().port,
+          method: 'POST', headers: outgoing.headers, agent: false }, res => { res.resume(); res.on('end', resolve); });
+        req.on('error', reject);
+        req.setTimeout(5000, () => req.destroy(new Error('loopback capture timed out')));
+        req.end(JSON.stringify(outgoing.body));
+      });
+      const captured = received.at(-1);
+      assert.equal('x-claude-code-wiggly-dove' in captured.headers, toggle === false);
+      assert.equal(captured.headers['x-unrelated'], 'preserved');
+      assert.equal(captured.body, JSON.stringify(outgoing.body));
+      if (toggle === false) assert.match(captured.headers['x-claude-code-wiggly-dove'], /git\.example\.test\/team\/private-repo/);
+      else assert.ok(!JSON.stringify(captured).includes('git.example.test'));
+    }
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+} finally {
+  rmSync(privacyDir, { recursive: true, force: true });
+}
+console.log('[patch.test] wiggly-dove collection, request capture, toggles, idempotence, and stale gates ok');

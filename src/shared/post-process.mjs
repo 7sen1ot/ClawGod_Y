@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, unlinkSync, existsSync, realpathSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { parse } from './acorn.mjs';
+import { parse, tokenizer } from './acorn.mjs';
 import { applyAstEdits, walk } from './ast-helpers.mjs';
 
 const here = realpathSync.native(dirname(fileURLToPath(import.meta.url)));
@@ -23,7 +23,21 @@ function fixFileURLs(c) {
 }
 
 function fixAssetRequires(c, assets) {
-  if (!c.includes('require')) return c;
+  if (!c.includes('import') || !c.includes('require') && !/\\(?:u(?:[\da-f]{4}|\{)|x[\da-f]{2})/i.test(c)) return c;
+  // Token values cover comments, whitespace, escaped names and bracket access.
+  // Complex accesses still use the AST path; plain module requires need no rewrite.
+  let candidate = false;
+  try {
+    const tokens = tokenizer(c, { ecmaVersion: 'latest', sourceType: 'module' });
+    let previous;
+    for (;;) {
+      const token = tokens.getToken();
+      if (token.type.label === 'eof') break;
+      if (previous === 'import' && token.type.label === '.') { candidate = true; break; }
+      previous = token.type.label;
+    }
+  } catch { candidate = true; }
+  if (!candidate) return c;
   const marker = '/*clawgod:asset-require*/';
   const isRequire = node => node?.type === 'MemberExpression' &&
     (node.computed ? node.property.value === 'require' : node.property.name === 'require') &&
@@ -95,9 +109,11 @@ if (isChunked) {
   unlinkSync(src);
 
   for (const fp of graphFiles) {
-    writeFileSync(fp, rewriteGraph(stripPragma(readFileSync(fp, 'utf8'))));
+    const original = readFileSync(fp, 'utf8');
+    const rewritten = rewriteGraph(stripPragma(original));
+    if (rewritten !== original) writeFileSync(fp, rewritten);
   }
-  console.log(`cli.original.cjs: ${code.length} bytes (chunked, rewrote ${graphFiles.size} graph files)`);
+  console.log(`cli.original.cjs: ${code.length} bytes (chunked, processed ${graphFiles.size} graph files)`);
 } else {
   code = code.replace(
     /require\(['"](\/\$bunfs\/root\/([\w-]+)\.node)['"]\)/g,

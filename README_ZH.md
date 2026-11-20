@@ -4,7 +4,6 @@
 
 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 上帝模式。
 
-[![Node.js](https://img.shields.io/badge/Node.js-18%2B-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![Bun](https://img.shields.io/badge/Bun-1.3.14%2B-000000?logo=bun&logoColor=white)](https://bun.sh/)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-555)](#使用方法)
 [![License](https://img.shields.io/badge/License-GPL_v3-orange)](./LICENSE)
@@ -33,23 +32,22 @@ ClawGod_Y 是针对官方 [Claude Code](https://docs.anthropic.com/en/docs/claud
 | 项目 | 要求 |
 | --- | --- |
 | 主机 | Windows、macOS 或 Linux/WSL |
-| 安装器 | Node.js 18 或更高版本（含 npm）；在交互式终端中运行 |
-| 本地运行时 | Bun 1.3.14 或更高版本（缺失时自动安装）及 ripgrep（`rg`） |
-| Windows | PowerShell 5.1 或更高版本，且可用的 `tar` |
-| macOS / Linux / WSL | Bash、`curl` 和 `tar`；自动安装 Bun 还需要 `unzip` |
+| 运行时 | Bun 1.3.14 或更高版本（缺失时自动安装）及 ripgrep（`rg`） |
+| Windows | PowerShell 5.1 或更高版本 |
+| macOS / Linux / WSL | Bash 和 `curl`。自动安装 Bun 还需要 `unzip`。 |
 
 ### 安装
 
 **macOS / Linux / WSL：**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/7sen1ot/ClawGod_Y/main/install.sh | bash -s --
+curl -fsSL https://github.com/7sen1ot/ClawGod_Y/releases/latest/download/install.sh|bash
 ```
 
 **Windows PowerShell：**
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/7sen1ot/ClawGod_Y/main/install.ps1)))
+irm https://github.com/7sen1ot/ClawGod_Y/releases/latest/download/install.ps1|iex
 ```
 
 默认安装 Claude Code `2.1.322`。如需选择其他版本，在上述命令末尾追加 `latest`、`stable` 或具体版本号。
@@ -82,7 +80,7 @@ clawgod --uninstall
 
 如果 `clawgod` 无法启动，**macOS / Linux / WSL** 可运行 `bash "$HOME/.clawgod/uninstall.sh"`；**Windows PowerShell** 可运行 `powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.clawgod\uninstall.ps1"`。
 
-卸载会移除 `clawgod` 启动器、主要运行时文件及独立的 `~/.clawgod/lean-settings.json`，不修改 `~/.claude/settings.json`。`provider.json`、`features.json` 等配置及部分文件会保留，`~/.clawgod` 目录不会整体删除。
+卸载会移除 `clawgod` 启动器、运行时文件和 `~/.clawgod/lean-settings.json`。`~/.clawgod` 下缓存的卸载脚本及已有的 `provider.json`、`features.json`、`patches.json`、`assembly.json`、`flags.json` 都会保留。官方 Claude 的 `~/.claude/settings.json` 也会保留。
 
 ## 安全范围
 

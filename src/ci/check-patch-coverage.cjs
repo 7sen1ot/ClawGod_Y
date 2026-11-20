@@ -1,16 +1,25 @@
 const { readFileSync } = require('node:fs');
+const { upstreamPatches } = require('../shared/patch-rules.mjs');
 
-const [logPath, platform] = process.argv.slice(2);
+const [logPath, platform, versionArg] = process.argv.slice(2);
 if (!logPath || !['linux', 'macos', 'windows'].includes(platform)) {
-  throw new Error('Usage: node check-patch-coverage.cjs <install-log> <linux|macos|windows>');
+  throw new Error('Usage: bun check-patch-coverage.cjs <install-log> <linux|macos|windows> [claude-version]');
 }
+
+const bytes = readFileSync(logPath);
+const log = bytes.toString(bytes[0] === 0xff && bytes[1] === 0xfe ? 'utf16le' : 'utf8')
+  .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
+const start = log.lastIndexOf('Mode: APPLY');
+const installedVersion = versionArg && /^\d+\.\d+\.\d+$/.test(versionArg)
+  ? versionArg
+  : log.slice(0, start).match(/Target: cli\.original\.cjs \(v(\d+\.\d+\.\d+)\)[^\n]*\s*$/)?.[1];
+const ranges = new Map(upstreamPatches.filter(p => p.versions).map(p => [p.name, p.versions]));
 
 // Known gaps in Claude 2.1.316: actions/runs/41206844027, also shared by stable 2.1.309.
 const baseline = new Map([
   ['Computer Use gate (resolved configuration contract)', 'absent'],
   ['Neutralize geo-steganography in date string (qla)', 'unverified'],
   ['Skip MCP server allowlist / policy checks', 'absent'],
-  ['Ultrareview enable (direct literal, <=2.1.213)', 'absent'],
   ['Computer Use gate bypass', 'unverified'],
   ['Auto-mode unlock for third-party API (provider helper gate)', 'absent'],
   ['macOS Cmd+V image paste fallback to clipboard read', 'stale'],
@@ -18,17 +27,14 @@ const baseline = new Map([
   ['Neutralize geo-detection probe (rdp)', 'unverified'],
   ['Neutralize apostrophe steganography (odp)', 'absent'],
   ['Remove cautious actions section', 'unverified'],
-  ['Message list filter bypass (legacy ternary)', 'absent'],
 ]);
+if (installedVersion && Bun.semver.satisfies(installedVersion, '>=2.1.214'))
+  baseline.set('Message list filter bypass (legacy ternary)', 'absent');
 if (platform !== 'macos') {
   baseline.set('Computer Use default enabled', 'unverified');
   baseline.set('Computer Use subscription bypass', 'unverified');
 }
 
-const bytes = readFileSync(logPath);
-const log = bytes.toString(bytes[0] === 0xff && bytes[1] === 0xfe ? 'utf16le' : 'utf8')
-  .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
-const start = log.lastIndexOf('Mode: APPLY');
 const summary = start < 0 ? null : log.slice(start)
   .match(/Result:\s*(\d+) applied,\s*(\d+) skipped,\s*(\d+) failed/);
 if (!summary) throw new Error('Patch APPLY result is missing from the install log');
@@ -51,6 +57,9 @@ for (const raw of body.split(/\r?\n/)) {
   records++;
   observed[icon === '✅' ? 'applied' : icon === '❌' ? 'failed' : 'skipped']++;
   if (icon === '✅' || / \(covered by applied rule: [\w-]+\)$/.test(message)) continue;
+  const outOfRange = message.match(/^(.*) \(outside supported versions: (.+)\)$/);
+  if (icon === '⏭' && outOfRange && installedVersion && ranges.get(outOfRange[1]) === outOfRange[2] &&
+      !Bun.semver.satisfies(installedVersion, outOfRange[2])) continue;
   if (icon === '❌') {
     errors.push(message);
     continue;

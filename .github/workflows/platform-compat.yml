@@ -18,14 +18,11 @@ jobs:
       matrix:
         os: [ubuntu-24.04-arm, macos-26-intel]
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          node-version: 24
-          package-manager-cache: false
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: canary
+          bun-version-file: .bun-version
+      - run: bun run build
       - name: Install ripgrep
         shell: bash
         run: |
@@ -40,30 +37,31 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version=$(node -p 'require("fs").readFileSync("src/templates/install.sh","utf8").match(/^VERSION="([\d.]+)"$/m)[1]')
+          version=$(bun -e 'console.log(require("fs").readFileSync("src/templates/install.sh","utf8").match(/^VERSION="([\d.]+)"$/m)[1])')
           bash install.sh "$version"
           [[ "$(cat "$HOME/.clawgod/.source-version")" == "$version" ]]
           [[ "$("$HOME/.clawgod/claude.fallback" --version)" == "$version (Claude Code)" ]]
           "$HOME/.local/bin/clawgod" --version
-          node "$HOME/.clawgod/startup-check.cjs" "$(command -v bun)" "$HOME/.clawgod/cli.cjs" --probe-tools
+          bun "$HOME/.clawgod/startup-check.cjs" "$(command -v bun)" "$HOME/.clawgod/cli.cjs" --probe-tools
 
   musl:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Install and probe on Alpine musl
         shell: bash
         run: |
-          docker run --rm -i -v "$GITHUB_WORKSPACE:/workspace" -w /workspace oven/bun:canary-alpine sh <<'SH'
+          docker run --rm -i -v "$GITHUB_WORKSPACE:/workspace" -w /workspace "oven/bun:$(cat .bun-version)-alpine" sh <<'SH'
           set -eu
-          apk add --no-cache bash nodejs npm ripgrep coreutils
+          apk add --no-cache bash ripgrep coreutils
           bash -eu <<'BASH'
-          version=$(node -p 'require("fs").readFileSync("src/templates/install.sh","utf8").match(/^VERSION="([\d.]+)"$/m)[1]')
+          bun run build
+          version=$(bun -e 'console.log(require("fs").readFileSync("src/templates/install.sh","utf8").match(/^VERSION="([\d.]+)"$/m)[1])')
           bash install.sh "$version"
           [[ "$(cat "$HOME/.clawgod/.source-version")" == "$version" ]]
           [[ "$("$HOME/.clawgod/claude.fallback" --version)" == "$version (Claude Code)" ]]
           "$HOME/.local/bin/clawgod" --version
-          node "$HOME/.clawgod/startup-check.cjs" "$(command -v bun)" "$HOME/.clawgod/cli.cjs" --probe-tools
+          bun "$HOME/.clawgod/startup-check.cjs" "$(command -v bun)" "$HOME/.clawgod/cli.cjs" --probe-tools
           BASH
           SH
