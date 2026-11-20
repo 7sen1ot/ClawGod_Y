@@ -19,8 +19,11 @@ jobs:
   build-import:
     uses: ./.github/workflows/build-import.yml
 
+  extended-platforms:
+    uses: ./.github/workflows/platform-compat.yml
+
   release:
-    needs: [compat, build-import]
+    needs: [compat, extended-platforms, build-import]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

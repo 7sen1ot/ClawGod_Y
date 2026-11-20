@@ -6,28 +6,16 @@ on:
       installer_checks:
         type: boolean
         default: true
-  push:
-    branches: [main]
-    paths:
-      - src/shared/openai-proxy.cjs
-      - src/tests/openai-proxy*.test.mjs
-      - package.json
-      - .bun-version
-      - .github/workflows/installer-checks.yml
-  pull_request:
-    paths:
-      - src/shared/openai-proxy.cjs
-      - src/tests/openai-proxy*.test.mjs
-      - package.json
-      - .bun-version
-      - .github/workflows/installer-checks.yml
+      proxy_checks:
+        type: boolean
+        default: true
 
 permissions:
   contents: read
 
 jobs:
   proxy:
-    if: ${{ !inputs.installer_checks }}
+    if: inputs.proxy_checks && !inputs.installer_checks
     runs-on: ${{ matrix.os }}
     timeout-minutes: 5
     strategy:
@@ -39,6 +27,8 @@ jobs:
         with:
           bun-version-file: .bun-version
       - run: bun run test:proxy
+      - name: Check prompt transport through the proxy
+        run: bun test ./src/tests/prompt-request.integration.test.mjs
 
   lifecycle:
     if: inputs.installer_checks
@@ -66,9 +56,11 @@ jobs:
         run: |
           bun src/tests/startup-check.test.mjs
           bun src/tests/post-process.test.mjs
-      - name: Check Chat Completions on scheduled, manual and release runs
-        if: matrix.bun == '' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/'))
-        run: bun run test:proxy
+      - name: Check proxy and prompt transport
+        if: matrix.bun == '' && inputs.proxy_checks
+        run: |
+          bun run test:proxy
+          bun test ./src/tests/prompt-request.integration.test.mjs
       - name: Check the renderer shim under Bun on Unix
         if: runner.os != 'Windows' && matrix.bun == ''
         run: bun src/tests/bun-ant-shim.test.mjs

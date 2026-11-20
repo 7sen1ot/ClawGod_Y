@@ -3,6 +3,17 @@ name: Build clawgod-import
 on:
   workflow_call:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - tools/provider-import/**
+      - '!tools/provider-import/**/*.md'
+      - .github/workflows/build-import.yml
+  pull_request:
+    paths:
+      - tools/provider-import/**
+      - '!tools/provider-import/**/*.md'
+      - .github/workflows/build-import.yml
 
 permissions:
   contents: read
