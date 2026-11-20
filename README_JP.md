@@ -4,7 +4,7 @@
 
 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) ゴッドモード。
 
-[![Bun](https://img.shields.io/badge/Bun-1.3.14%2B%20(%E5%94%B1%E4%B8%80%E3%83%A9%E3%83%B3%E3%82%BF%E3%82%A4%E3%83%A0)-000000?logo=bun&logoColor=white)](https://bun.sh/)
+[![Bun](https://img.shields.io/badge/Bun-1.3.14%2B-000000?logo=bun&logoColor=white)](https://bun.sh/)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-555)](#使用方法)
 [![License](https://img.shields.io/badge/License-GPL_v3-orange)](./LICENSE)
 
@@ -32,7 +32,7 @@ ClawGod_Y は公式 [Claude Code](https://docs.anthropic.com/en/docs/claude-code
 | 項目 | 要件 |
 | --- | --- |
 | ホスト | Windows、macOS、または Linux/WSL |
-| ランタイム | Bun 1.3.14 以降（唯一のランタイム。未検出時は自動インストール）と ripgrep（`rg`） |
+| ランタイム | Bun 1.3.14 以降（未検出時は自動インストール）と ripgrep（`rg`） |
 | Windows | PowerShell 5.1 以降 |
 | macOS / Linux / WSL | Bash と `curl`。Bun の自動インストールには `unzip` も必要です。 |
 

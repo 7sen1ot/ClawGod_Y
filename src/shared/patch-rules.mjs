@@ -34,8 +34,8 @@ export const upstreamPatches = [
   {
     id: 'terminal-reply-fragments',
     name: 'Preserve split terminal replies while a DA1 probe is pending',
-    // 2.1.327 reads the clock before the retry guard. Reuse the timestamp passed to the flush.
-    pattern: /(if\(this\.props\.stdin\.readableLength>0(?:\|\|this\.querier\?\.owed\(\)&&[\w$]+<this\.querier\.repliesDueBy)?\)\{this\.incompleteEscapeTimer=setTimeout\(this\.flushIncomplete,[\w$]+\);return\}(?:let [\w$]+=performance\.now\(\);)?)(this\.applyKeysRead\([\w$]+\(this\.keyReader,([\w$]+)\),\3\)\})/g,
+    // Match the retry block, not its condition (rewritten in 2.1.329), and reuse the flush timestamp.
+    pattern: /(\{this\.incompleteEscapeTimer=setTimeout\(this\.flushIncomplete,[\w$]+\);return\}(?:let [\w$]+=performance\.now\(\);)?)(this\.applyKeysRead\([\w$]+\(this\.keyReader,([\w$]+)\),\3\)\})/g,
     replacer: (m, prefix, suffix, now) => prefix +
       `const _clawgodReplyDelay=globalThis.__clawgodHelpers?.terminalReplyDelay?.(this.querier,this.keyReader,${now})??0;` +
       'if(_clawgodReplyDelay>0){this.incompleteEscapeTimer=setTimeout(this.flushIncomplete,_clawgodReplyDelay);return}' + suffix,
@@ -106,8 +106,8 @@ export const upstreamPatches = [
     pattern: /function ([\w$]+)\(\)\{let [\w$]+=[\w$]+\(\);return [\w$]+==="max"\|\|[\w$]+==="pro"\}/g,
     replacer: (m, fn) => `function ${fn}(){if(${gate('computer-use-sub')})return!0;` + m.slice(`function ${fn}(){`.length, -1) + `}`,
     fallbacks: [{
-      // 2.1.328 checks organization policy before the individual subscription tier.
-      pattern: /(function [\w$]+\(\)\{if\([\w$]+\(\)\)return [\w$]+\([\w$]+\)===!0&&![\w$]+\(\);let ([\w$]+)=[\w$]+\(\);)return (\2==="max"\|\|\2==="pro")\}/g,
+      // Preserve organization policy, including the app-list readability check added in 2.1.329.
+      pattern: /(function [\w$]+\(\)\{if\([\w$]+\(\)\)return [\w$]+\([\w$]+\)===!0&&![\w$]+\(\)(?:&&[\w$]+\(\)\.readable)?;let ([\w$]+)=[\w$]+\(\);)return (\2==="max"\|\|\2==="pro")\}/g,
       nodeType: ['FunctionDeclaration', 'FunctionExpression'],
       replacer: (m, prefix, tier, result) => `${prefix}return ${gate('computer-use-sub')}||(${result})}`,
     }],

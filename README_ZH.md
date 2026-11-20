@@ -4,7 +4,7 @@
 
 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 上帝模式。
 
-[![Bun](https://img.shields.io/badge/Bun-1.3.14%2B%20(%E5%94%AF%E4%B8%80%E8%BF%90%E8%A1%8C%E6%97%B6)-000000?logo=bun&logoColor=white)](https://bun.sh/)
+[![Bun](https://img.shields.io/badge/Bun-1.3.14%2B-000000?logo=bun&logoColor=white)](https://bun.sh/)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-555)](#使用方法)
 [![License](https://img.shields.io/badge/License-GPL_v3-orange)](./LICENSE)
 
@@ -32,7 +32,7 @@ ClawGod_Y 是针对官方 [Claude Code](https://docs.anthropic.com/en/docs/claud
 | 项目 | 要求 |
 | --- | --- |
 | 主机 | Windows、macOS 或 Linux/WSL |
-| 运行时 | Bun 1.3.14 或更高版本（唯一运行时；缺失时自动安装）及 ripgrep（`rg`） |
+| 运行时 | Bun 1.3.14 或更高版本（缺失时自动安装）及 ripgrep（`rg`） |
 | Windows | PowerShell 5.1 或更高版本 |
 | macOS / Linux / WSL | Bash 和 `curl`。自动安装 Bun 还需要 `unzip`。 |
 

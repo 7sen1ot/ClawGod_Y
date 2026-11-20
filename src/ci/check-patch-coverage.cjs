@@ -28,7 +28,7 @@ const baseline = new Map([
   ['Neutralize apostrophe steganography (odp)', 'absent'],
   ['Remove cautious actions section', 'unverified'],
 ]);
-if (installedVersion && Bun.semver.satisfies(installedVersion, '<2.1.214'))
+if (installedVersion && Bun.semver.satisfies(installedVersion, '>=2.1.214'))
   baseline.set('Message list filter bypass (legacy ternary)', 'absent');
 if (platform !== 'macos') {
   baseline.set('Computer Use default enabled', 'unverified');

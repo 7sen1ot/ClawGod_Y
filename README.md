@@ -4,7 +4,7 @@
 
 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) god mode.
 
-[![Bun](https://img.shields.io/badge/Bun-1.3.14%2B%20(sole%20runtime)-000000?logo=bun&logoColor=white)](https://bun.sh/)
+[![Bun](https://img.shields.io/badge/Bun-1.3.14%2B-000000?logo=bun&logoColor=white)](https://bun.sh/)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-555)](#usage)
 [![License](https://img.shields.io/badge/License-GPL_v3-orange)](./LICENSE)
 
@@ -32,7 +32,7 @@ The patch implementation draws on [0Chencc/clawgod](https://github.com/0Chencc/c
 | Item | Requirement |
 | --- | --- |
 | Host | Windows, macOS, or Linux/WSL |
-| Runtime | Bun 1.3.14 or later (sole runtime; installed automatically if missing) and ripgrep (`rg`) |
+| Runtime | Bun 1.3.14 or later (installed automatically if missing) and ripgrep (`rg`) |
 | Windows | PowerShell 5.1 or later |
 | macOS / Linux / WSL | Bash and `curl`. Automatic Bun installation also requires `unzip`. |
 
