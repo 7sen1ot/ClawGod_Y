@@ -43,7 +43,6 @@ permissions:
 
 jobs:
   schedule-gate:
-    if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 1
     outputs:
@@ -53,6 +52,10 @@ jobs:
         env:
           TZ: America/Los_Angeles
         run: |
+          if [[ "$GITHUB_EVENT_NAME" != schedule ]]; then
+            echo 'due=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # Count calendar days from 2026-11-20; do not reset the cycle at month boundaries.
           today=$(date +%F)
           days=$(( ($(date -u -d "$today" +%s) - $(date -u -d '2026-11-20' +%s)) / 86400 ))
@@ -64,7 +67,7 @@ jobs:
 
   build-sources:
     needs: schedule-gate
-    if: ${{ !cancelled() && (github.event_name != 'schedule' || needs.schedule-gate.outputs.due == 'true') }}
+    if: needs.schedule-gate.outputs.due == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -90,7 +93,7 @@ jobs:
 
   installer-checks:
     needs: schedule-gate
-    if: ${{ !cancelled() && (github.event_name != 'schedule' || needs.schedule-gate.outputs.due == 'true') }}
+    if: needs.schedule-gate.outputs.due == 'true'
     uses: ./.github/workflows/installer-checks.yml
 
   smoke:
