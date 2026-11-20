@@ -1,9 +1,10 @@
-name: Compat Daily
+name: Compatibility CI
 
 on:
   workflow_call:
   schedule:
-    - cron: '17 7 * * *'
+    - cron: '0 23 * * *'
+      timezone: America/Los_Angeles
   workflow_dispatch:
   push:
     branches: [main]
@@ -41,7 +42,29 @@ permissions:
   contents: read
 
 jobs:
+  schedule-gate:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    outputs:
+      due: ${{ steps.cadence.outputs.due }}
+    steps:
+      - id: cadence
+        env:
+          TZ: America/Los_Angeles
+        run: |
+          # Count calendar days from 2026-11-20; do not reset the cycle at month boundaries.
+          today=$(date +%F)
+          days=$(( ($(date -u -d "$today" +%s) - $(date -u -d '2026-11-20' +%s)) / 86400 ))
+          if (( days % 3 == 0 )); then
+            echo 'due=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'due=false' >> "$GITHUB_OUTPUT"
+          fi
+
   build-sources:
+    needs: schedule-gate
+    if: ${{ !cancelled() && (github.event_name != 'schedule' || needs.schedule-gate.outputs.due == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -66,6 +89,8 @@ jobs:
           '
 
   installer-checks:
+    needs: schedule-gate
+    if: ${{ !cancelled() && (github.event_name != 'schedule' || needs.schedule-gate.outputs.due == 'true') }}
     uses: ./.github/workflows/installer-checks.yml
 
   smoke:
