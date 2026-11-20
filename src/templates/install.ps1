@@ -10,6 +10,7 @@ $ErrorActionPreference = "Stop"
 $ClawDir = Join-Path $env:USERPROFILE ".clawgod"
 $BinDir  = Join-Path $env:USERPROFILE ".local\bin"
 $ClawSelfVersion = "0.0.0-dev"
+$InstallSourceKey = "{{CLAWGOD:installation-key}}"
 
 function Write-OK($msg)   { Write-Host "  $([char]0x2713) $msg" -ForegroundColor Green }
 function Write-Err($msg)  { Write-Host "  $([char]0x2717) $msg" -ForegroundColor Red }
@@ -108,18 +109,60 @@ if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64" -or $env:PROCESSOR_ARCHITEW6432 -eq 
 $platformSuffix = "win32-$arch"
 
 
+function Copy-VerifiedNative($source, $destination, $requestedVersion, $architecture) {
+    try {
+        $file = Get-Item -LiteralPath $source -ErrorAction Stop
+        if ($file.PSIsContainer -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return }
+        if ($requestedVersion -notin @('latest', 'stable') -and
+            $file.VersionInfo.ProductVersion -notin @($requestedVersion, "$requestedVersion.0")) { return }
+
+        # Check the copy that extraction will read, without executing the candidate.
+        [IO.File]::Copy($source, $destination)
+        $info = [Diagnostics.FileVersionInfo]::GetVersionInfo($destination)
+        if ($info.ProductName -ne 'Claude Code' -or $info.ProductVersion -notmatch '^([0-9]+\.[0-9]+\.[0-9]+)(?:\.0)?$') { return }
+        $productVersion = $Matches[1]
+        $machine = if ($architecture -eq 'arm64') { 0xAA64 } else { 0x8664 }
+        $reader = [IO.BinaryReader]::new([IO.File]::OpenRead($destination))
+        try {
+            if ($reader.ReadUInt16() -ne 0x5A4D) { return }
+            $reader.BaseStream.Position = 0x3C
+            $reader.BaseStream.Position = $reader.ReadUInt32()
+            if ($reader.ReadUInt32() -ne 0x4550 -or $reader.ReadUInt16() -ne $machine) { return }
+        } finally { $reader.Dispose() }
+
+        $signature = Get-AuthenticodeSignature -LiteralPath $destination -ErrorAction Stop
+        if ($signature.Status -eq 'Valid' -and
+            $signature.SignerCertificate.GetNameInfo([Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false) -eq 'Anthropic, PBC') {
+            return $productVersion
+        }
+    } catch { return }
+}
+
 $npmPkg = "@anthropic-ai/claude-code-$platformSuffix"
-Write-Dim "Fetching $npmPkg@$Version from npm registry ..."
+Write-Dim "Preparing $npmPkg@$Version ..."
 $NativeBinTmpDir = Join-Path $env:TEMP "clawgod-binary-$([Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Force -Path $NativeBinTmpDir | Out-Null
+$cachedCopy = Join-Path $NativeBinTmpDir "cached-claude.exe"
+$verifiedVersion = Copy-VerifiedNative (Join-Path $ClawDir "claude.fallback.exe") $cachedCopy $Version $arch
 $fetchScript = Join-Path $NativeBinTmpDir "fetch.mjs"
 @'
 {{CLAWGOD:npm-fetch.mjs}}
 '@ | Set-Content $fetchScript -Encoding UTF8
 
-$output = & $BunBin $fetchScript "$npmPkg@$Version" $NativeBinTmpDir 2>&1
+$cand = Join-Path $NativeBinTmpDir "package\claude.exe"
+$NativeBinLabel = $null
+& $BunBin $fetchScript "$npmPkg@$Version" $NativeBinTmpDir $verifiedVersion | ForEach-Object {
+    if ($verifiedVersion -and $_ -ceq "REUSE=$verifiedVersion") {
+        $cand = $cachedCopy
+        $NativeBinLabel = $verifiedVersion
+        Write-OK "Reusing verified local $npmPkg@$verifiedVersion"
+    } elseif ($_ -match '^VERSION=(.+)$') {
+        $NativeBinLabel = $Matches[1].Trim()
+    } else {
+        Write-Dim $_
+    }
+}
 $exitCode = $LASTEXITCODE
-$output | ForEach-Object { Write-Host "  $_" }
 Remove-Item -Force $fetchScript -ErrorAction SilentlyContinue
 
 if ($exitCode -ne 0) {
@@ -129,24 +172,35 @@ if ($exitCode -ne 0) {
     exit 1
 }
 
-$cand = Join-Path $NativeBinTmpDir "package\claude.exe"
-if ((Test-Path $cand) -and (Get-Item $cand).Length -gt 10MB) {
+if ($NativeBinLabel -and (Test-Path -LiteralPath $cand -PathType Leaf) -and (Get-Item -LiteralPath $cand).Length -gt 10MB) {
     $NativeBin = $cand
-    $verLine = $output | Where-Object { $_ -match '^VERSION=' } | Select-Object -First 1
-    if ($verLine) { $NativeBinLabel = ($verLine -replace '^VERSION=', '').Trim() }
-    else { $NativeBinLabel = "npm-latest" }
 } else {
     Remove-Item -Recurse -Force $NativeBinTmpDir -ErrorAction SilentlyContinue
-    Write-Err "Tarball downloaded but expected package\claude.exe was missing or too small."
+    Write-Err "Could not obtain the selected native executable and its version."
     exit 1
 }
-Write-OK "Downloaded $npmPkg@$NativeBinLabel"
+Write-OK "$npmPkg@$NativeBinLabel ready"
+
+$ReuseProcessed = $false
+try {
+    $cache = Get-Content -LiteralPath (Join-Path $ClawDir '.compiled-runtime-cache.json') -Raw -ErrorAction Stop | ConvertFrom-Json
+    if ($cache.installation.sourceKey -eq $InstallSourceKey) {
+        $reuse = & $BunBin (Join-Path $ClawDir 'compile-runtime.mjs') --check-installation $InstallSourceKey $NativeBinLabel
+        $ReuseProcessed = $LASTEXITCODE -eq 0 -and $reuse -ceq "REUSE=$NativeBinLabel"
+    }
+} catch {}
+if ($ReuseProcessed) { Write-OK "Reusing unchanged processed modules ($NativeBinLabel)" }
 
 $RollbackDir = $null
 $script:RollbackPending = $false
 $RollbackFiles = @(
 {{CLAWGOD:rollback-files}}
 )
+if ($ReuseProcessed) {
+    $RollbackFiles = $RollbackFiles | Where-Object {
+        $_ -notin @('bunfs', 'vendor', 'pathmap.json', 'source-backup.json', 'cli.original.cjs', 'cli.original.cjs.bak')
+    }
+}
 $origCjs = Join-Path $ClawDir "cli.original.cjs"
 $sourceVerFile = Join-Path $ClawDir ".source-version"
 if ((Test-Path $origCjs) -and (Test-Path $sourceVerFile)) {
@@ -207,26 +261,28 @@ $extractorPath = Join-Path $ClawDir "extract-natives.mjs"
 {{CLAWGOD:extract-natives.mjs}}
 '@ | Set-Content $extractorPath -Encoding UTF8
 
-$VendorDir = Join-Path $ClawDir "vendor"
-if (Test-Path $VendorDir) { Remove-Item -Recurse -Force $VendorDir }
+if (-not $ReuseProcessed) {
+    $VendorDir = Join-Path $ClawDir "vendor"
+    if (Test-Path $VendorDir) { Remove-Item -Recurse -Force $VendorDir }
 
-$BunfsDir = Join-Path $ClawDir "bunfs"
-if (Test-Path $BunfsDir) { Remove-Item -Recurse -Force $BunfsDir }
-$PathMap = Join-Path $ClawDir "pathmap.json"
-if (Test-Path $PathMap) { Remove-Item -Force $PathMap }
+    $BunfsDir = Join-Path $ClawDir "bunfs"
+    if (Test-Path $BunfsDir) { Remove-Item -Recurse -Force $BunfsDir }
+    $PathMap = Join-Path $ClawDir "pathmap.json"
+    if (Test-Path $PathMap) { Remove-Item -Force $PathMap }
 
-$dstCli = Join-Path $ClawDir "cli.original.js"
-if (Test-Path $dstCli) { Remove-Item -Force $dstCli }
+    $dstCli = Join-Path $ClawDir "cli.original.js"
+    if (Test-Path $dstCli) { Remove-Item -Force $dstCli }
 
-Write-Dim "Extracting cli.js + napi modules from $NativeBinLabel ..."
-& $BunBin $extractorPath $NativeBin $ClawDir 2>&1 | ForEach-Object { Write-Host "  $_" }
-if (($LASTEXITCODE -ne 0) -or -not (Test-Path $dstCli)) {
-    Write-Err "Failed to extract cli.js from native binary"
-    Restore-Install
-    exit 1
+    Write-Dim "Extracting cli.js + napi modules from $NativeBinLabel ..."
+    & $BunBin $extractorPath $NativeBin $ClawDir 2>&1 | ForEach-Object { Write-Host "  $_" }
+    if (($LASTEXITCODE -ne 0) -or -not (Test-Path $dstCli)) {
+        Write-Err "Failed to extract cli.js from native binary"
+        Restore-Install
+        exit 1
+    }
+
+    Write-Dim "Rewriting bunfs paths and IIFE invocation ..."
 }
-
-Write-Dim "Rewriting bunfs paths and IIFE invocation ..."
 $postProc = Join-Path $ClawDir "post-process.mjs"
 @'
 {{CLAWGOD:post-process.mjs}}
@@ -279,11 +335,13 @@ Write-OK "Bun.ant runtime shim created (bun-ant-shim.cjs)"
 {{CLAWGOD:ast-helpers.mjs}}
 '@ | Set-Content (Join-Path $ClawDir "ast-helpers.mjs") -Encoding UTF8
 
-& $BunBin $postProc 2>&1 | ForEach-Object { Write-Host "  $_" }
-if (($LASTEXITCODE -ne 0) -or -not (Test-Path (Join-Path $ClawDir "cli.original.cjs"))) {
-    Write-Err "Post-process failed"
-    Restore-Install
-    exit 1
+if (-not $ReuseProcessed) {
+    & $BunBin $postProc 2>&1 | ForEach-Object { Write-Host "  $_" }
+    if (($LASTEXITCODE -ne 0) -or -not (Test-Path (Join-Path $ClawDir "cli.original.cjs"))) {
+        Write-Err "Post-process failed"
+        Restore-Install
+        exit 1
+    }
 }
 
 Set-Content -Path (Join-Path $ClawDir ".source-version") -Value $NativeBinLabel -Encoding ASCII
@@ -345,24 +403,26 @@ Set-Content (Join-Path $ClawDir "patch-registry.mjs") $patchRegistryCode -Encodi
 Write-OK "Patcher created (patch.mjs)"
 
 
-Write-Dim "Applying patches ..."
-$patchExitCode = & {
-    $ErrorActionPreference = 'Continue'
-    & $BunBin (Join-Path $ClawDir "patch.mjs") --capture-and-apply 2>&1 | ForEach-Object { Write-Host "  $_" }
-    $LASTEXITCODE
-}
-if ($patchExitCode -ne 0) {
-    $exitCode = $patchExitCode
-    Write-Err "Patching failed (bun exit $exitCode). Installation aborted."
-    Restore-Install
-    if (-not $RollbackDir) {
-        Write-Err "No previous working installation found to roll back."
+if (-not $ReuseProcessed) {
+    Write-Dim "Applying patches ..."
+    $patchExitCode = & {
+        $ErrorActionPreference = 'Continue'
+        & $BunBin (Join-Path $ClawDir "patch.mjs") --capture-and-apply 2>&1 | ForEach-Object { Write-Host "  $_" }
+        $LASTEXITCODE
     }
-    Write-Err ""
-    Write-Err "The selected upstream runtime build ($NativeBinLabel) is not supported by this ClawGod_Y release."
-    Write-Err "Optional unmatched patches are already skipped; required prompt injection and source errors cannot be skipped."
-    Write-Err "Rerun the installer with a compatible upstream runtime version."
-    exit $exitCode
+    if ($patchExitCode -ne 0) {
+        $exitCode = $patchExitCode
+        Write-Err "Patching failed (bun exit $exitCode). Installation aborted."
+        Restore-Install
+        if (-not $RollbackDir) {
+            Write-Err "No previous working installation found to roll back."
+        }
+        Write-Err ""
+        Write-Err "The selected upstream runtime build ($NativeBinLabel) is not supported by this ClawGod_Y release."
+        Write-Err "Optional unmatched patches are already skipped; required prompt injection and source errors cannot be skipped."
+        Write-Err "Rerun the installer with a compatible upstream runtime version."
+        exit $exitCode
+    }
 }
 
 Write-Dim "Compiling startup runtime ..."
@@ -579,6 +639,8 @@ Remove-Item -Force (Join-Path $ClawDir "claude.staged.exe") -ErrorAction Silentl
 Remove-Item -LiteralPath (Join-Path $ClawDir "install.ps1") -Force -ErrorAction SilentlyContinue
 Get-ChildItem -LiteralPath $ClawDir -Filter "claude.fallback.*.exe" -File -ErrorAction SilentlyContinue |
     ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+
+& $BunBin (Join-Path $ClawDir 'compile-runtime.mjs') --record-installation $InstallSourceKey $NativeBinLabel
 
 Write-Host ""
 Write-Host "  ClawGod_Y installed!" -ForegroundColor Green

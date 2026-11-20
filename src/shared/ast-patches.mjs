@@ -316,7 +316,8 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
       const command = names.length === 1 ? context.text(names[0].value) : undefined;
       const commandId = command === 'ultraplan' ? 'ultraplan' :
         command === 'ultrareview' && named('isEnabled').length ? 'ultrareview-command' : undefined;
-      if (commandId || names.some(p => literal(p.value, 'ultraplan'))) {
+      if ((commandId || names.some(p => literal(p.value, 'ultraplan'))) &&
+          ['type', 'description', 'isEnabled', 'load', 'argumentHint', 'availability'].some(name => named(name).length)) {
         const id = commandId ?? 'ultraplan';
         const enabled = named('isEnabled');
         const patched = enabled.length === 1 && alreadyPatched(enabled[0].value, id);
@@ -346,7 +347,8 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
 
     if (computerCandidate && functionNode(node) && !node.params.length && !node.async && !node.generator) {
       const id = 'computer-use-gate-semantic';
-      let computerConfig = false, inlineConfig = false, candidate = false;
+      let computerConfig = false, inlineConfig = false, candidate = false, mergedConfig = false;
+      const enabledSites = [];
       const enabledResult = expression => {
         if (expression.type === 'ChainExpression') return enabledResult(expression.expression);
         if (expression.type === 'LogicalExpression' && expression.operator === '&&') return enabledResult(expression.right);
@@ -364,16 +366,30 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
       else for (const value of returnValues(node)) {
         const child = enabledResult(value);
         if (!child) continue;
-        const config = context.resolve(child.object);
+        let config = context.resolve(child.object);
+        if (config?.node?.type === 'ObjectExpression' && config.node.properties.length === 2 &&
+            config.node.properties.every(property => property.type === 'SpreadElement')) {
+          const [defaults, override] = config.node.properties.map(property => property.argument);
+          if (override.type === 'CallExpression' && override.arguments.length === 2 &&
+              config.context.text(override.arguments[0]) === 'tengu_malort_pedway' &&
+              config.context.same(defaults, override.arguments[1])) {
+            config = config.context.resolve(defaults);
+            mergedConfig = true;
+          }
+        }
         if (config?.context?.field(config.node, 'pixelValidation') && config.context.field(config.node, 'enabled')) {
           results[id].present = true;
           candidate = true;
+          enabledSites.push(child);
           if (config.context !== context || config.node.start < node.start || config.node.end > node.end) computerConfig = true;
           else inlineConfig = true;
         }
       }
       if (computerConfig && !inlineConfig) {
-        injectReturn(id, node, '!0');
+        // Keep the organization/HIPAA guards around the merged configuration's enabled flag.
+        if (mergedConfig) {
+          for (const child of enabledSites) edit(id, child, `(${gate(id)}?!0:(${code.slice(child.start, child.end)}))`);
+        } else injectReturn(id, node, '!0');
       } else if (candidate) results[id].skipped = (results[id].skipped ?? 0) + 1;
     }
 

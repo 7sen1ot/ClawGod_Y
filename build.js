@@ -7,6 +7,7 @@ const {
   writeFileSync,
 } = require('node:fs');
 const { join } = require('node:path');
+const { createHash } = require('node:crypto');
 const { featuresMeta } = require('./src/shared/patch-registry.mjs');
 const { sharedSources, windowsSources, templateValuesFor } = require('./src/install-files.cjs');
 
@@ -46,6 +47,12 @@ function render(target, sources, meta, uninstaller) {
   const asciiOnly = target.endsWith('.ps1');
   const templatePath = join(SOURCE_ROOT, 'templates', target);
   const lists = templateValuesFor(target, uninstaller);
+  if (target.startsWith('install.')) {
+    lists['installation-key'] = createHash('sha256')
+      .update(readFileSync(templatePath))
+      .update(JSON.stringify([lists, meta, Object.entries(sources).map(([name, path]) => [name, readSource(path)])]))
+      .digest('hex');
+  }
   const names = new Set([...Object.keys(sources), ...Object.keys(lists)]);
   const used = new Set();
   const output = readFileSync(templatePath, 'utf8').replace(/^\uFEFF/, '').replace(PLACEHOLDER_RE, placeholder => {

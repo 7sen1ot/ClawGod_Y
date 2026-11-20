@@ -105,6 +105,12 @@ export const upstreamPatches = [
     name: 'Computer Use subscription bypass',
     pattern: /function ([\w$]+)\(\)\{let [\w$]+=[\w$]+\(\);return [\w$]+==="max"\|\|[\w$]+==="pro"\}/g,
     replacer: (m, fn) => `function ${fn}(){if(${gate('computer-use-sub')})return!0;` + m.slice(`function ${fn}(){`.length, -1) + `}`,
+    fallbacks: [{
+      // 2.1.328 checks organization policy before the individual subscription tier.
+      pattern: /(function [\w$]+\(\)\{if\([\w$]+\(\)\)return [\w$]+\([\w$]+\)===!0&&![\w$]+\(\);let ([\w$]+)=[\w$]+\(\);)return (\2==="max"\|\|\2==="pro")\}/g,
+      nodeType: ['FunctionDeclaration', 'FunctionExpression'],
+      replacer: (m, prefix, tier, result) => `${prefix}return ${gate('computer-use-sub')}||(${result})}`,
+    }],
   },
   {
     id: 'computer-use-default',
@@ -156,6 +162,7 @@ export const upstreamPatches = [
     id: 'computer-use-gate',
     toggleable: true,
     name: 'Computer Use gate bypass',
+    coveredBy: ['computer-use-gate-semantic'],
     pattern: /function ([\w$]+)\(\)\{return [\w$]+\(\)&&[\w$]+\(\)\.enabled\}/g,
     replacer: (m, fn) => `function ${fn}(){return ${gate('computer-use-gate')}?!0:(${m.slice(`function ${fn}(){return `.length, -1)})}`,
   },
@@ -225,6 +232,12 @@ export const upstreamPatches = [
       nodeType: ['FunctionDeclaration', 'FunctionExpression'],
       replacer: (m, prefix, arg, model, provider, denial, setup, firstParty, result) =>
         `${prefix}if(!(${gate('auto-mode-inline-gate')})&&(${denial}))return!1;${setup}return ${gate('auto-mode-inline-gate')}||(${result})}`,
+    }, {
+      // 2.1.328 merges provider variables and removes the Opus/Sonnet branch.
+      pattern: /(function [\w$]+\(([\w$]+)\)\{let ([\w$]+)=[\w$]+\(\2\);if\([\w$]+\(\3\)\)return!1;let ([\w$]+)=[\w$]+\(\),([\w$]+)=[\w$]+\(\)==="firstParty"&&[^;{}]+;)return(!\(\(\4\|\|\5\)&&\3\.includes\("haiku"\)&&\3!=="claude-haiku-5-5"\))\}/g,
+      nodeType: ['FunctionDeclaration', 'FunctionExpression'],
+      replacer: (m, prefix, arg, model, provider, firstParty, result) =>
+        `${prefix}return ${gate('auto-mode-inline-gate')}||(${result})}`,
     }],
   },
 
@@ -247,7 +260,7 @@ export const upstreamPatches = [
     sentinel: ['EMBEDDED_SEARCH_TOOLS', 'local-agent', 'CLAUDE_CODE_ENTRYPOINT'],
     optional: true,
     fallbacks: [{
-      pattern: /function\s+([\w$]+)\s*\(\s*\)\s*\{\s*if\s*\(\s*!([\w$]+)\(\s*["']true["']\s*\)\s*\)\s*return\s*(?:!1|false)\s*;\s*if\s*\(\s*[\w$]+\(\s*\)\s*\)\s*return\s*(?:!1|false)\s*;\s*return\s+process\.env\.CLAUDE_CODE_ENTRYPOINT\s*!==\s*["']local-agent["']\s*;?\s*\}/g,
+      pattern: /function\s+([\w$]+)\s*\(\s*\)\s*\{\s*if\s*\(\s*!([\w$]+)\(\s*(?:["']true["']|(?:process\.env|[\w$]+)\.EMBEDDED_SEARCH_TOOLS)\s*\)\s*\)\s*return\s*(?:!1|false)\s*;\s*if\s*\(\s*[\w$]+\(\s*\)\s*\)\s*return\s*(?:!1|false)\s*;\s*return\s+(?:process\.env|[\w$]+)\.CLAUDE_CODE_ENTRYPOINT\s*!==\s*["']local-agent["']\s*;?\s*\}/g,
       nodeType: ['FunctionDeclaration', 'FunctionExpression'],
     }],
   },
@@ -311,6 +324,7 @@ export const upstreamPatches = [
     id: 'remove-cautious-actions',
     toggleable: true,
     name: 'Remove cautious actions section',
+    coveredBy: ['pentest-prompt-rewrite'],
     pattern: /function ([\w$]+)\(([\w$]*)\)\{(?:if\([\s\S]{1,200}?\)return`# Executing actions with care\n\n[\s\S]*?`;)?return`# Executing actions with care\n\n[\s\S]*?`\}/g,
     replacer: (m, fn, arg) => `function ${fn}(${arg}){if(${gate('remove-cautious-actions')})return\`\`;` + m.slice(`function ${fn}(${arg}){`.length, -1) + `}`,
     sentinel: ['# Executing actions with care'],

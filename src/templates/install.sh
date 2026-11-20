@@ -6,6 +6,7 @@ CLAWGOD_DIR="$HOME/.clawgod"
 BIN_DIR="$HOME/.local/bin"
 VERSION="2.1.322"
 CLAWGOD_SELF_VERSION="0.0.0-dev"
+INSTALL_SOURCE_KEY="{{CLAWGOD:installation-key}}"
 
 if [[ $# -gt 1 || ( $# -eq 1 && ! "$1" =~ ^(latest|stable|[0-9]+\.[0-9]+\.[0-9]+)$ ) ]]; then
   printf 'Invalid installer arguments: %s\nUsage: bash install.sh [latest|stable|<version>]\n' "$*" >&2
@@ -116,10 +117,29 @@ if [ -z "$NATIVE_BIN" ]; then
 fi
 info "Downloaded $NPM_PKG@$NATIVE_BIN_LABEL"
 
+REUSE_PROCESSED=0
+if grep -Fq "$INSTALL_SOURCE_KEY" "$CLAWGOD_DIR/.compiled-runtime-cache.json" 2>/dev/null; then
+  if reuse=$("$BUN_BIN" "$CLAWGOD_DIR/compile-runtime.mjs" --check-installation "$INSTALL_SOURCE_KEY" "$NATIVE_BIN_LABEL") &&
+     [ "$reuse" = "REUSE=$NATIVE_BIN_LABEL" ]; then
+    REUSE_PROCESSED=1
+    info "Reusing unchanged processed modules ($NATIVE_BIN_LABEL)"
+  fi
+fi
+
 PREV_BACKUP_DIR=""
 ROLLBACK_FILES=(
 {{CLAWGOD:rollback-files}}
 )
+if [ "$REUSE_PROCESSED" -eq 1 ]; then
+  REUSED_ROLLBACK_FILES=()
+  for f in "${ROLLBACK_FILES[@]}"; do
+    case "$f" in
+      bunfs|vendor|pathmap.json|source-backup.json|cli.original.cjs|cli.original.cjs.bak) continue ;;
+    esac
+    REUSED_ROLLBACK_FILES+=("$f")
+  done
+  ROLLBACK_FILES=("${REUSED_ROLLBACK_FILES[@]}")
+fi
 if [ -f "$CLAWGOD_DIR/cli.original.cjs" ] && [ -f "$CLAWGOD_DIR/.source-version" ]; then
   PREV_BACKUP_DIR=$(mktemp -d "${CLAWGOD_DIR}-rollback-XXXXXX")
   MOVED_ROLLBACK_FILES=()
@@ -178,19 +198,21 @@ cat > "$CLAWGOD_DIR/extract-natives.mjs" << 'EXTRACTOR_EOF'
 {{CLAWGOD:extract-natives.mjs}}
 EXTRACTOR_EOF
 
-rm -rf "$CLAWGOD_DIR/vendor" "$CLAWGOD_DIR/bunfs" "$CLAWGOD_DIR/pathmap.json" \
-  "$CLAWGOD_DIR/cli.original.js" 2>/dev/null
+if [ "$REUSE_PROCESSED" -eq 0 ]; then
+  rm -rf "$CLAWGOD_DIR/vendor" "$CLAWGOD_DIR/bunfs" "$CLAWGOD_DIR/pathmap.json" \
+    "$CLAWGOD_DIR/cli.original.js" 2>/dev/null
 
-dim "Extracting cli.js + modules from $NATIVE_BIN_LABEL ..."
-"$BUN_BIN" "$CLAWGOD_DIR/extract-natives.mjs" "$NATIVE_BIN" "$CLAWGOD_DIR" 2>&1 | while IFS= read -r line; do echo "  $line"; done
-if [ "${PIPESTATUS[0]}" -ne 0 ]; then
-  err "Failed to extract from native binary"
-  exit 1
+  dim "Extracting cli.js + modules from $NATIVE_BIN_LABEL ..."
+  "$BUN_BIN" "$CLAWGOD_DIR/extract-natives.mjs" "$NATIVE_BIN" "$CLAWGOD_DIR" 2>&1 | while IFS= read -r line; do echo "  $line"; done
+  if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+    err "Failed to extract from native binary"
+    exit 1
+  fi
+  [ -f "$CLAWGOD_DIR/cli.original.js" ] || { err "cli.js missing after extraction"; exit 1; }
+
+
+  dim "Rewriting bunfs paths and IIFE invocation ..."
 fi
-[ -f "$CLAWGOD_DIR/cli.original.js" ] || { err "cli.js missing after extraction"; exit 1; }
-
-
-dim "Rewriting bunfs paths and IIFE invocation ..."
 cat > "$CLAWGOD_DIR/post-process.mjs" << 'POSTPROC_EOF'
 {{CLAWGOD:post-process.mjs}}
 POSTPROC_EOF
@@ -243,9 +265,11 @@ cat > "$CLAWGOD_DIR/ast-helpers.mjs" << 'AST_HELPERS_EOF'
 {{CLAWGOD:ast-helpers.mjs}}
 AST_HELPERS_EOF
 
-"$BUN_BIN" "$CLAWGOD_DIR/post-process.mjs" 2>&1 | while IFS= read -r line; do echo "  $line"; done
-if [ "${PIPESTATUS[0]}" -ne 0 ]; then err "Post-process failed"; exit 1; fi
-[ -f "$CLAWGOD_DIR/cli.original.cjs" ] || { err "Post-process failed"; exit 1; }
+if [ "$REUSE_PROCESSED" -eq 0 ]; then
+  "$BUN_BIN" "$CLAWGOD_DIR/post-process.mjs" 2>&1 | while IFS= read -r line; do echo "  $line"; done
+  if [ "${PIPESTATUS[0]}" -ne 0 ]; then err "Post-process failed"; exit 1; fi
+  [ -f "$CLAWGOD_DIR/cli.original.cjs" ] || { err "Post-process failed"; exit 1; }
+fi
 
 echo "$NATIVE_BIN_LABEL" > "$CLAWGOD_DIR/.source-version"
 
@@ -304,19 +328,21 @@ PATCH_REGISTRY_EOF
 info "Patcher created (patch.mjs)"
 
 
-dim "Applying patches ..."
-"$BUN_BIN" "$CLAWGOD_DIR/patch.mjs" --capture-and-apply 2>&1 | while IFS= read -r line; do echo "  $line"; done
-patch_status=${PIPESTATUS[0]}
-if [ "$patch_status" -ne 0 ]; then
-  warn "Patching failed (bun exit $patch_status). Installation aborted."
-  if [ -z "$PREV_BACKUP_DIR" ]; then
-    warn "No previous working installation found to roll back."
+if [ "$REUSE_PROCESSED" -eq 0 ]; then
+  dim "Applying patches ..."
+  "$BUN_BIN" "$CLAWGOD_DIR/patch.mjs" --capture-and-apply 2>&1 | while IFS= read -r line; do echo "  $line"; done
+  patch_status=${PIPESTATUS[0]}
+  if [ "$patch_status" -ne 0 ]; then
+    warn "Patching failed (bun exit $patch_status). Installation aborted."
+    if [ -z "$PREV_BACKUP_DIR" ]; then
+      warn "No previous working installation found to roll back."
+    fi
+    warn ""
+    warn "The selected upstream runtime build (${NATIVE_BIN_LABEL:-unknown}) is not supported by this ClawGod_Y release."
+    warn "Optional unmatched patches are already skipped; required prompt injection and source errors cannot be skipped."
+    warn "Rerun the installer with a compatible upstream runtime version."
+    exit "$patch_status"
   fi
-  warn ""
-  warn "The selected upstream runtime build (${NATIVE_BIN_LABEL:-unknown}) is not supported by this ClawGod_Y release."
-  warn "Optional unmatched patches are already skipped; required prompt injection and source errors cannot be skipped."
-  warn "Rerun the installer with a compatible upstream runtime version."
-  exit "$patch_status"
 fi
 
 dim "Compiling startup runtime ..."
@@ -485,6 +511,8 @@ done
 rm -f "$BIN_DIR/claude.orig" "$CLAWGOD_DIR/install.sh" || true
 
 hash -r 2>/dev/null
+
+"$BUN_BIN" "$CLAWGOD_DIR/compile-runtime.mjs" --record-installation "$INSTALL_SOURCE_KEY" "$NATIVE_BIN_LABEL" || true
 
 echo ""
 echo -e "  ${BOLD}${GREEN}ClawGod_Y installed!${NC}"
