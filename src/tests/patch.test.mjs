@@ -8,7 +8,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { runInNewContext } from 'node:vm';
 import { createServer, request } from 'node:http';
 import { scanPentestPatches } from '../shared/pentest-patches.mjs';
-import { applyAstEdits } from '../shared/ast-patches.mjs';
+import { applyAstEdits } from '../shared/ast-helpers.mjs';
 import { requiredRuntime } from './required-runtime.fixture.mjs';
 
 const patchFiles = [

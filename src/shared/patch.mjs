@@ -4,7 +4,8 @@ import { fileURLToPath } from 'url';
 import { AST_PATCH_IDS, scanAstPatches } from './ast-patches.mjs';
 import { applyAstEdits, parsePatchSource, hasPatchAnchors,
   getPatchNodeIndex, getCachedPatchContext, releasePatchContexts, releasePatchSource } from './ast-helpers.mjs';
-import { PENTEST_AST_PATCH_IDS, PENTEST_AST_META, PENTEST_REQUIRED, scanPentestPatches, scanFinalPolicyEdits, scanFinalBrandingEdits, findAppliedPromptHooks, createRuntimeGraphAnalysis, pruneRuntimeGraph } from './pentest-patches.mjs';
+import { PENTEST_AST_PATCH_IDS, PENTEST_AST_META, PENTEST_REQUIRED, scanPentestPatches, scanFinalPolicyEdits, scanFinalBrandingEdits, findAppliedPromptHooks } from './pentest-patches.mjs';
+import { createRuntimeGraphAnalysis, pruneRuntimeGraph } from './pentest-pruner.mjs';
 import { FEATURES, featuresMeta } from './patch-registry.mjs';
 import { upstreamPatches } from './patch-rules.mjs';
 

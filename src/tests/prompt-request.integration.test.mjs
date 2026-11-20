@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { runInNewContext } from 'node:vm';
-import { applyAstEdits } from '../shared/ast-patches.mjs';
+import { applyAstEdits } from '../shared/ast-helpers.mjs';
 import { scanPentestPatches } from '../shared/pentest-patches.mjs';
 import * as helpers from '../shared/runtime-helpers.cjs';
 import { startProxy } from '../shared/openai-proxy.cjs';

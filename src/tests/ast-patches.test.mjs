@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { runInNewContext } from 'node:vm';
-import { AST_PATCH_IDS, scanAstPatches, applyAstEdits, parsePatchSource } from '../shared/ast-patches.mjs';
+import { AST_PATCH_IDS, scanAstPatches } from '../shared/ast-patches.mjs';
+import { applyAstEdits, parsePatchSource } from '../shared/ast-helpers.mjs';
 import { requiredRuntime } from './required-runtime.fixture.mjs';
 import { instructionFileFilter } from '../shared/runtime-helpers.cjs';
 
