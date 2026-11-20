@@ -3,8 +3,8 @@ name: Compatibility CI
 on:
   workflow_call:
   schedule:
-    - cron: '0 23 * * 0'
-      timezone: America/Los_Angeles
+    - cron: '0 10 * * *'
+      timezone: Asia/Shanghai
   workflow_dispatch:
   push:
     branches: [main]
