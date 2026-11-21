@@ -70,6 +70,29 @@ try {
   check(report([], 'Runtime fallback installed; activation is checked at call time'), false);
   check(report([], '', 1), false);
   check(report().replace(`${PATCHES.length} applied, 0 skipped`, `${PATCHES.length - 1} applied, 1 skipped`), false);
+  for (const version of ['2.1.323', '2.1.330']) for (const platform of ['linux', 'macos', 'windows']) {
+    const gaps = [
+      '⚠️  Neutralize geo-steganography in date string (qla) (0 matches, no sentinel — cannot verify)',
+      '⚠️  Neutralize geo-detection probe (rdp) (0 matches, no sentinel — cannot verify)',
+      '⏭  Neutralize apostrophe steganography (odp) (not present in this version)',
+      '⏭  Auto-mode unlock for third-party API (provider helper gate) (not present in this version)',
+      '⏭  macOS Cmd+V image paste fallback to clipboard read (not present in this version)',
+    ];
+    if (platform !== 'macos') gaps.push(
+      '⚠️  Computer Use default enabled (0 matches, no sentinel — cannot verify)',
+      '⚠️  Computer Use subscription bypass (0 matches, no sentinel — cannot verify)',
+      '⚠️  Computer Use gate bypass (0 matches, no sentinel — cannot verify)',
+      '⏭  Computer Use gate (resolved configuration contract) (not present in this version)',
+    );
+    const currentReport = report(gaps).replace('v2.1.316', `v${version}`);
+    check(currentReport, true, platform);
+    check(currentReport.replace(`v${version}`, 'v2.1.331'), false, platform);
+    if (platform !== 'macos') check(currentReport, false, 'macos');
+    check(report([], '⚠️  ultraplan: 1 site(s) NOT patched — coverage is partial')
+      .replace('v2.1.316', `v${version}`), false, platform);
+    check(report(['⚠️  macOS Cmd+V image paste fallback to clipboard read — regex stale, sentinel still in source: anchor'])
+      .replace('v2.1.316', `v${version}`), false, platform);
+  }
   for (const bad of ['', `Mode: VERIFY\nResult: ${PATCHES.length} applied, 0 skipped, 0 failed`,
     'Mode: APPLY\nResult: 0 applied, 0 skipped, 0 failed', report() + 'Mode: APPLY\ntruncated']) check(bad, false);
 

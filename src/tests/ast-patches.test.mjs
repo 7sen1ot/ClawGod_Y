@@ -144,6 +144,23 @@ assert.throws(() => applyAstEdits('abcd', [
   { start: 0, end: 3, replacement: '' }, { start: 1, end: 4, replacement: '' },
 ]), /Overlapping/);
 
+const upsellFactory = `function upsell(metadata){return{type:'local',name:metadata.name,
+  description:metadata.description,isEnabled:enterpriseOnly,isHidden:true,load:()=>loadUpsell()}}`;
+const upsellInput = "const stubs=[upsell({name:'ultraplan',description:'Enterprise subscription required'})];";
+const upsellScan = scanAstPatches(upsellFactory + upsellInput).ultraplan;
+assert.equal(upsellScan.present, false, 'upsell metadata is not an executable command descriptor');
+const actualWithUpsell = "const command={type:'local-jsx',name:'ultraplan',isEnabled:()=>false,load:()=>loadPlan()};" +
+  upsellFactory + upsellInput;
+const actualWithUpsellScan = scanAstPatches(actualWithUpsell).ultraplan;
+assert.equal(actualWithUpsellScan.matches.length, 1);
+assert.equal(actualWithUpsellScan.skipped ?? 0, 0, 'upsell metadata must not create partial coverage');
+assert.ok(applyAstEdits(actualWithUpsell, actualWithUpsellScan.matches).includes(upsellFactory + upsellInput));
+for (const factory of ['', upsellFactory.replace('isHidden:true', 'isHidden:false'),
+  upsellFactory.replace('name:metadata.name', "name:'other'")]) {
+  assert.equal(scanAstPatches(factory + upsellInput).ultraplan.skipped, 1,
+    'unresolved or unrelated factories must still report an unmatched site');
+}
+
 for (const candidate of [
   "const command={name:'ultraplan',isEnabled:null};",
   "const command={name:'ultraplan',get isEnabled(){return ()=>false}};",

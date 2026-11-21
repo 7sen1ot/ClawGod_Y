@@ -547,7 +547,21 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
       const command = names.length === 1 ? context.text(names[0].value) : undefined;
       const commandId = command === 'ultraplan' ? 'ultraplan' :
         command === 'ultrareview' && named('isEnabled').length ? 'ultrareview-command' : undefined;
-      if ((commandId || names.some(p => literal(p.value, 'ultraplan'))) &&
+      let hiddenFactoryInput = false;
+      if (command === 'ultraplan' && !named('isEnabled').length &&
+          parent?.type === 'CallExpression' && parent.arguments.length === 1 && parent.arguments[0] === node) {
+        const factory = context.resolve(parent.callee), fn = factory?.node;
+        if (functionNode(fn) && !fn.async && !fn.generator && fn.params.length === 1) {
+          const returns = returnValues(fn);
+          const descriptor = returns.length === 1 ? returns[0] : undefined;
+          const name = factory.context.field(descriptor, 'name')?.node;
+          // Subscription upsell factories take metadata, not a second command gate.
+          hiddenFactoryInput = member(name, 'name') && factory.context.same(name.object, fn.params[0]) &&
+            boolean(factory.context.field(descriptor, 'isHidden')?.node, true) &&
+            !!factory.context.field(descriptor, 'isEnabled') && !!factory.context.field(descriptor, 'load');
+        }
+      }
+      if (!hiddenFactoryInput && (commandId || names.some(p => literal(p.value, 'ultraplan'))) &&
           ['type', 'description', 'isEnabled', 'load', 'argumentHint', 'availability'].some(name => named(name).length)) {
         const id = commandId ?? 'ultraplan';
         const enabled = named('isEnabled');

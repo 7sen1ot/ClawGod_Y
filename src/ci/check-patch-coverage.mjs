@@ -21,6 +21,7 @@ if (versionArg && sourceVersion && versionArg !== sourceVersion) throw new Error
 // Reviewed gaps in Claude 2.1.316 (actions/runs/41206844027) and stable 2.1.309.
 // New versions must not silently inherit these exceptions.
 const reviewed = Bun.semver.satisfies(installedVersion, '2.1.309 || 2.1.316');
+const currentReviewed = Bun.semver.satisfies(installedVersion, '2.1.323 || 2.1.330');
 const baseline = reviewed ? new Map([
   ['computer-use-gate-semantic', 'absent'],
   ['geo-stego-date', 'unverified'],
@@ -32,10 +33,25 @@ const baseline = reviewed ? new Map([
   ['geo-detect-probe', 'unverified'],
   ['geo-apostrophe-stego', 'absent'],
   ['remove-cautious-actions', 'unverified'],
+]) : currentReviewed ? new Map([
+  // Reviewed against extracted 2.1.323/2.1.330 sources and run 44894960767.
+  // The geo encoders/provider helper are absent; clipboard fallback is upstream.
+  ['geo-stego-date', 'unverified'],
+  ['geo-detect-probe', 'unverified'],
+  ['geo-apostrophe-stego', 'absent'],
+  ['auto-mode-helper-gate', 'absent'],
+  ['macos-cmdv-image-paste', 'absent'],
 ]) : new Map();
 if (reviewed && platform !== 'macos') {
   baseline.set('computer-use-default', 'unverified');
   baseline.set('computer-use-sub', 'unverified');
+}
+if (currentReviewed && platform !== 'macos') {
+  // These native packages do not include the macOS Computer Use implementation.
+  baseline.set('computer-use-default', 'unverified');
+  baseline.set('computer-use-sub', 'unverified');
+  baseline.set('computer-use-gate', 'unverified');
+  baseline.set('computer-use-gate-semantic', 'absent');
 }
 const partialLimits = reviewed ? new Map([['ultraplan', 1]]) : new Map();
 

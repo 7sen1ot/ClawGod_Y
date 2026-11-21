@@ -205,7 +205,9 @@ export const upstreamPatches = [
     pattern: /if\(([\w$]+)\.length===0&&([\w$]+)\.length>0\)([\w$]+)\("input_image_drag","read_failed"\),([\w$]+)\.push\(\.\.\.\2\)/g,
     replacer: (m, L, R, at, D) =>
       `if(${L}.length===0&&${R}.length>0){${at}("input_image_drag","read_failed");if(d&&${D}.length===0){m();return}${D}.push(...${R})}`,
-    sentinel: ['input_image_drag', 'read_failed'],
+    // The old failure branch logs these adjacent arguments. Newer upstream code
+    // has its own clipboard fallback and logs a conditional reason instead.
+    sentinel: ['"input_image_drag","read_failed"'],
     optional: true,
   },
 
