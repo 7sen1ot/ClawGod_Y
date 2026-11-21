@@ -6,40 +6,45 @@ import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import resolveVersions from './resolve-claude-versions.mjs';
 import { prepareInstallers, verifyAssets, assets } from './release-assets.mjs';
+import { PATCHES } from '../../src/shared/patch-registry.mjs';
 
 test('ci-gates.test', async () => {
 const repository = resolve(import.meta.dirname, '../..');
 
-const installer = JSON.stringify({ upstreamVersion: '2.1.316' });
-assert.deepEqual(resolveVersions(installer).versions, [{ version: '2.1.316', channels: '2.1.316' }]);
 for (const [stable, latest, expected] of [
-  ['2.1.316', '2.1.316', [['2.1.316', '2.1.316, stable, latest']]],
-  ['2.1.309', '2.1.316', [['2.1.316', '2.1.316, latest'], ['2.1.309', 'stable']]],
-  ['2.1.317', '2.1.317', [['2.1.316', '2.1.316'], ['2.1.317', 'stable, latest']]],
-  ['2.1.309', '2.1.317', [['2.1.316', '2.1.316'], ['2.1.309', 'stable'], ['2.1.317', 'latest']]],
+  ['2.1.316', '2.1.316', [['2.1.316', 'stable, latest']]],
+  ['2.1.309', '2.1.316', [['2.1.309', 'stable'], ['2.1.316', 'latest']]],
+  ['2.1.317', '2.1.317', [['2.1.317', 'stable, latest']]],
+  ['2.1.309', '2.1.317', [['2.1.309', 'stable'], ['2.1.317', 'latest']]],
 ]) {
   const calls = [];
-  const result = resolveVersions(installer, channel => { calls.push(channel); return (channel === 'stable' ? stable : latest) + '\n'; });
-  assert.equal(result.defaultVersion, '2.1.316');
+  const result = resolveVersions(channel => { calls.push(channel); return (channel === 'stable' ? stable : latest) + '\n'; });
+  assert.equal(result.defaultVersion, stable);
   assert.deepEqual(result.versions.map(row => [row.version, row.channels]), expected);
   assert.deepEqual(calls, ['stable', 'latest']);
 }
-assert.equal(resolveVersions(installer.replace('\n', '\r\n'), () => '2.1.316').versions.length, 1);
-assert.throws(() => resolveVersions('', () => '2.1.316'), /Default Claude version/);
+assert.equal(resolveVersions(() => '2.1.316\r\n').versions.length, 1);
 for (const bad of ['', 'latest', '2.1.316\n2.1.317', '2.1.316; exit 0']) {
-  assert.throws(() => resolveVersions(installer, () => bad), /Invalid stable version/);
-  assert.throws(() => resolveVersions(installer, channel => channel === 'stable' ? '2.1.309' : bad), /Invalid latest version/);
+  assert.throws(() => resolveVersions(() => bad), /Invalid stable version/);
+  assert.throws(() => resolveVersions(channel => channel === 'stable' ? '2.1.309' : bad), /Invalid latest version/);
 }
-assert.throws(() => resolveVersions(installer, () => { throw new Error('registry offline'); }), /registry offline/);
+assert.throws(() => resolveVersions(() => { throw new Error('registry offline'); }), /registry offline/);
 
 const root = mkdtempSync(join(tmpdir(), 'clawgod-ci-gates-'));
 try {
   const logPath = join(root, 'install.log');
   const report = (special = [], extra = '', countDelta = 0) => {
-    const rows = [...special, ...Array.from({ length: 72 - special.length }, (_, i) => `✅ Applied rule ${i} (1 replacement in 1 file)`)];
+    const overrides = new Set();
+    const specialRows = special.map(row => {
+      const patch = PATCHES.find(patch => row.replace(/^(✅|⏭|⚠️|❌)\s+/u, '').startsWith(patch.name + ' '));
+      if (patch) overrides.add(patch.id);
+      return row.replace(/^(✅|⏭|⚠️|❌)\s+/u, `$1 [${patch?.id ?? 'unknown-rule'}] `);
+    });
+    const rows = [...specialRows, ...PATCHES.filter(patch => !overrides.has(patch.id))
+      .map(patch => `✅ [${patch.id}] ${patch.name} (1 replacement in 1 file)`)];
     const skipped = special.filter(row => !row.startsWith('✅') && !row.startsWith('❌')).length;
     const failed = special.filter(row => row.startsWith('❌')).length;
-    return `Mode: APPLY\n${rows.join('\n')}\n${extra}\nResult: ${72 - skipped - failed + countDelta} applied, ${skipped} skipped, ${failed} failed\n`;
+    return `Target: cli.original.cjs (v2.1.316)\nMode: APPLY\n${rows.join('\n')}\n${extra}\nResult: ${rows.length - skipped - failed + countDelta} applied, ${skipped} skipped, ${failed} failed\n`;
   };
   const check = (log, ok, platform = 'linux', encoding = 'utf8') => {
     writeFileSync(logPath, encoding === 'utf16le' ? '\ufeff' + log : log, encoding);
@@ -64,8 +69,8 @@ try {
   check(report([], '⚠️  another-rule: 1 site(s) NOT patched — coverage is partial'), false);
   check(report([], 'Runtime fallback installed; activation is checked at call time'), false);
   check(report([], '', 1), false);
-  check(report().replace('72 applied, 0 skipped', '71 applied, 1 skipped'), false);
-  for (const bad of ['', 'Mode: VERIFY\nResult: 72 applied, 0 skipped, 0 failed',
+  check(report().replace(`${PATCHES.length} applied, 0 skipped`, `${PATCHES.length - 1} applied, 1 skipped`), false);
+  for (const bad of ['', `Mode: VERIFY\nResult: ${PATCHES.length} applied, 0 skipped, 0 failed`,
     'Mode: APPLY\nResult: 0 applied, 0 skipped, 0 failed', report() + 'Mode: APPLY\ntruncated']) check(bad, false);
 
   const release = join(root, 'release');

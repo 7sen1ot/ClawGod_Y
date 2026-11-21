@@ -44,7 +44,7 @@ function launch(args = [], env = {}, expectLoaded = args.length === 0) {
         if (name === './cli.original.cjs') { loaded = true; return {}; }
         if (name === './runtime-helpers.mjs') return require('../shared/runtime-helpers.mjs');
         if (name === './lean-mode.mjs') return require('../shared/lean-mode.mjs');
-        if (['./feature-gates.mjs', './bun-ant-shim.mjs'].includes(name)) return {};
+        if (name === './bun-ant-shim.mjs') return {};
         return require(name);
       },
     });
@@ -96,9 +96,8 @@ try {
   assert.equal(s.disableRemoteControl, true, 'missing managed flag added');
   console.log('[lean.test] single strictest level: clawgod-scoped, fill-only, idempotent ok');
 
-  const patches = join(dir, 'patches.json');
   reset();
-  leanApply(leanSettings, undefined, patches);
+  leanApply(leanSettings);
   checkStrict(loadLean());
   assert.deepEqual(loadSettings(), originalSettings, 'installer settings remain scoped');
 

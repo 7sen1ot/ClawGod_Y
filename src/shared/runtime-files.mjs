@@ -2,7 +2,7 @@ export const payloads = [
   'install-runtime.mjs', 'runtime-files.mjs', 'import.mjs',
   'extract-natives.mjs', 'post-process.mjs', 'openai-proxy.mjs', 'cli.mjs',
   'startup-check.mjs', 'runtime-helpers.mjs', 'prompt-runtime.mjs', 'bun-ant-shim.mjs',
-  'feature-gates.mjs', 'patch.mjs', 'patch-rules.mjs', 'ast-patches.mjs', 'ast-helpers.mjs',
+  'patch.mjs', 'patch-rules.mjs', 'ast-patches.mjs', 'ast-helpers.mjs',
   'pentest-patches.mjs', 'pentest-scanners.mjs', 'pentest-prompts.mjs', 'pentest-trimming.mjs',
   'pentest-policy-text.mjs', 'pentest-pruner.mjs', 'lean-mode.mjs', 'compile-runtime.mjs',
   'patch-registry.mjs', 'npm-fetch.mjs', 'system-prompt.md', 'acorn.mjs', 'acorn.LICENSE',
@@ -13,6 +13,7 @@ export const obsoleteFiles = [
   'cli.cjs', 'openai-proxy.cjs', 'startup-check.cjs', 'runtime-helpers.cjs', 'prompt-runtime.cjs',
   'bun-ant-shim.cjs', 'feature-gates.cjs', 'lean-mode.cjs', 'lean-apply.cjs', 'clawgod-import', 'clawgod-import.exe',
   'cli.js', 'patch.js', 'repatch.mjs', 'install.sh', 'install.ps1', '.lean-disabled', '.lean-max',
+  'patches.json', 'feature-gates.mjs',
 ];
 
 export const generatedFiles = [

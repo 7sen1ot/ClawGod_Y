@@ -13,10 +13,10 @@ const REPLY = 'CLAWGOD_TUI_OK_182';
 const MISSING_API = 'has no Bun.ant.CellSegmenter';
 const { Terminal } = xterm;
 
-/** @typedef {{cli: string, bun: string, native?: string, version: string, output: string, timeout: number, expectMissingWithoutShim: boolean}} Options */
+/** @typedef {{cli: string, bun: string, native?: string, version: string, output: string, timeout: number}} Options */
 
-/** @param {Options} args @param {string} name @param {string[]} command @param {boolean} shim */
-async function runCase(args, name, command, shim, expectError = false) {
+/** @param {Options} args @param {string} name @param {string[]} command */
+async function runCase(args, name, command) {
   const home = join(args.output, name + '-home');
   const cwd = join(home, 'project');
   mkdirSync(cwd, { recursive: true });
@@ -77,7 +77,6 @@ async function runCase(args, name, command, shim, expectError = false) {
     HOME: home, USERPROFILE: home, TERM: 'xterm-256color', COLORTERM: 'truecolor',
     ANTHROPIC_API_KEY: 'ci-local-only', ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`,
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_AUTOUPDATER: '1', DISABLE_TELEMETRY: '1',
-    CLAWGOD_FEATURE_BUN_ANT_SHIM: String(shim),
   };
   if (args.native) env['CLAUDE_CODE_EXECPATH'] = args.native;
   if (process.platform === 'win32') {
@@ -128,8 +127,7 @@ async function runCase(args, name, command, shim, expectError = false) {
       }
       const text = visible();
       if (raw.includes(MISSING_API)) {
-        passed = expectError;
-        reason = passed ? 'expected missing CellSegmenter error' : 'renderer API is missing';
+        reason = 'renderer API is missing';
         break;
       }
       if (raw.includes('Uncaught exception')) {
@@ -137,11 +135,11 @@ async function runCase(args, name, command, shim, expectError = false) {
         break;
       }
       headerSeen ||= text.includes(name === 'native' ? 'Claude Code' : 'ClawGod_Y') && text.includes(args.version);
-      if (!expectError && headerSeen && text.includes('❯') && typedAt === undefined) {
+      if (headerSeen && text.includes('❯') && typedAt === undefined) {
         writeInput(PROMPT);
         typedAt = now;
       }
-      if (!expectError && submitted && text.includes(REPLY) && requests.some(request => request.saw_prompt)) {
+      if (submitted && text.includes(REPLY) && requests.some(request => request.saw_prompt)) {
         passed = true;
         reason = 'header, keyboard input, local API request and rendered reply verified';
         break;
@@ -182,7 +180,6 @@ async function runCase(args, name, command, shim, expectError = false) {
 const { values } = parseArgs({ options: {
   cli: { type: 'string' }, bun: { type: 'string' }, native: { type: 'string' },
   version: { type: 'string' }, output: { type: 'string' }, timeout: { type: 'string', default: '60' },
-  'expect-missing-without-shim': { type: 'boolean', default: false },
 } });
 try {
   for (const key of ['cli', 'bun', 'version', 'output']) if (!values[key]) throw new Error(`--${key} is required`);
@@ -191,12 +188,10 @@ try {
   const args = {
     cli: resolve(values.cli), bun: resolve(values.bun), native: values.native ? resolve(values.native) : undefined,
     version: values.version, output: resolve(values.output), timeout,
-    expectMissingWithoutShim: values['expect-missing-without-shim'],
   };
   mkdirSync(args.output, { recursive: true });
-  if (args.native) await runCase(args, 'native', [args.native], false);
-  if (args.expectMissingWithoutShim) await runCase(args, 'shim-off', [args.bun, args.cli], false, true);
-  await runCase(args, 'shim-on', [args.bun, args.cli], true);
+  if (args.native) await runCase(args, 'native', [args.native]);
+  await runCase(args, 'shim-on', [args.bun, args.cli]);
 } catch (error) {
   console.error(error.message);
   process.exitCode = 1;

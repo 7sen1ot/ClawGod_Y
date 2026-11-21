@@ -34,7 +34,7 @@ try {
   }
   copyFileSync(new URL('../shared/features.json', import.meta.url), join(runtime, 'features.json'));
   writeFileSync(join(runtime, 'features-meta.json'), JSON.stringify(featuresMeta()));
-  writeFileSync(join(runtime, 'runtime-version.json'), JSON.stringify({ version: '0.0.0-ci', upstreamVersion: '2.1.322',
+  writeFileSync(join(runtime, 'runtime-version.json'), JSON.stringify({ version: '0.0.0-ci', upstreamVersion: 'stable',
     bun: JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).engines.bun }));
   writeFileSync(join(runtime, 'npm-fetch.mjs'), `import{mkdirSync,copyFileSync,writeFileSync}from'node:fs';import{join}from'node:path';
     if(process.env.CLAWGOD_FAIL_STAGE==='download')throw Error('fixture download failure');
@@ -61,7 +61,7 @@ console.log(require('fs').readFileSync(require('path').join(__dirname,'.source-v
   for (const requested of [undefined, 'latest', 'stable', '2.1.316']) {
     const result = run(requested ? [requested] : []);
     assert.equal(result.status, 0, result.stdout + result.stderr);
-    const expected = requested === 'latest' ? '2.1.329' : requested === 'stable' ? '2.1.309' : requested || '2.1.322';
+    const expected = requested === 'latest' ? '2.1.329' : !requested || requested === 'stable' ? '2.1.309' : requested;
     assert.equal(readFileSync(join(dir, '.source-version'), 'utf8').trim(), expected);
     assert.equal(readFileSync(join(bin, windows ? 'claude.cmd' : 'claude'), 'utf8'), 'official CLI must stay untouched');
     assert.ok(existsSync(launcher));

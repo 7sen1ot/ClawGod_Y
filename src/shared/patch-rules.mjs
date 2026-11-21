@@ -1,5 +1,3 @@
-const gate = (id) => `globalThis.__clawgodPatches?.[${JSON.stringify(id)}]!==!1`;
-
 export const upstreamPatches = [
   {
     id: 'session-project-paths',
@@ -87,158 +85,117 @@ export const upstreamPatches = [
   },
   {
     id: 'agent-teams',
-    toggleable: true,
     name: 'Agent Teams always enabled',
     coveredBy: ['agent-teams-graph'],
     pattern: /function ([\w$]+)\(\)\{if\(![\w$]+\(process\.env\.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS\)&&![\w$]+\(\)\)return!1;if\(![\w$]+\("tengu_amber_flint",!0\)\)return!1;return!0\}/g,
-    replacer: (m, fn) => `function ${fn}(){if(${gate('agent-teams')})return!0;` + m.slice(`function ${fn}(){`.length, -1) + `}`,
+    replacer: (m, fn) => `function ${fn}(){return!0}`,
   },
   {
     id: 'agent-teams-graph',
-    toggleable: true,
     name: 'Agent Teams always enabled (graph)',
     ast: true,
     optional: true,
   },
   {
     id: 'computer-use-sub',
-    toggleable: true,
     name: 'Computer Use subscription bypass',
     pattern: /function ([\w$]+)\(\)\{let [\w$]+=[\w$]+\(\);return [\w$]+==="max"\|\|[\w$]+==="pro"\}/g,
-    replacer: (m, fn) => `function ${fn}(){if(${gate('computer-use-sub')})return!0;` + m.slice(`function ${fn}(){`.length, -1) + `}`,
+    replacer: (m, fn) => `function ${fn}(){return!0}`,
     fallbacks: [{
       // Preserve organization policy, including the app-list readability check added in 2.1.329.
       pattern: /(function [\w$]+\(\)\{if\([\w$]+\(\)\)return [\w$]+\([\w$]+\)===!0&&![\w$]+\(\)(?:&&[\w$]+\(\)\.readable)?;let ([\w$]+)=[\w$]+\(\);)return (\2==="max"\|\|\2==="pro")\}/g,
       nodeType: ['FunctionDeclaration', 'FunctionExpression'],
-      replacer: (m, prefix, tier, result) => `${prefix}return ${gate('computer-use-sub')}||(${result})}`,
+      replacer: (m, prefix) => `${prefix}return!0}`,
     }],
   },
   {
     id: 'computer-use-default',
-    toggleable: true,
     name: 'Computer Use default enabled',
     ast: true,
   },
   {
     id: 'computer-use-gate-semantic',
-    toggleable: true,
     name: 'Computer Use gate (resolved configuration contract)',
     ast: true,
     optional: true,
   },
   {
     id: 'ultraplan',
-    toggleable: true,
     name: 'Ultraplan enable',
     ast: true,
   },
   {
-    id: 'ultrareview-gate',
-    toggleable: true,
-    name: 'Ultrareview enable (rQt gate)',
-    pattern: /function ([\w$]+)\(\)\{return ([\w$]+)\(\)\?\.enabled===!0&&[\w$]+\(\)&&![\w$]+\(\)\}/g,
-    replacer: (m, fn) => `function ${fn}(){return ${gate('ultrareview-gate')}?!0:(${m.slice(`function ${fn}(){return `.length, -1)})}`,
-    optional: true,
-  },
-  {
     id: 'ultrareview-command',
-    toggleable: true,
     name: 'Ultrareview command (resolved availability callback)',
     ast: true,
     optional: true,
   },
   {
+    id: 'ultrareview-gate',
+    name: 'Ultrareview enable (rQt gate)',
+    ast: true,
+    coveredBy: ['ultrareview-command'],
+    optional: true,
+  },
+  {
     id: 'ultrareview-direct',
-    toggleable: true,
     name: 'Ultrareview enable (direct literal, <=2.1.213)',
     versions: '<=2.1.213',
     pattern: /function ([\w$]+)\(\)\{return ([\w$]+)\("tengu_review_bughunter_config",null\)(\?\.enabled===!0)?\}/g,
     replacer: (m, fn, getter, hasGate) =>
       hasGate
-        ? `function ${fn}(){if(${gate('ultrareview-direct')})return!0;` + m.slice(`function ${fn}(){`.length, -1) + `}`
-        : `function ${fn}(){let _r=${getter}("tengu_review_bughunter_config",null);return ${gate('ultrareview-direct')}?_r?{..._r,enabled:!0}:{enabled:!0}:_r}`,
+        ? `function ${fn}(){return!0}`
+        : `function ${fn}(){let _r=${getter}("tengu_review_bughunter_config",null);return _r?{..._r,enabled:!0}:{enabled:!0}}`,
     optional: true,
   },
   {
     id: 'computer-use-gate',
-    toggleable: true,
     name: 'Computer Use gate bypass',
     coveredBy: ['computer-use-gate-semantic'],
     pattern: /function ([\w$]+)\(\)\{return [\w$]+\(\)&&[\w$]+\(\)\.enabled\}/g,
-    replacer: (m, fn) => `function ${fn}(){return ${gate('computer-use-gate')}?!0:(${m.slice(`function ${fn}(){return `.length, -1)})}`,
-  },
-  {
-    id: 'voice-mode',
-    toggleable: true,
-    name: 'Voice Mode enable (bypass GrowthBook kill)',
-    ast: true,
+    replacer: (m, fn) => `function ${fn}(){return!0}`,
   },
   {
     id: 'classifier-timeout',
-    toggleable: true,
     name: 'Auto-mode classifier timeout override (CLAWGOD_CLASSIFIER_TIMEOUT_MS)',
-    pattern: /function ([\w$]+)\(([\w$]+)\)\{let ([\w$]+)=Math\.max\(0,Math\.ceil\(\(\2-50000\)\/50000\)\);return Math\.min\(([\w$]+),([\w$]+)\+\3\*1e4\)\}/g,
-    replacer: (m, fn, arg, step, cap, base) =>
-      `function ${fn}(${arg}){let _ct=${gate('classifier-timeout')}?globalThis.__clawgodHelpers.classifierTimeoutFloor(process.env.CLAWGOD_CLASSIFIER_TIMEOUT_MS):null;let ${step}=Math.max(0,Math.ceil((${arg}-50000)/50000));let _r=Math.min(${cap},${base}+${step}*1e4);return _ct===null?_r:Math.max(_r,_ct)}`,
-    unique: true,
+    ast: true,
     optional: true,
-    fallbacks: [{
-      pattern: /function\s+([\w$]+)\s*\(\s*([\w$]+)\s*\)\s*\{\s*(?:let|const|var)\s+([\w$]+)\s*=\s*Math\.max\(\s*0\s*,\s*Math\.ceil\(\s*\(\s*\2\s*-\s*(?:50000|50_000|5[eE]4)\s*\)\s*\/\s*(?:50000|50_000|5[eE]4)\s*\)\s*\)\s*;\s*return\s+Math\.min\(\s*([\w$]+)\s*,\s*([\w$]+)\s*\+\s*\3\s*\*\s*(?:1[eE]4|10000|10_000)\s*\)\s*;?\s*\}/g,
-      nodeType: ['FunctionDeclaration', 'FunctionExpression'],
-    }],
   },
   {
     id: 'classifier-model',
-    toggleable: true,
     name: 'Auto-mode classifier model override (CLAWGOD_CLASSIFIER_MODEL)',
-    pattern: /function ([\w$]+)\(\)\{(?:if\((?:[\w$]+\.CLAUDE_CODE_USER_DELEGATED_SESSION_DIRECT_API|[\w$]+\(\))\)return\{value:[\w$]+\(\)\?\?"",src:"default"\};)?let [\w$]+=[\w$]+\(\),[\w$]+=[\w$]+\(.*?\),[\w$]+=[\w$]+\([\w$]+\?\.modelByMainModel,\{vet:/g,
-    replacer: (m, fn) =>
-      `function ${fn}(){let _cm=process.env.CLAWGOD_CLASSIFIER_MODEL?.trim();if(_cm&&${gate('classifier-model')})return{value:_cm,src:"default"};` + m.slice(m.indexOf('{') + 1),
-    sentinel: ['modelByMainModel'],
-    unique: true,
+    ast: true,
     optional: true,
   },
   {
     id: 'classifier-retries',
-    toggleable: true,
     name: 'Auto-mode classifier retries override (CLAWGOD_CLASSIFIER_RETRIES)',
-    pattern: /function ([\w$]+)\(\)\{let [\w$]+=[\w$]+\([^)]*\)\?\.maxRetries;return typeof [\w$]+==="number"&&Number\.isInteger\([\w$]+\)&&[\w$]+>=0\?{value:[\w$]+,src:"gb"}:{value:([\w$]+),src:"default"\}\}/g,
-    replacer: (m, fn) =>
-      `function ${fn}(){let _cr=process.env.CLAWGOD_CLASSIFIER_RETRIES?.trim();if(${gate('classifier-retries')}&&_cr!==undefined&&_cr!==""&&Number.isInteger(+_cr)&&+_cr>=0)return{value:+_cr,src:"default"};` + m.slice(m.indexOf('{') + 1),
-    unique: true,
+    ast: true,
     optional: true,
-    fallbacks: [{
-      pattern: /function\s+([\w$]+)\s*\(\s*\)\s*\{\s*(?:let|const|var)\s+([\w$]+)\s*=\s*[^;{}]{1,300}?\?\.maxRetries\s*;\s*return\s+typeof\s+\2\s*===?\s*["']number["']\s*&&\s*Number\.isInteger\(\s*\2\s*\)\s*&&\s*\2\s*>=\s*0\s*\?\s*\{\s*value\s*:\s*\2\s*,\s*src\s*:\s*["']gb["']\s*\}\s*:\s*\{\s*value\s*:\s*[\w$]+\s*,\s*src\s*:\s*["']default["']\s*\}\s*;?\s*\}/g,
-      nodeType: ['FunctionDeclaration', 'FunctionExpression'],
-    }],
   },
   {
     id: 'auto-mode-helper-gate',
-    toggleable: true,
     name: 'Auto-mode unlock for third-party API (provider helper gate)',
     pattern: /if\(!([\w$]+)\(([\w$]+)\)\)return!1;(?=(?:(?!function\s).){0,300}!=="firstParty")/g,
-    replacer: (m) => `if(globalThis.__clawgodPatches?.[${JSON.stringify('auto-mode-helper-gate')}]===!1&&` + m.slice(3, -10) + `)return!1;`,
+    replacer: () => '',
     optional: true,
   },
   {
     id: 'auto-mode-inline-gate',
-    toggleable: true,
     name: 'Auto-mode unlock for third-party API (inline gate)',
     pattern: /if\((?:([\w$]+)!=="firstParty"&&(?:\1!=="anthropicAws"|![\w$]+\(\1\))[^;]*|[\w$]+\(\)&&\([\w$]+==="claude-opus-4-6"\|\|[\w$]+==="claude-sonnet-4-6"\|\|[\w$]+\.includes\("haiku"\)[^;]*?\))\)return!1;/g,
-    replacer: (m) => `if(globalThis.__clawgodPatches?.[${JSON.stringify('auto-mode-inline-gate')}]===!1&&` + m.slice(3, -10) + `)return!1;`,
+    replacer: () => '',
     sentinel: ['!=="firstParty"', '&&'],
     fallbacks: [{
       // 2.1.323 splits the provider/model denial and the Haiku denial into separate returns.
       pattern: /(function [\w$]+\(([\w$]+)\)\{let ([\w$]+)=[\w$]+\(\2\);if\([\w$]+\(\3\)\)return!1;let ([\w$]+)=[\w$]+\(\);)if\((\4&&\(\3==="claude-opus-4-6"\|\|\3==="claude-sonnet-4-6"\))\)return!1;(let ([\w$]+)=[\w$]+\(\)==="firstParty"&&[^;{}]+;)return(!\(\(\4\|\|\7\)&&\3\.includes\("haiku"\)&&\3!=="claude-haiku-5-5"\))\}/g,
       nodeType: ['FunctionDeclaration', 'FunctionExpression'],
-      replacer: (m, prefix, arg, model, provider, denial, setup, firstParty, result) =>
-        `${prefix}if(!(${gate('auto-mode-inline-gate')})&&(${denial}))return!1;${setup}return ${gate('auto-mode-inline-gate')}||(${result})}`,
+      replacer: (m, prefix) => `${prefix}return!0}`,
     }, {
       // 2.1.328 merges provider variables and removes the Opus/Sonnet branch.
       pattern: /(function [\w$]+\(([\w$]+)\)\{let ([\w$]+)=[\w$]+\(\2\);if\([\w$]+\(\3\)\)return!1;let ([\w$]+)=[\w$]+\(\),([\w$]+)=[\w$]+\(\)==="firstParty"&&[^;{}]+;)return(!\(\(\4\|\|\5\)&&\3\.includes\("haiku"\)&&\3!=="claude-haiku-5-5"\))\}/g,
       nodeType: ['FunctionDeclaration', 'FunctionExpression'],
-      replacer: (m, prefix, arg, model, provider, firstParty, result) =>
-        `${prefix}return ${gate('auto-mode-inline-gate')}||(${result})}`,
+      replacer: (m, prefix) => `${prefix}return!0}`,
     }],
   },
 
@@ -268,45 +225,29 @@ export const upstreamPatches = [
 
   {
     id: 'wiggly-dove',
-    toggleable: true,
     name: 'Block wiggly-dove Git/environment collection',
     ast: true,
   },
 
   {
     id: 'geo-stego-date',
-    toggleable: true,
     name: 'Neutralize geo-steganography in date string (qla)',
     ast: true,
   },
   {
     id: 'geo-detect-probe',
-    toggleable: true,
     name: 'Neutralize geo-detection probe (rdp)',
-    pattern: /function ([\w$]+)\(\)\{if\([\w$]+\(\)\)return null;let [\w$]+=[\w$]+\(\),[\w$]+=[\w$]+\(\),[\w$]+=[\w$]+==="Asia\/Shanghai"\|\|[\w$]+==="Asia\/Urumqi"[\s\S]*?\}\}/g,
-    replacer: (m, fn) => `function ${fn}(){if(${gate('geo-detect-probe')})return null;` + m.slice(`function ${fn}(){`.length, -1) + `}`,
-    sentinel: ['Asia/Shanghai', 'Asia/Urumqi'],
+    ast: true,
   },
   {
     id: 'geo-apostrophe-stego',
-    toggleable: true,
     name: 'Neutralize apostrophe steganography (odp)',
-    pattern: new RegExp(
-      'function ([\\w$]+)\\(([\\w$]+),([\\w$]+)\\)\\{' +
-      'if\\(!\\2&&!\\3\\)return"\'";' +
-      'if\\(\\2&&!\\3\\)return"(?:\\\\u2019|\\u2019)";' +
-      'if\\(!\\2&&\\3\\)return"(?:\\\\u02[Bb][Cc]|\\u02BC)";' +
-      'return"(?:\\\\u02[Bb]9|\\u02B9)"\\}',
-      'g'
-    ),
-    replacer: (m, fn, left, right) =>
-      `function ${fn}(${left},${right}){if(${gate('geo-apostrophe-stego')})return"'";` + m.slice(m.indexOf('{') + 1, -1) + `}`,
+    ast: true,
     optional: true,
   },
 
   {
     id: 'remove-cyber-risk',
-    toggleable: true,
     name: 'Remove CYBER_RISK_INSTRUCTION (unconditional)',
     coveredBy: ['pentest-prompt-rewrite'],
     pattern: /([\w$]+)="(IMPORTANT: Assist with authorized security testing[^"]*)"/g,
@@ -315,59 +256,46 @@ export const upstreamPatches = [
   },
   {
     id: 'remove-url-restriction',
-    toggleable: true,
     name: 'Remove URL generation restriction',
     pattern: /(\n\$\{[\w$]+\})(\nIMPORTANT: You must NEVER generate or guess URLs[^.]*\. You may use URLs provided by the user in their messages or local files\.)/g,
-    replacer: (m, prefix, sentence) => `\${${gate('remove-url-restriction')}?"":\`${prefix}\`+'${sentence.replace('\n', '\\n')}'}`,
+    replacer: () => '',
     sentinel: ['NEVER generate or guess URLs', 'URLs provided by the user'],
   },
   {
     id: 'remove-cautious-actions',
-    toggleable: true,
     name: 'Remove cautious actions section',
     coveredBy: ['pentest-prompt-rewrite'],
     pattern: /function ([\w$]+)\(([\w$]*)\)\{(?:if\([\s\S]{1,200}?\)return`# Executing actions with care\n\n[\s\S]*?`;)?return`# Executing actions with care\n\n[\s\S]*?`\}/g,
-    replacer: (m, fn, arg) => `function ${fn}(${arg}){if(${gate('remove-cautious-actions')})return\`\`;` + m.slice(`function ${fn}(${arg}){`.length, -1) + `}`,
+    replacer: (m, fn, arg) => `function ${fn}(${arg}){return\`\`}`,
     sentinel: ['# Executing actions with care'],
   },
   {
     id: 'remove-not-logged-in',
-    toggleable: true,
     name: 'Remove "Not logged in" notice',
-    pattern: /"(Not logged in\. Run [\w ]+ to authenticate\.)"/g,
-    replacer: (m, orig) => `(${gate('remove-not-logged-in')}?"":'${orig}')`,
+    ast: true,
     optional: true,
-    fallbacks: ['"Not logged in. Run /login to authenticate."', "'Not logged in. Run /login to authenticate.'"].map(pattern => ({
-      pattern,
-      nodeType: 'Literal',
-      replacer: () => `(${gate('remove-not-logged-in')}?"":'Not logged in. Run \\x2flogin to authenticate.')`,
-    })),
   },
 
   {
     id: 'attachment-filter-bypass',
-    toggleable: true,
     name: 'Attachment filter bypass',
     pattern: /([\w$]+)\(\)!=="ant"(&&[\w$]+\.has\([\w$]+\.attachment\.type\)|\)\{if\([\w$]+\.attachment\.type==="hook_additional_context")/g,
-    replacer: (m) => m.replace(/([\w$]+)\(\)!=="ant"(&&|\))/, (cm, f, sep) =>
-      `(${gate('attachment-filter-bypass')}?!1:${f}()!=="ant")${sep}`),
+    replacer: (m) => m.replace(/([\w$]+)\(\)!=="ant"(&&|\))/, (cm, f, sep) => `!1${sep}`),
     optional: true,
   },
   {
     id: 'message-filter-legacy',
-    toggleable: true,
     name: 'Message list filter bypass (legacy ternary)',
     versions: '<2.1.214',
     pattern: /([\w$]+)\(\)!=="ant"\?([\w$]+)\(([\w$]+),([\w$]+)\(([\w$]+)\)\):([\w$]+)/g,
-    replacer: m => m.replace(/^([\w$]+)\(\)!=="ant"\?/, (g, f) => `(${gate('message-filter-legacy')}?!1:${f}()!=="ant")?`),
+    replacer: (m, check, filter, messages, types, arg, original) => original,
     optional: true,
   },
   {
     id: 'message-filter-s8',
-    toggleable: true,
     name: 'Message list filter bypass (s_8 form)',
     pattern: /if\(([\w$]+)\(\)==="ant"\)return ([\w$]+);(?:if\([\w$]+\(\)&&[\w$]+\(\)\.project\?\.currentSessionCodeMode===!0\)return \2;)?let ([\w$]+)=([\w$]+) instanceof Set\?\4:(?:typeof \4==="function"\?\4\(\):)?([\w$]+)\(\4\);return ([\w$]+)\(\2,\3\)/g,
-    replacer: m => m.replace(/if\(([\w$]+)\(\)==="ant"\)/, (g, f) => `if(${gate('message-filter-s8')}||${f}()==="ant")`),
+    replacer: (m, check, messages) => `return ${messages};`,
     optional: true,
   },
   {
@@ -391,8 +319,19 @@ export const upstreamPatches = [
     optional: true,
   },
   {
+    id: 'auto-mode-rules-off',
+    name: 'Skip the external auto-mode BLOCK rules pack',
+    ast: true,
+    optional: true,
+  },
+  {
+    id: 'script-caps-off',
+    name: 'Disable the script call limit',
+    ast: true,
+    optional: true,
+  },
+  {
     id: 'remote-settings-off',
-    toggleable: true,
     name: 'Ignore enterprise-managed remote settings',
     ast: true,
   },

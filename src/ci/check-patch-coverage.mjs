@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs';
-import { upstreamPatches } from '../shared/patch-rules.mjs';
+import { PATCHES } from '../shared/patch-registry.mjs';
 
 const [logPath, platform, versionArg] = process.argv.slice(2);
-if (!logPath || !['linux', 'macos', 'windows'].includes(platform)) {
+if (!logPath || !['linux', 'macos', 'windows'].includes(platform) || versionArg && !/^\d+\.\d+\.\d+$/.test(versionArg)) {
   throw new Error('Usage: bun check-patch-coverage.mjs <install-log> <linux|macos|windows> [claude-version]');
 }
 
@@ -10,68 +10,92 @@ const bytes = readFileSync(logPath);
 const log = bytes.toString(bytes[0] === 0xff && bytes[1] === 0xfe ? 'utf16le' : 'utf8')
   .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '');
 const start = log.lastIndexOf('Mode: APPLY');
-const installedVersion = versionArg && /^\d+\.\d+\.\d+$/.test(versionArg)
-  ? versionArg
-  : log.slice(0, start).match(/Target: cli\.original\.cjs \(v(\d+\.\d+\.\d+)\)[^\n]*\s*$/)?.[1];
-const ranges = new Map(upstreamPatches.filter(p => p.versions).map(p => [p.name, p.versions]));
-
-// Known gaps in Claude 2.1.316: actions/runs/41206844027, also shared by stable 2.1.309.
-const baseline = new Map([
-  ['Computer Use gate (resolved configuration contract)', 'absent'],
-  ['Neutralize geo-steganography in date string (qla)', 'unverified'],
-  ['Skip MCP server allowlist / policy checks', 'absent'],
-  ['Computer Use gate bypass', 'unverified'],
-  ['Auto-mode unlock for third-party API (provider helper gate)', 'absent'],
-  ['macOS Cmd+V image paste fallback to clipboard read', 'stale'],
-  ['Restore Glob/Grep tools (un-inline EMBEDDED_SEARCH_TOOLS)', platform === 'windows' ? 'stale' : 'absent'],
-  ['Neutralize geo-detection probe (rdp)', 'unverified'],
-  ['Neutralize apostrophe steganography (odp)', 'absent'],
-  ['Remove cautious actions section', 'unverified'],
-]);
-if (platform !== 'macos') {
-  baseline.set('Computer Use default enabled', 'unverified');
-  baseline.set('Computer Use subscription bypass', 'unverified');
-}
-
 const summary = start < 0 ? null : log.slice(start)
   .match(/Result:\s*(\d+) applied,\s*(\d+) skipped,\s*(\d+) failed/);
 if (!summary) throw new Error('Patch APPLY result is missing from the install log');
+const sourceVersion = log.slice(0, start).match(/Target: cli\.original\.cjs \(v(\d+\.\d+\.\d+)\)[^\n]*\s*$/)?.[1];
+const installedVersion = versionArg || sourceVersion;
+if (!installedVersion) throw new Error('Installed Claude version is missing from the install log');
+if (versionArg && sourceVersion && versionArg !== sourceVersion) throw new Error('Claude version argument does not match the install log');
 
-const body = log.slice(start, start + summary.index);
+// Reviewed gaps in Claude 2.1.316 (actions/runs/41206844027) and stable 2.1.309.
+// New versions must not silently inherit these exceptions.
+const reviewed = Bun.semver.satisfies(installedVersion, '2.1.309 || 2.1.316');
+const baseline = reviewed ? new Map([
+  ['computer-use-gate-semantic', 'absent'],
+  ['geo-stego-date', 'unverified'],
+  ['permission-mcp-allowlist-off', 'absent'],
+  ['computer-use-gate', 'unverified'],
+  ['auto-mode-helper-gate', 'absent'],
+  ['macos-cmdv-image-paste', 'stale'],
+  ['restore-search-tools', platform === 'windows' ? 'stale' : 'absent'],
+  ['geo-detect-probe', 'unverified'],
+  ['geo-apostrophe-stego', 'absent'],
+  ['remove-cautious-actions', 'unverified'],
+]) : new Map();
+if (reviewed && platform !== 'macos') {
+  baseline.set('computer-use-default', 'unverified');
+  baseline.set('computer-use-sub', 'unverified');
+}
+const partialLimits = reviewed ? new Map([['ultraplan', 1]]) : new Map();
+
+const expected = new Map(PATCHES.map(patch => [patch.id, patch]));
+const results = new Map(), partials = new Map(), covered = [];
 const errors = [];
+if (expected.size !== PATCHES.length) errors.push('Patch registry contains duplicate IDs');
 if (Number(summary[3]) !== 0) errors.push(`Patcher reported ${summary[3]} failed patches`);
+const body = log.slice(start, start + summary.index);
 let records = 0;
 const observed = { applied: 0, skipped: 0, failed: 0 };
 for (const raw of body.split(/\r?\n/)) {
-  const line = raw.trim();
-  const status = line.match(/^(✅|⏭|⚠️|❌)\s+(.+)/u);
+  const status = raw.trim().match(/^(✅|⏭|⚠️|❌)\s+(.+)/u);
   if (!status) continue;
-  const [, icon, message] = status;
-  const partial = message.match(/^([\w-]+): (\d+) site\(s\) NOT patched/);
+  const [, icon, text] = status;
+  const partial = text.match(/^([\w-]+): (\d+) site\(s\) NOT patched/);
   if (partial) {
-    if (partial[1] !== 'ultraplan' || Number(partial[2]) > 1) errors.push(message);
+    const [, id, count] = partial;
+    if (!expected.has(id) || partials.has(id) || Number(count) > (partialLimits.get(id) ?? 0)) errors.push(text);
+    partials.set(id, Number(count));
     continue;
   }
   records++;
   observed[icon === '✅' ? 'applied' : icon === '❌' ? 'failed' : 'skipped']++;
-  if (icon === '✅' || / \(covered by applied rule: [\w-]+\)$/.test(message)) continue;
-  const outOfRange = message.match(/^(.*) \(outside supported versions: (.+)\)$/);
-  if (icon === '⏭' && outOfRange && installedVersion && ranges.get(outOfRange[1]) === outOfRange[2] &&
-      !Bun.semver.satisfies(installedVersion, outOfRange[2])) continue;
-  if (icon === '❌') {
-    errors.push(message);
+  const record = text.match(/^\[([\w-]+)\]\s+(.+)/);
+  if (!record) { errors.push(`Patch result is missing a rule ID: ${text}`); continue; }
+  const [, id, message] = record;
+  if (!expected.has(id)) { errors.push(`Unknown patch ID: ${id}`); continue; }
+  if (results.has(id)) { errors.push(`Duplicate patch result: ${id}`); continue; }
+  results.set(id, icon);
+  const patch = expected.get(id);
+  const partialCount = message.match(/, (\d+) site\(s\) left unpatched\)/);
+  if (partialCount && Number(partialCount[1]) > (partialLimits.get(id) ?? 0)) errors.push(`[${id}] ${message}`);
+  if (icon === '✅') continue;
+  if (icon === '❌') { errors.push(`[${id}] ${message}`); continue; }
+  const covering = message.match(/ \(covered by applied rule: ([\w-]+)\)$/);
+  if (icon === '⏭' && covering) {
+    const coveringId = covering[1];
+    if (![...(patch.coveredBy ?? []), ...(patch.fallbackFor ?? [])].includes(coveringId)) {
+      errors.push(`Undeclared covering rule: ${id} -> ${coveringId}`);
+    }
+    covered.push([id, coveringId]);
     continue;
   }
-  const missing = message.match(/^(.*) \((not present in this version|no matching anchor; application cannot be verified|0 matches, no sentinel — cannot verify)\)$/);
-  const stale = message.match(/^(.*) — (?:regex|AST matcher) stale,/);
-  const name = missing?.[1] ?? stale?.[1];
-  const state = stale ? 'stale' : missing?.[2] === 'not present in this version' ? 'absent' : 'unverified';
-  if (!name || baseline.get(name) !== state) errors.push(`New patch coverage gap: ${message}`);
+  const outOfRange = message.match(/ \(outside supported versions: (.+)\)$/);
+  if (icon === '⏭' && outOfRange && patch.versions === outOfRange[1] &&
+      !Bun.semver.satisfies(installedVersion, patch.versions)) continue;
+  const missing = message.match(/ \((not present in this version|no matching anchor; application cannot be verified|0 matches, no sentinel — cannot verify)\)$/);
+  const stale = / — (?:regex|AST matcher) stale,/.test(message);
+  const state = stale ? 'stale' : missing?.[1] === 'not present in this version' ? 'absent' : 'unverified';
+  if ((!missing && !stale) || baseline.get(id) !== state) errors.push(`New patch coverage gap: [${id}] ${message}`);
 }
-if (records !== Number(summary[1]) + Number(summary[2]) + Number(summary[3])) {
-  errors.push('Patch result count does not match the parsed patch records');
+for (const id of expected.keys()) if (!results.has(id)) errors.push(`Missing patch result: ${id}`);
+for (const [id, coveringId] of covered) {
+  if (results.get(coveringId) !== '✅') errors.push(`Covering rule did not apply: ${id} -> ${coveringId}`);
 }
-if (records < 72 || observed.applied === 0) errors.push('Patch report is empty or incomplete (baseline: 72 rules)');
+for (const id of partials.keys()) {
+  if (results.get(id) !== '✅') errors.push(`Partial coverage has no applied patch result: ${id}`);
+}
+if (records !== PATCHES.length || observed.applied === 0) errors.push(`Patch report is empty or incomplete (expected ${PATCHES.length} registered rules)`);
 if (observed.applied !== Number(summary[1]) || observed.skipped !== Number(summary[2]) || observed.failed !== Number(summary[3])) {
   errors.push('Patch status counts do not match the summary');
 }
@@ -80,4 +104,4 @@ if (errors.length) {
   for (const error of errors) console.error(`::error::${error}`);
   process.exit(1);
 }
-console.log(`Patch coverage baseline (${platform}): ${summary[0]}; no new coverage gaps`);
+console.log(`Patch coverage (${platform}, Claude ${installedVersion}, ${PATCHES.length} rules): ${summary[0]}; no new coverage gaps`);

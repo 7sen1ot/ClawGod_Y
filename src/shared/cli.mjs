@@ -134,14 +134,13 @@ if (_realExecPath !== process.execPath) {
   });
 }
 
-await import('./feature-gates.mjs');
 
 await import('./bun-ant-shim.mjs');
 
 const leanSettings = join(clawgodDir, 'lean-settings.json');
 if (!versionOnly && !probeTools) {
   if (!existsSync(leanSettings)) {
-    (await import('./lean-mode.mjs')).leanApply(leanSettings, undefined, join(clawgodDir, 'patches.json'));
+    (await import('./lean-mode.mjs')).leanApply(leanSettings);
   }
   if (!process.argv.some(a => a === '--settings' || a.startsWith('--settings='))) {
     const tui = readJsonConfig(leanSettings).tui ?? 'fullscreen';

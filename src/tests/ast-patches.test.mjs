@@ -21,7 +21,6 @@ const decoy='function userType(){return"external"}';
 function userType () { return 'external'; }
 function teams () { if (!process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS) return false; return flag('tengu_amber_flint', true); }
 function standalone () { return typeof Bun < 'u' && Bun['isStandaloneExecutable'] === true; }
-function voice () { return !flag('tengu_amber_quartz_disabled', false); }
 function pair(history,ids){if(!history.length)return[];return ids.map(id=>({type:'tool_result',tool_use_id:id,content:'[Tool result missing due to internal error]',is_error:!0}));}
 const config={pixelValidation:123, 'enabled':false};
 const command={isEnabled(){'use strict';return this.allowed}, extra:{name:'nested'}, 'name':'ultraplan', allowed:false};
@@ -43,7 +42,9 @@ const dateSource = 'function dateText (input) {let info=probe(),mark=apostrophe(
 const scanned = scanAstPatches(source + dateSource);
 for (const id of AST_PATCH_IDS) assert.equal(scanned[id].matches.length,
   ['remote-settings-off', 'wiggly-dove', 'computer-use-gate-semantic', 'ultrareview-command', 'growthbook-config-overrides-graph',
-    'session-state-paths', 'agents-md-off'].includes(id) ? 0 : 1, id);
+    'session-state-paths', 'agents-md-off', 'auto-mode-rules-off', 'script-caps-off',
+    'classifier-model', 'classifier-retries', 'classifier-timeout', 'ultrareview-gate',
+    'geo-detect-probe', 'geo-apostrophe-stego', 'remove-not-logged-in'].includes(id) ? 0 : 1, id);
 const edits = Object.values(scanned).flatMap(result => result.matches);
 const patched = applyAstEdits(source + dateSource, edits);
 parsePatchSource(patched);
@@ -59,24 +60,23 @@ assert.equal(instructionFilter('/workspace/CLAUDE.md', 'Project'), true);
 assert.equal(instructionFilter('/workspace/.claude/rules/style.md', 'Project'), false);
 assert.equal(instructionFilter('excluded.md', 'Managed'), true);
 
-for (const toggle of [undefined, true, false]) {
+{
   let calls = 0;
   const context = {
     Bun: { isStandaloneExecutable: false },
     flag: () => { calls++; return true; },
     probe: () => ({ cnTZ: true, known: true }), apostrophe: () => '\u2019',
-    ...(toggle === undefined ? {} : { __clawgodPatches: Object.fromEntries(AST_PATCH_IDS.map(id => [id, toggle])) }),
   };
   const result = runInNewContext(`${patched};const gb=new GrowthBook();
-    [userType(),standalone(),voice(),config.enabled,command.isEnabled(),neighbor.isEnabled(),
+    [userType(),standalone(),config.enabled,command.isEnabled(),neighbor.isEnabled(),
      gb.getEnvironmentOverrides().flag,gb.getEnvironmentOverrides().flag,gb.environmentOverridesParsed,dateText("2026-10-12"),
      pair([{message:{content:[{type:'tool_result',tool_use_id:'t',content:'real',is_error:false}]}}],['t'])[0].is_error]`, context);
-  assert.deepEqual(Array.from(result), ['ant', true, toggle !== false, toggle !== false,
-    toggle !== false, false, true, true, true, toggle === false ? "Today\u2019s date is 2026/10/12." : "Today's date is 2026-10-12.", toggle === false]);
-  assert.equal(calls, toggle === false ? 1 : 0);
+  assert.deepEqual(Array.from(result), ['ant', true, true,
+    true, false, true, true, true, "Today's date is 2026-10-12.", false]);
+  assert.equal(calls, 0);
 }
 assert.equal(applyAstEdits(patched, Object.values(scanAstPatches(patched)).flatMap(r => r.matches)), patched,
-  'repeated patching without a snapshot must not nest gates');
+  'repeated patching without a snapshot must not duplicate patches');
 
 const privacyGate = `function allowed () {'use strict';if (!firstParty()) return false;
   if (!lookup(rollout, false)) return false;return routeAllowed();}`;
@@ -89,19 +89,20 @@ for (const declaration of ['var', 'let', 'const']) {
   const patched = applyAstEdits(source, scanned.matches);
   parsePatchSource(patched);
   assert.ok(patched.includes(shadowedGate), 'a shadowed flag remains untouched');
-  assert.ok(patched.includes("'use strict';;if(globalThis.__clawgodPatches"), 'keep the directive first');
+  assert.ok(patched.includes("'use strict';;/*clawgod:wiggly-dove*/if(!0)"), 'keep the directive first');
   assert.equal(scanAstPatches(patched)['wiggly-dove'].patched, true);
   assert.equal(scanAstPatches(patched)['wiggly-dove'].matches.length, 0);
 }
-for (const source of [
-  `const rollout='tengu_wiggly_dove';function unknown(){return lookup(rollout,false)}`,
-  `function unknown(){return lookup('tengu_wiggly_dove',false)}`,
-  `const rollout='tengu_wiggly_dove';${privacyGate}function unknown(){return lookup('tengu_wiggly_dove',false)}`,
-  `const rollout='tengu_wiggly_dove';${privacyGate}${privacyGate.replace('allowed', 'ambiguous')}`,
+for (const [source, matches, skipped] of [
+  [`const rollout='tengu_wiggly_dove';function unknown(){return lookup(rollout,false)}`, 1, 0],
+  [`function unknown(){return lookup('tengu_wiggly_dove',false)}`, 1, 0],
+  [`const rollout='tengu_wiggly_dove';${privacyGate}function unknown(){return lookup('tengu_wiggly_dove',false)}`, 2, 0],
+  [`const rollout='tengu_wiggly_dove';${privacyGate}${privacyGate.replace('allowed', 'ambiguous')}`, 2, 0],
 ]) {
   const result = scanAstPatches(source)['wiggly-dove'];
-  assert.equal(result.present, true, 'unhandled or ambiguous flag uses are stale');
-  assert.equal(result.matches.length, 0, 'do not claim partial privacy protection');
+  assert.equal(result.present, true);
+  assert.equal(result.matches.length, matches, 'keep every recognized privacy gate');
+  assert.equal(result.skipped ?? 0, skipped, 'report any remaining unrecognized sites');
 }
 assert.equal(scanAstPatches(`// const rollout='tengu_wiggly_dove';\nconst text="function f(){return 'tengu_wiggly_dove'}";`)['wiggly-dove'].present, false,
   'comments and source text are not flag bindings');
@@ -117,19 +118,18 @@ assert.equal(remoteScan['remote-settings-off'].matches.length, 1);
 assert.equal(remoteScan['remote-settings-off'].present, false);
 const remotePatched = applyAstEdits(remoteSettingsSource, remoteScan['remote-settings-off'].matches);
 assert.match(remotePatched, /function ordinaryEligibility\(\)\{let cached=readOrdinaryCache\(\)/);
-for (const enabled of [true, false]) {
+{
   let reads = 0, details = 0, records = 0;
   const result = runInNewContext(`${remotePatched};[remoteSettingsEligibility(),ordinaryEligibility()]`, {
-    __clawgodPatches: { 'remote-settings-off': enabled },
     readRemoteCache: () => { reads++; return undefined; },
     remoteUpstream: () => { details++; return true; }, remoteLog: () => {},
     recordRemoteSettings: () => { records++; }, saveRemoteEligibility: value => value,
     readOrdinaryCache: () => undefined, ordinaryUpstream: () => false,
   });
-  assert.deepEqual(Array.from(result), [enabled ? false : true, false]);
-  assert.equal(reads, enabled ? 0 : 1);
-  assert.equal(details, enabled ? 0 : 1);
-  assert.equal(records, enabled ? 0 : 1);
+  assert.deepEqual(Array.from(result), [false, false]);
+  assert.equal(reads, 0);
+  assert.equal(details, 0);
+  assert.equal(records, 0);
 }
 assert.equal(applyAstEdits(remotePatched, scanAstPatches(remotePatched)['remote-settings-off'].matches), remotePatched,
   'remote-settings patch must be idempotent');
@@ -174,18 +174,16 @@ for (const fn of ['()=>upstream()', '()=>{return upstream()}', 'function(){retur
   const result = scanAstPatches(input);
   assert.equal(result.ultraplan.matches.length, 1);
   const output = applyAstEdits(input, result.ultraplan.matches);
-  for (const toggle of [true, false]) {
-    let calls = 0;
-    assert.equal(runInNewContext(`${output};c.isEnabled()`, {
-      __clawgodPatches: { ultraplan: toggle }, upstream: () => { calls++; return false; },
-    }), toggle);
-    assert.equal(calls, toggle ? 0 : 1);
-  }
+  let calls = 0;
+  assert.equal(runInNewContext(`${output};c.isEnabled()`, {
+    upstream: () => { calls++; return false; },
+  }), true);
+  assert.equal(calls, 0);
 }
 
 const strict = "const c={name:'ultraplan',isEnabled:function(){'use strict'\nreturn this===undefined}};";
 const strictPatched = applyAstEdits(strict, scanAstPatches(strict).ultraplan.matches);
-assert.equal(runInNewContext(`${strictPatched};const f=c.isEnabled;f()`, { __clawgodPatches: { ultraplan: false } }), true);
+assert.equal(runInNewContext(`${strictPatched};const f=c.isEnabled;f()`), true);
 
 const root = mkdtempSync(join(tmpdir(), 'clawgod-ast-test-'));
 try {
@@ -221,7 +219,7 @@ try {
 
     rmSync(join(dir, 'source-backup.json'));
     writeFileSync(target, firstPatched);
-    assert.equal(run('--verify').status, 0, 'verify recognizes the baked-in AST gate');
+    assert.equal(run('--verify').status, 0, 'verify recognizes the AST patch marker');
     assert.equal(run().status, 0, 'reapplying without a snapshot is safe');
     assert.equal(readFileSync(target, 'utf8'), firstPatched);
 
@@ -240,12 +238,12 @@ try {
     const bestEffort = run();
     assert.equal(bestEffort.status, 0, bestEffort.stderr);
     assert.match(bestEffort.stderr, /Runtime fallback installed/);
-    assert.match(readFileSync(target, 'utf8'), /enablePredicate\(futureGate,"ultraplan"\)/);
+    assert.ok(readFileSync(target, 'utf8').includes('enablePredicate(/*clawgod:ultraplan*/futureGate)'));
     assert.match(readFileSync(target, 'utf8'), /return "ant"/);
   }
 } finally {
   rmSync(root, { recursive: true, force: true });
 }
-console.log('[ast-patches.test] semantic ranges, gates, drift, backups and failure safety passed');
+console.log('[ast-patches.test] semantic ranges, markers, drift, backups and failure safety passed');
 
 });

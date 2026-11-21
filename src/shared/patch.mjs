@@ -4,21 +4,14 @@ import { fileURLToPath } from 'url';
 import { AST_PATCH_IDS, scanAstPatches } from './ast-patches.mjs';
 import { applyAstEdits, parsePatchSource, hasPatchAnchors,
   getPatchNodeIndex, getCachedPatchContext, releasePatchContexts, releasePatchSource } from './ast-helpers.mjs';
-import { PENTEST_AST_PATCH_IDS, PENTEST_AST_META, PENTEST_REQUIRED, scanPentestPatches, scanFinalPolicyEdits, scanFinalBrandingEdits, findAppliedPromptHooks } from './pentest-patches.mjs';
+import { PENTEST_AST_PATCH_IDS, PENTEST_REQUIRED, scanPentestPatches, scanFinalPolicyEdits, scanFinalBrandingEdits, findAppliedPromptHooks } from './pentest-patches.mjs';
 import { createRuntimeGraphAnalysis, pruneRuntimeGraph } from './pentest-pruner.mjs';
-import { FEATURES, featuresMeta } from './patch-registry.mjs';
-import { upstreamPatches } from './patch-rules.mjs';
+import { FEATURES, PATCHES as patches, featuresMeta } from './patch-registry.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TARGET = join(__dirname, 'cli.original.cjs');
 const BACKUP = TARGET + '.bak';
 const CLEAN_SOURCE = join(__dirname, 'source-backup.json');
-
-const PENTEST_DROPPED_IDS = new Set(FEATURES['voice-mode'].patchIds);
-delete FEATURES['voice-mode'];
-const patches = upstreamPatches
-  .filter(p => !PENTEST_DROPPED_IDS.has(p.id))
-  .concat(PENTEST_AST_PATCH_IDS.map(id => ({ id, name: PENTEST_AST_META[id], ast: true, optional: true })));
 
 const args = process.argv.slice(2);
 const dryRun = args.includes('--dry-run');
@@ -42,7 +35,6 @@ if (dumpFeatures) {
 (function validateRegistry() {
   const errs = [];
   const byId = new Map();
-  const referenced = new Set();
   for (const p of patches) {
     if (!p.id) errs.push(`patch without id: ${p.name}`);
     else if (byId.has(p.id)) errs.push(`duplicate patch id: ${p.id}`);
@@ -50,14 +42,15 @@ if (dumpFeatures) {
   }
   for (const [fid, def] of Object.entries(FEATURES)) {
     for (const pid of def.patchIds) {
-      referenced.add(pid);
-      const p = byId.get(pid);
-      if (!p) { errs.push(`feature '${fid}' references unknown patch id '${pid}'`); continue; }
-      if (!p.toggleable) errs.push(`feature '${fid}' references non-toggleable patch '${pid}'`);
+      if (!byId.has(pid)) errs.push(`feature '${fid}' references unknown patch id '${pid}'`);
     }
   }
+  const scannerIds = new Set([...AST_PATCH_IDS, ...PENTEST_AST_PATCH_IDS]);
+  for (const id of scannerIds) {
+    if (!byId.get(id)?.ast) errs.push(`AST scanner '${id}' has no registered AST patch`);
+  }
   for (const p of patches) {
-    if (p.toggleable && !referenced.has(p.id)) errs.push(`toggleable patch '${p.id}' is referenced by no feature`);
+    if (p.ast && !scannerIds.has(p.id)) errs.push(`AST patch '${p.id}' has no scanner`);
   }
   if (errs.length > 0) {
     console.error('❌ Feature registry invalid:');
@@ -182,10 +175,18 @@ function collectMatches(p) {
         }
       } else matches = content.matchAll(rule.pattern);
       for (const match of matches) {
-        if (!match[0].length || index && accepted.some(other =>
-          match.index < other.index + other[0].length && other.index < match.index + match[0].length)) continue;
+        if (!match[0].length) continue;
         if (p.validate && !p.validate(match[0], content, match.index)) continue;
         if (index && (!rule.nodeType || !syntaxMatch(match, rule.nodeType))) continue;
+        if (index) {
+          const end = match.index + match[0].length;
+          const overlaps = accepted.filter(other => match.index < other.index + other[0].length && other.index < end);
+          // A validated fallback may cover more of the target than the primary regex.
+          if (overlaps.some(other => other.strategy !== 'regex' ||
+              match.index > other.index || end < other.index + other[0].length ||
+              match[0].length === other[0].length)) continue;
+          for (const other of overlaps) accepted.splice(accepted.indexOf(other), 1);
+        }
         match.replacer = rule.replacer ?? p.replacer;
         match.strategy = index ? typeof rule.pattern === 'string' ? 'string-fallback' : 'regex-fallback' : 'regex';
         accepted.push(match);
@@ -264,36 +265,36 @@ for (const p of [...patches.filter(p => p.ast), ...patches.filter(p => !p.ast)])
     astFlushed = true;
   }
   if (p.versions && /^\d+\.\d+\.\d+$/.test(version) && !Bun.semver.satisfies(version, p.versions)) {
-    console.log(`  ⏭  ${p.name} (outside supported versions: ${p.versions})`);
+    console.log(`  ⏭  [${p.id}] ${p.name} (outside supported versions: ${p.versions})`);
     skips.version++;
     continue;
   }
   const preferredRule = p.fallbackFor?.find(id => appliedIds.has(id));
-  if (preferredRule) {
-    console.log(`  ⏭  ${p.name} (covered by applied rule: ${preferredRule})`);
+  const fileMatches = (p.ast ? astMatches.get(p.id) : collectMatches(p))
+    .filter(fm => !p.fallbackFor?.some(id => appliedIds.has(id) && fm.content.includes(`/*clawgod:${id}*/`)));
+  if (preferredRule && !fileMatches.length) {
+    console.log(`  ⏭  [${p.id}] ${p.name} (covered by applied rule: ${preferredRule})`);
     skips.covered++;
     continue;
   }
-  const fileMatches = p.ast ? astMatches.get(p.id) : collectMatches(p);
-
   let fileChangedCount = 0;
   const strategies = new Map();
 
   if (fileMatches.length === 0) {
     if (p.appliedSentinel && Object.values(files).some(content => content.includes(p.appliedSentinel))) {
-      console.log(`  ✅ ${p.name} (already applied, patch marker present)`);
+      console.log(`  ✅ [${p.id}] ${p.name} (already applied, patch marker present)`);
       applied++;
       appliedIds.add(p.id);
       continue;
     }
     if (p.ast && astPatched.has(p.id) && !astPresent.has(p.id)) {
-      console.log(`  ✅ ${p.name} (already applied, AST gate present)`);
+      console.log(`  ✅ [${p.id}] ${p.name} (already applied, AST patch marker present)`);
       applied++;
       appliedIds.add(p.id);
       continue;
     }
     if (p.required || promptRequired && PENTEST_REQUIRED.has(p.id)) {
-      console.log(`  ❌ ${p.name} (required runtime hook did not match — upstream runtime changed)`);
+      console.log(`  ❌ [${p.id}] ${p.name} (required runtime hook did not match — upstream runtime changed)`);
       failed++;
       continue;
     }
@@ -306,29 +307,29 @@ for (const p of [...patches.filter(p => p.ast), ...patches.filter(p => !p.ast)])
     // A text rule is covered only when its original anchor was removed.
     if (coveringRule && (p.sentinel === undefined || !anchorPresent &&
         sentinels.length > 0 && Object.values(originalFiles).some(content => hasPatchAnchors(content, [sentinels])))) {
-      console.log(`  ⏭  ${p.name} (covered by applied rule: ${coveringRule})`);
+      console.log(`  ⏭  [${p.id}] ${p.name} (covered by applied rule: ${coveringRule})`);
       skips.covered++;
       continue;
     }
     if (p.optional && !anchorPresent) {
-      console.log(`  ⏭  ${p.name} (not present in this version)`);
+      console.log(`  ⏭  [${p.id}] ${p.name} (not present in this version)`);
       skips.absent++;
       continue;
     }
     if (p.sentinel !== undefined || (p.ast && anchorPresent)) {
       if (anchorPresent) {
         const detail = sentinels.map((s) => JSON.stringify(s)).join(', ');
-        console.log(`  ⚠️  ${p.name} — ${p.ast ? 'AST matcher' : 'regex'} stale, sentinel still in source: ${detail} (skipped, upstream behavior kept)`);
+        console.log(`  ⚠️  [${p.id}] ${p.name} — ${p.ast ? 'AST matcher' : 'regex'} stale, sentinel still in source: ${detail} (skipped, upstream behavior kept)`);
         skips.stale++;
         unverified.add(p.id);
         continue;
       }
-      console.log(`  ⏭  ${p.name} (no matching anchor; application cannot be verified)`);
+      console.log(`  ⏭  [${p.id}] ${p.name} (no matching anchor; application cannot be verified)`);
       skips.unverified++;
       unverified.add(p.id);
       continue;
     }
-    console.log(`  ⚠️  ${p.name} (0 matches, no sentinel — cannot verify)`);
+    console.log(`  ⚠️  [${p.id}] ${p.name} (0 matches, no sentinel — cannot verify)`);
     skips.unverified++;
     unverified.add(p.id);
     continue;
@@ -336,7 +337,7 @@ for (const p of [...patches.filter(p => p.ast), ...patches.filter(p => !p.ast)])
 
   if (verify) {
     const totalMatches = fileMatches.reduce((total, fm) => total + fm.matches.length, 0);
-    console.log(`  ⬚  ${p.name} — ${totalMatches} match(es), not yet applied`);
+    console.log(`  ⬚  [${p.id}] ${p.name} — ${totalMatches} match(es), not yet applied`);
     skips.pending++;
     continue;
   }
@@ -373,7 +374,7 @@ for (const p of [...patches.filter(p => p.ast), ...patches.filter(p => !p.ast)])
 
   if (fileChangedCount > 0) {
     const skippedNote = astSkipped.get(p.id) ? `, ${astSkipped.get(p.id)} site(s) left unpatched` : '';
-    console.log(`  ✅ ${p.name} (${fileChangedCount} replacement${fileChangedCount > 1 ? 's' : ''} in ${appliedFiles} file${appliedFiles > 1 ? 's' : ''}${skippedNote})`);
+    console.log(`  ✅ [${p.id}] ${p.name} (${fileChangedCount} replacement${fileChangedCount > 1 ? 's' : ''} in ${appliedFiles} file${appliedFiles > 1 ? 's' : ''}${skippedNote})`);
     if (strategies.size) console.log(`     Fallbacks: ${[...strategies].map(([kind, count]) => `${count} ${kind}`).join(', ')}`);
     if (strategies.has('runtime-hook')) {
       console.warn('     Runtime fallback installed; boolean result and activation are checked at call time, not verified during patching.');
@@ -387,7 +388,7 @@ for (const p of [...patches.filter(p => p.ast), ...patches.filter(p => !p.ast)])
     applied++;
     appliedIds.add(p.id);
   } else {
-    console.log(`  ⏭  ${p.name} (no change needed)`);
+    console.log(`  ⏭  [${p.id}] ${p.name} (no change needed)`);
     skips.unchanged++;
   }
 }

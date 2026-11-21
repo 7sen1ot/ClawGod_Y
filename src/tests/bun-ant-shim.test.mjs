@@ -403,17 +403,3 @@ test('install never shadows a native CellSegmenter', () => {
     if (saved === undefined) delete bun.ant; else bun.ant = saved;
   }
 });
-
-test('install respects the bun-ant-shim feature toggle', () => {
-  const bun = targetBun();
-  const saved = bun.ant;
-  try {
-    delete bun.ant;
-    globalThis.__clawgodPatches = { 'bun-ant-shim': false };
-    assert.equal(install(), false);
-    assert.equal(bun.ant, undefined, 'disabled shim installs nothing');
-  } finally {
-    delete globalThis.__clawgodPatches;
-    if (saved === undefined) delete bun.ant; else bun.ant = saved;
-  }
-});

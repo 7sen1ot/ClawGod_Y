@@ -117,7 +117,6 @@ export function installRuntime(version) {
     const hadLauncher = existsSync(launcher);
     if (hadLauncher) copyFileSync(launcher, join(snapshot, 'launcher'));
     writeFileSync(join(snapshot, 'launcher-state.json'), JSON.stringify({ existed: hadLauncher }));
-    if (existsSync(join(installDir, 'patches.json'))) copyFileSync(join(installDir, 'patches.json'), join(snapshot, 'patches-config.json'));
     for (const name of names) if (existsSync(join(installDir, name))) {
       renameSync(join(installDir, name), join(snapshot, name));
       moved.push(name);
@@ -125,11 +124,11 @@ export function installRuntime(version) {
     replacing = true;
     for (const name of payloads) copyFileSync(join(sourceDir, name), join(installDir, name));
     if (moved.includes('lean-settings.json')) copyFileSync(join(snapshot, 'lean-settings.json'), join(installDir, 'lean-settings.json'));
-    for (const name of ['features.json', 'patches.json', 'provider.json']) {
+    for (const name of ['features.json', 'provider.json']) {
       const path = join(installDir, name);
       if (existsSync(path)) continue;
       const data = name === 'features.json' ? readFileSync(join(sourceDir, name))
-        : JSON.stringify(name === 'provider.json' ? defaultProviderConfig : {}, null, 2) + '\n';
+        : JSON.stringify(defaultProviderConfig, null, 2) + '\n';
       writeFileSync(path, data, { flag: 'wx', mode: 0o600 });
       seeded.push(name);
     }
@@ -139,7 +138,7 @@ export function installRuntime(version) {
     run('post-process.mjs');
     writeFileSync(join(installDir, '.source-version'), upstreamVersion + '\n');
     writeFileSync(join(installDir, '.clawgod-version'), runtimeVersion.version + '\n');
-    leanApply(join(installDir, 'lean-settings.json'), undefined, join(installDir, 'patches.json'));
+    leanApply(join(installDir, 'lean-settings.json'));
     run('patch.mjs', ['--capture-and-apply']);
     console.log('Renderer runtime: Bun APIs with bun-ant-shim.mjs for Bun.ant.CellSegmenter');
     run('compile-runtime.mjs');
@@ -157,7 +156,6 @@ export function installRuntime(version) {
         if (replacing) for (const name of ownedNames()) removeOwned(installDir, name);
         for (const name of moved) renameSync(join(snapshot, name), join(installDir, name));
         for (const name of seeded) removeOwned(installDir, name);
-        if (existsSync(join(snapshot, 'patches-config.json'))) copyFileSync(join(snapshot, 'patches-config.json'), join(installDir, 'patches.json'));
         const state = JSON.parse(readFileSync(join(snapshot, 'launcher-state.json'), 'utf8'));
         if (state.existed) copyFileSync(join(snapshot, 'launcher'), launcher);
         else rmSync(launcher, { force: true });

@@ -15,13 +15,12 @@ function terminalReplyDelay(querier, reader, now) {
   return Math.max(0, 2000 - Math.max(0, now - reader.lastInputAt));
 }
 
-function enablePredicate(original, id) {
+function enablePredicate(original) {
   if (typeof original !== 'function') return original;
   const enable = value => typeof value === 'boolean' ? true : value;
   return function () {
     'use strict';
     const result = Reflect.apply(original, this, arguments);
-    if (globalThis.__clawgodPatches?.[id] === false) return result;
     return result instanceof Promise ? result.then(enable) : enable(result);
   };
 }

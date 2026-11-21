@@ -37,7 +37,7 @@ try {
           }
           if (name === './runtime-helpers.mjs') return require('../shared/runtime-helpers.mjs');
           if (name === './lean-mode.mjs') return require('../shared/lean-mode.mjs');
-          if (['./feature-gates.mjs', './bun-ant-shim.mjs'].includes(name)) return {};
+          if (name === './bun-ant-shim.mjs') return {};
           return require(name);
         },
       });

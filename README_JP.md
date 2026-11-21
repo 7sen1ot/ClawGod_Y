@@ -20,7 +20,7 @@ ClawGod_Y は公式 [Claude Code](https://docs.anthropic.com/en/docs/claude-code
 
 パッチの実装は [0Chencc/clawgod](https://github.com/0Chencc/clawgod) を参考にしています。オープンソース化してくれた原プロジェクトに感謝します。本フォークは上流のクロスバージョン対応パッチアーキテクチャを維持し、パッチ済みランタイムを独立してインストールします：
 
-- **`clawgod` がパッチ済みの Claude Code を起動します（デフォルトで v2.1.322 をインストール）。** パッチ済みランタイムはすべて `~/.clawgod`（Windows では `%USERPROFILE%\.clawgod`）に格納されます。
+- **`clawgod` がパッチ済みの Claude Code を起動します（デフォルトで npm の `stable` タグに対応するバージョンをインストール）。** パッチ済みランタイムはすべて `~/.clawgod`（Windows では `%USERPROFILE%\.clawgod`）に格納されます。
 - **Claude Code がすでにインストールされている場合、既存の `claude` コマンドは変更されません。** 公式 Claude Code の事前インストールは不要です。既存のオリジナルの `claude update` は通常どおり動作します。
 - **バージョンをまたぐ互換性を考慮した設計。** パッチはクロスバージョンのアンカーを使用し、他の Claude Code バージョンにも適合させられますが、すべてのバージョンでの互換性は保証しません。インストール時に `latest`、`stable`、または具体的なバージョン番号を選択できます。必須でないパッチが一致しない場合は警告してスキップしますが、必須のプロンプト注入やソース処理に失敗した場合はインストールを中止します。
 - **ペンテスト向けパッチ**：ツールの権限プロンプトと安全分類器をデフォルトでバイパスし、プロンプトを許可されたテストの文脈に書き換え、不要なオフィス／コンシューマー機能を削除します。
@@ -50,7 +50,7 @@ curl -fsSL https://github.com/7sen1ot/ClawGod_Y/releases/latest/download/install
 irm https://github.com/7sen1ot/ClawGod_Y/releases/latest/download/install.ps1|iex
 ```
 
-デフォルトでは Claude Code `2.1.322` をインストールします。別のバージョンを選ぶには、上記のコマンドの末尾に `latest`、`stable`、または具体的なバージョン番号を追加してください。
+デフォルトでは npm の `stable` タグに対応する Claude Code のバージョンをインストールします。別のバージョンを選ぶには、上記のコマンドの末尾に `latest`、`stable`、または具体的なバージョン番号を追加してください。
 
 インストール後、新しいターミナルを開き、`clawgod` でパッチ済み Claude を起動してください。公式 Claude Code がすでにインストールされていた場合は、引き続き `claude` でオリジナルを起動できます。パッチ済みランタイムは `~/.clawgod`（Windows では `%USERPROFILE%\.clawgod`）に保存されます。
 

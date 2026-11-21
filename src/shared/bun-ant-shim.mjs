@@ -313,7 +313,6 @@ function packDamage(first, end) {
 function install() {
   if (typeof Bun !== 'object' || Bun === null) return false;
   if (typeof Bun.ant === 'object' && Bun.ant !== null && typeof Bun.ant.CellSegmenter === 'function') return false;
-  if (globalThis.__clawgodPatches && globalThis.__clawgodPatches['bun-ant-shim'] === false) return false;
   try {
     if (typeof Bun.ant !== 'object' || Bun.ant === null) Bun.ant = {};
     Bun.ant.CellSegmenter = CellSegmenter;

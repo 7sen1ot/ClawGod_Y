@@ -111,24 +111,20 @@ try {
       assert.match(output, /Ultraplan enable \(1 replacement in 1 file\)/, fixture.label);
       const patched = readFileSync(target, 'utf8');
       const enabled = `isEnabled:()=>${fixture.original}`;
-      assert.equal(patched, source.replace(enabled, `isEnabled:()=>(globalThis.__clawgodPatches?.["ultraplan"]!==!1?!0:(${fixture.original}))`));
-      for (const toggle of [undefined, true, false]) {
-        for (const upstream of [false, true]) {
-          let calls = 0;
-          const context = {
-            $flag: () => { calls++; return upstream; },
-            estimate: () => 'a few minutes', policy: () => false, load: () => 'loaded',
-            ...(toggle === undefined ? {} : { __clawgodPatches: { ultraplan: toggle } }),
-          };
-          const result = runInNewContext(`${patched};[command.isEnabled(),neighbor.isEnabled(),command.description,command.policyGate(),command.load()]`, context);
-          const originalValue = fixture.original === '!1' ? false : upstream;
-          assert.equal(result[0], toggle === false ? originalValue : true, fixture.label);
-          assert.equal(result[1], false);
-          assert.match(result[2], /^Draft a plan/);
-          assert.equal(result[3], false);
-          assert.equal(result[4], 'loaded');
-          assert.equal(calls, toggle === false && fixture.original !== '!1' ? 1 : 0);
-        }
+      assert.equal(patched, source.replace(enabled, 'isEnabled:()=>(/*clawgod:ultraplan*/!0)'));
+      for (const upstream of [false, true]) {
+        let calls = 0;
+        const context = {
+          $flag: () => { calls++; return upstream; },
+          estimate: () => 'a few minutes', policy: () => false, load: () => 'loaded',
+        };
+        const result = runInNewContext(`${patched};[command.isEnabled(),neighbor.isEnabled(),command.description,command.policyGate(),command.load()]`, context);
+        assert.equal(result[0], true, fixture.label);
+        assert.equal(result[1], false);
+        assert.match(result[2], /^Draft a plan/);
+        assert.equal(result[3], false);
+        assert.equal(result[4], 'loaded');
+        assert.equal(calls, 0);
       }
     }
     for (const body of [
@@ -143,7 +139,7 @@ try {
       if (body.includes('isEnabled:futureGate')) {
         assert.match(result.stderr, /Runtime fallback installed/);
         assert.equal(readFileSync(target, 'utf8'), source.replace('isEnabled:futureGate',
-          'isEnabled:globalThis.__clawgodHelpers.enablePredicate(futureGate,"ultraplan")'));
+          'isEnabled:globalThis.__clawgodHelpers.enablePredicate(/*clawgod:ultraplan*/futureGate)'));
       } else {
         assert.match(result.stdout, /Ultraplan enable — AST matcher stale/);
         assert.equal(readFileSync(target, 'utf8'), source);
@@ -184,7 +180,7 @@ try {
     assert.match(strict.stdout, /skipped, upstream behavior kept/);
     const patched = readFileSync(target, 'utf8');
     assert.match(patched, /name:"ultraplan",description:"Cloud command stub"/, `${layout}: stale patch kept upstream behavior`);
-    assert.match(patched, /globalThis\.__clawgodPatches\?\.\["auto-mode-inline-gate"\]/, `${layout}: remaining patches still applied`);
+    assert.match(patched, /function supports\(model\)\{return!0\}/, `${layout}: remaining patches still applied`);
   }
 
   for (const graph of [false, true]) {
@@ -203,20 +199,17 @@ try {
       const output = execFileSync(process.execPath, [join(testDir, 'patch.mjs')], { encoding: 'utf8' });
       assert.match(output, /Auto-mode unlock for third-party API \(inline gate\) \(1 replacement in 1 file\)/, label);
       const patched = readFileSync(target, 'utf8');
-      for (const toggle of [false, true]) {
-        for (const provider of ['firstParty', 'anthropicAws', 'proxy']) {
-          const context = { provider, __clawgodPatches: { 'auto-mode-inline-gate': toggle } };
-          const result = runInNewContext(`${patched};supports("claude-sonnet-4-6")`, context);
-          assert.equal(result, toggle || provider !== 'proxy', `${label}: ${provider}, toggle ${toggle}`);
-        }
+      for (const provider of ['firstParty', 'anthropicAws', 'proxy']) {
+        const result = runInNewContext(`${patched};supports("claude-sonnet-4-6")`, { provider });
+        assert.equal(result, true, `${label}: ${provider}`);
       }
     }
   }
 } finally {
   rmSync(testDir, { recursive: true, force: true });
 }
-console.log('[patch.test] ultraplan bundle/graph compatibility and toggle semantics ok');
-console.log('[patch.test] auto-mode provider gate compatibility and toggle semantics ok');
+console.log('[patch.test] ultraplan bundle/graph compatibility ok');
+console.log('[patch.test] auto-mode provider gate compatibility ok');
 
 const promptDir = mkdtempSync(join(tmpdir(), 'clawgod-prompt-hook-test-'));
 try {
@@ -377,28 +370,24 @@ try {
       assert.match(output, /Block wiggly-dove Git\/environment collection \(1 replacement in 1 file\)/);
       const patched = readFileSync(target, 'utf8');
       assert.equal(patched, source.replace(`function ${check}(){`,
-        `function ${check}(){;if(globalThis.__clawgodPatches?.["wiggly-dove"]!==!1)return !1;`));
+        `function ${check}(){;/*clawgod:wiggly-dove*/if(!0)return !1;`));
       execFileSync(process.execPath, [join(privacyDir, 'patch.mjs')]);
       assert.equal(readFileSync(target, 'utf8'), patched, 'repatch without a snapshot is idempotent');
-      for (const toggle of [undefined, true, false]) {
-        for (const firstParty of [false, true]) {
-          for (const upstreamFlag of [false, true]) {
-            for (const route of [false, true]) {
-              let reads = 0, evaluations = 0;
-              const result = await runInNewContext(`${patched};buildRequest()`, {
-                ...(toggle === undefined ? {} : { __clawgodPatches: { 'wiggly-dove': toggle } }),
-                isFirstParty: () => firstParty,
-                feature: (key) => { assert.equal(key, 'tengu_wiggly_dove'); evaluations++; return upstreamFlag; },
-                routeAllowed: () => route,
-                readOrigin: () => { reads++; return 'git.example.test/team/private-repo'; },
-              });
-              const expected = toggle === false && firstParty && upstreamFlag && route;
-              assert.equal(reads, Number(expected), 'blocked before collecting Git metadata');
-              assert.equal(evaluations, Number(toggle === false && firstParty), 'does not consult the rollout when blocked');
-              assert.equal('x-claude-code-wiggly-dove' in result.headers, expected);
-              assert.equal(result.headers['x-unrelated'], 'preserved');
-              assert.equal(JSON.stringify(result.body), '{"messages":[{"role":"user","content":"hello"}]}');
-            }
+      for (const firstParty of [false, true]) {
+        for (const upstreamFlag of [false, true]) {
+          for (const route of [false, true]) {
+            let reads = 0, evaluations = 0;
+            const result = await runInNewContext(`${patched};buildRequest()`, {
+              isFirstParty: () => firstParty,
+              feature: (key) => { assert.equal(key, 'tengu_wiggly_dove'); evaluations++; return upstreamFlag; },
+              routeAllowed: () => route,
+              readOrigin: () => { reads++; return 'git.example.test/team/private-repo'; },
+            });
+            assert.equal(reads, 0, 'blocked before collecting Git metadata');
+            assert.equal(evaluations, 0, 'does not consult the rollout when blocked');
+            assert.equal('x-claude-code-wiggly-dove' in result.headers, false);
+            assert.equal(result.headers['x-unrelated'], 'preserved');
+            assert.equal(JSON.stringify(result.body), '{"messages":[{"role":"user","content":"hello"}]}');
           }
         }
       }
@@ -407,7 +396,7 @@ try {
     writeFileSync(target, requiredRuntime + '// no wiggly-dove in this version');
     execFileSync(process.execPath, [join(privacyDir, 'patch.mjs')]);
     for (const declaration of ['var', 'let', 'const']) {
-      const stale = requiredRuntime + `function userType(){return"external"}${declaration} flag="tengu_wiggly_dove";function changed(){return feature(flag,!1)}`;
+      const stale = requiredRuntime + `function userType(){return"external"}${declaration} flag="tengu_wiggly_dove";function changed(){return feature(flag,unknownDefault)}`;
       writeFileSync(target, stale);
       const result = spawnSync(process.execPath, [join(privacyDir, 'patch.mjs')], { encoding: 'utf8' });
       assert.equal(result.status, 0, result.stderr);
@@ -428,32 +417,28 @@ try {
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   try {
-    for (const toggle of [undefined, true, false]) {
-      const outgoing = await runInNewContext(`${lastPatched};buildRequest()`, {
-        ...(toggle === undefined ? {} : { __clawgodPatches: { 'wiggly-dove': toggle } }),
-        isFirstParty: () => true, feature: () => true, routeAllowed: () => true,
-        readOrigin: () => 'git.example.test/team/private-repo',
-      });
-      await new Promise((resolve, reject) => {
-        const req = request({ hostname: '127.0.0.1', port: server.address().port,
-          method: 'POST', headers: outgoing.headers, agent: false }, res => { res.resume(); res.on('end', resolve); });
-        req.on('error', reject);
-        req.setTimeout(5000, () => req.destroy(new Error('loopback capture timed out')));
-        req.end(JSON.stringify(outgoing.body));
-      });
-      const captured = received.at(-1);
-      assert.equal('x-claude-code-wiggly-dove' in captured.headers, toggle === false);
-      assert.equal(captured.headers['x-unrelated'], 'preserved');
-      assert.equal(captured.body, JSON.stringify(outgoing.body));
-      if (toggle === false) assert.match(captured.headers['x-claude-code-wiggly-dove'], /git\.example\.test\/team\/private-repo/);
-      else assert.ok(!JSON.stringify(captured).includes('git.example.test'));
-    }
+    const outgoing = await runInNewContext(`${lastPatched};buildRequest()`, {
+      isFirstParty: () => true, feature: () => true, routeAllowed: () => true,
+      readOrigin: () => 'git.example.test/team/private-repo',
+    });
+    await new Promise((resolve, reject) => {
+      const req = request({ hostname: '127.0.0.1', port: server.address().port,
+        method: 'POST', headers: outgoing.headers, agent: false }, res => { res.resume(); res.on('end', resolve); });
+      req.on('error', reject);
+      req.setTimeout(5000, () => req.destroy(new Error('loopback capture timed out')));
+      req.end(JSON.stringify(outgoing.body));
+    });
+    const captured = received.at(-1);
+    assert.equal('x-claude-code-wiggly-dove' in captured.headers, false);
+    assert.equal(captured.headers['x-unrelated'], 'preserved');
+    assert.equal(captured.body, JSON.stringify(outgoing.body));
+    assert.ok(!JSON.stringify(captured).includes('git.example.test'));
   } finally {
     await new Promise(resolve => server.close(resolve));
   }
 } finally {
   rmSync(privacyDir, { recursive: true, force: true });
 }
-console.log('[patch.test] wiggly-dove collection, request capture, toggles, idempotence, and stale gates ok');
+console.log('[patch.test] wiggly-dove collection, request capture, idempotence, and stale gates ok');
 
 });

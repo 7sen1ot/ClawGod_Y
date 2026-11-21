@@ -38,11 +38,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version=$(bun -e 'console.log((await Bun.file("src/shared/runtime-version.json").json()).upstreamVersion)')
           mkdir -p dist/runtime
           tar -xzf dist/clawgod-runtime.tar.gz -C dist/runtime
-          bun dist/runtime/install-runtime.mjs "$version"
-          [[ "$(cat "$HOME/.clawgod/.source-version")" == "$version" ]]
+          bun dist/runtime/install-runtime.mjs
+          version=$(cat "$HOME/.clawgod/.source-version")
           [[ "$("$HOME/.clawgod/claude.fallback" --version)" == "$version (Claude Code)" ]]
           "$HOME/.local/bin/clawgod" --version
           bun "$HOME/.clawgod/startup-check.mjs" "$(command -v bun)" "$HOME/.clawgod/cli.mjs" --probe-tools
@@ -60,11 +59,10 @@ jobs:
           apk add --no-cache bash ripgrep coreutils tar
           bash -eu <<'BASH'
           bun run build
-          version=$(bun -e 'console.log((await Bun.file("src/shared/runtime-version.json").json()).upstreamVersion)')
           mkdir -p dist/runtime
           tar -xzf dist/clawgod-runtime.tar.gz -C dist/runtime
-          bun dist/runtime/install-runtime.mjs "$version"
-          [[ "$(cat "$HOME/.clawgod/.source-version")" == "$version" ]]
+          bun dist/runtime/install-runtime.mjs
+          version=$(cat "$HOME/.clawgod/.source-version")
           [[ "$("$HOME/.clawgod/claude.fallback" --version)" == "$version (Claude Code)" ]]
           "$HOME/.local/bin/clawgod" --version
           bun "$HOME/.clawgod/startup-check.mjs" "$(command -v bun)" "$HOME/.clawgod/cli.mjs" --probe-tools

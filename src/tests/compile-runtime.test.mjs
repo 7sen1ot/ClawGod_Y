@@ -4,7 +4,6 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdir
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { featuresMeta } from '../shared/patch-registry.mjs';
 
 test('compile-runtime.test', async () => {
 
@@ -13,7 +12,7 @@ const home = join(root, 'profile space \u6d4b\u8bd5');
 const dir = join(home, '.clawgod');
 const bun = process.env.CLAWGOD_TEST_BUN || (process.versions.bun ? process.execPath : 'bun');
 const env = { ...process.env, HOME: home, USERPROFILE: home };
-for (const key of Object.keys(env)) if (/^(?:ANTHROPIC_|CLAUDE_CODE_EXECPATH|CLAWGOD_FEATURE_|GROK_API_KEY)/.test(key)) delete env[key];
+for (const key of Object.keys(env)) if (/^(?:ANTHROPIC_|CLAUDE_CODE_EXECPATH|GROK_API_KEY)/.test(key)) delete env[key];
 const run = (command, args) => {
   const result = spawnSync(command, args, { env, encoding: 'utf8', timeout: 120000 });
   assert.equal(result.status, 0, result.error?.message || result.stdout + result.stderr);
@@ -21,10 +20,9 @@ const run = (command, args) => {
 };
 try {
   mkdirSync(join(dir, 'bunfs'), { recursive: true });
-  for (const name of ['compile-runtime.mjs', 'cli.mjs', 'runtime-helpers.mjs', 'prompt-runtime.mjs', 'feature-gates.mjs', 'lean-mode.mjs', 'openai-proxy.mjs', 'import.mjs', 'install-runtime.mjs', 'runtime-files.mjs']) {
+  for (const name of ['compile-runtime.mjs', 'cli.mjs', 'runtime-helpers.mjs', 'prompt-runtime.mjs', 'lean-mode.mjs', 'openai-proxy.mjs', 'import.mjs', 'install-runtime.mjs', 'runtime-files.mjs']) {
     copyFileSync(new URL('../shared/' + name, import.meta.url), join(dir, name));
   }
-  writeFileSync(join(dir, 'features-meta.json'), JSON.stringify(featuresMeta()));
   writeFileSync(join(dir, 'bun-ant-shim.mjs'), '');
   writeFileSync(join(dir, 'system-prompt.md'), 'Fixture prompt.\n');
   const original = `if(['--version','-v'].includes(process.argv[2]))console.log('2.1.316 (ClawGod_Y)');

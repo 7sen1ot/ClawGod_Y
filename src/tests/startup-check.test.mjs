@@ -129,7 +129,7 @@ try {
         require(name) {
           if (name === 'os') return { homedir: () => profile };
           if (name === './openai-proxy.mjs') throw new Error('version must not start a provider');
-          if (name === './feature-gates.mjs' || name === './bun-ant-shim.mjs') { modules.push(name); return {}; }
+          if (name === './bun-ant-shim.mjs') { modules.push(name); return {}; }
           if (name === './runtime-helpers.mjs') { modules.push(name); return require('../shared/runtime-helpers.mjs'); }
           if (name === './cli.original.cjs') { loaded = true; return {}; }
           return require(name);
@@ -137,7 +137,7 @@ try {
       });
       assert.equal(loaded, true);
       assert.equal(network, false);
-      assert.deepEqual(modules, ['./runtime-helpers.mjs', './feature-gates.mjs', './bun-ant-shim.mjs']);
+      assert.deepEqual(modules, ['./runtime-helpers.mjs', './bun-ant-shim.mjs']);
       assert.equal(fs.existsSync(join(dir, '.claude.json')), true);
       assert.equal(fs.existsSync(join(profile, '.claude.json')), false);
       assert.equal(fs.existsSync(config) ? fs.readFileSync(config, 'utf8') : null, before);
@@ -161,7 +161,7 @@ try {
   if (process.versions.bun || spawnSync(bun, ['--version'], { timeout: 5000 }).status === 0) {
     fs.writeFileSync(join(dir, 'cli.mjs'), wrapper);
     fs.copyFileSync(join(sourceDir, 'openai-proxy.mjs'), join(dir, 'openai-proxy.mjs'));
-    for (const name of ['feature-gates.mjs', 'bun-ant-shim.mjs']) fs.writeFileSync(join(dir, name), '');
+    fs.writeFileSync(join(dir, 'bun-ant-shim.mjs'), '');
     fs.copyFileSync(join(sourceDir, 'runtime-helpers.mjs'), join(dir, 'runtime-helpers.mjs'));
     fs.copyFileSync(join(sourceDir, 'prompt-runtime.mjs'), join(dir, 'prompt-runtime.mjs'));
     fs.writeFileSync(join(dir, 'cli.original.cjs'), `console.log(${JSON.stringify(version)});`);

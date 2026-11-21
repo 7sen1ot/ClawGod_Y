@@ -1,4 +1,11 @@
 
+import { upstreamPatches } from './patch-rules.mjs';
+import { PENTEST_AST_PATCH_IDS, PENTEST_AST_META } from './pentest-scanners.mjs';
+
+export const PATCHES = upstreamPatches.concat(
+  PENTEST_AST_PATCH_IDS.map(id => ({ id, name: PENTEST_AST_META[id], ast: true, optional: true })),
+);
+
 // Review impact is scoped to each feature. Low affects display, medium changes
 // data handling or exposes a command, high changes policy or autonomous actions.
 export const FEATURES = {
@@ -14,9 +21,6 @@ export const FEATURES = {
   'ultrareview':    { category: 'interface', risk: 'medium',
                       desc: 'Ultrareview slash command',
                       patchIds: ['ultrareview-gate', 'ultrareview-direct', 'ultrareview-command'] },
-  'voice-mode':     { category: 'interface', risk: 'medium',
-                      desc: 'Voice Mode',
-                      patchIds: ['voice-mode'] },
   'auto-mode':      { category: 'automation', risk: 'high',
                       desc: 'Auto-mode model selection on third-party APIs',
                       patchIds: ['auto-mode-helper-gate', 'auto-mode-inline-gate'] },
@@ -44,6 +48,12 @@ export const FEATURES = {
   'message-filter': { category: 'security-policy', risk: 'high',
                       desc: 'Bypass non-ant message/attachment filters',
                       patchIds: ['attachment-filter-bypass', 'message-filter-legacy', 'message-filter-s8'] },
+  'auto-mode-rules': { category: 'security-policy', risk: 'high',
+                      desc: 'Skip the external auto-mode BLOCK rules pack',
+                      patchIds: ['auto-mode-rules-off'] },
+  'script-caps':   { category: 'security-policy', risk: 'high',
+                      desc: 'Disable the script call limit',
+                      patchIds: ['script-caps-off'] },
   'remote-settings': { category: 'security-policy', risk: 'high',
                       desc: 'Ignore enterprise-managed remote settings',
                       patchIds: ['remote-settings-off'] },

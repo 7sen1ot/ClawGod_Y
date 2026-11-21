@@ -32,7 +32,10 @@ const firstPromptText = node => staticText(node) ?? (node?.type === 'BinaryExpre
   ? firstPromptText(node.left) || firstPromptText(node.right)
   : node?.type === 'TemplateLiteral' ? node.quasis[0].value.cooked : undefined);
 
-const functionNode = node => ['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node?.type);
+const functionNode = node => {
+  const type = node?.type;
+  return type === 'FunctionDeclaration' || type === 'FunctionExpression' || type === 'ArrowFunctionExpression';
+};
 const declaredNames = node => !node ? [] : node.type === 'Identifier' ? [node.name]
   : node.type === 'RestElement' ? declaredNames(node.argument)
   : node.type === 'AssignmentPattern' ? declaredNames(node.left)
@@ -162,7 +165,9 @@ export function walk(root, visit) {
   while (pending.length) {
     const parent = pending.pop(), node = pending.pop();
     if (visit(node, parent) === false) continue;
-    for (const value of Object.values(node)) {
+    for (const key in node) {
+      if (!Object.hasOwn(node, key)) continue;
+      const value = node[key];
       if (value?.type) pending.push(value, node);
       else if (Array.isArray(value)) {
         for (const child of value) if (child?.type) pending.push(child, node);

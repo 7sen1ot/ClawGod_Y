@@ -187,7 +187,7 @@ jobs:
         shell: bash
         run: |
           ls -la "$HOME/.clawgod/" || true
-          for f in cli.mjs cli.original.cjs startup-check.mjs startup-check.log patch.mjs extract-natives.mjs post-process.mjs feature-gates.mjs runtime-helpers.mjs bun-ant-shim.mjs .source-version; do
+          for f in cli.mjs cli.original.cjs startup-check.mjs startup-check.log patch.mjs extract-natives.mjs post-process.mjs runtime-helpers.mjs bun-ant-shim.mjs .source-version; do
             test -e "$HOME/.clawgod/$f" || { echo "::error::missing ~/.clawgod/$f"; exit 1; }
           done
           version=$(cat "$HOME/.clawgod/.source-version")
@@ -462,7 +462,6 @@ jobs:
             'patch.mjs',
             'extract-natives.mjs',
             'post-process.mjs',
-            'feature-gates.mjs',
             'runtime-helpers.mjs',
             'bun-ant-shim.mjs',
             '.source-version'

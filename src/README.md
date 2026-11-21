@@ -16,7 +16,8 @@ also checks all four files against the rendered bytes.
 `.gitattributes` pins the complete build graph to LF on every platform.
 
 The installers accept one optional version argument: `latest`, `stable`, or an
-explicit version. With no argument, they use the default in the template.
+explicit version. With no argument, they install npm's `stable` version, as set in
+`shared/runtime-version.json`.
 Rerun the installer with the selected version to refresh an installation.
 
 ## Semantic patching
@@ -141,9 +142,10 @@ URL PDFs are forwarded as file attachments to providers that accept URLs in
 
 In `compat-daily.yml`, `build-sources` builds the scripts and runs the source
 suite under Bun. Compatibility smoke jobs run on Linux, macOS, and Windows
-with the Bun version pinned in `.bun-version`. Branch pushes and pull requests
-use the template's default Claude version. Scheduled, manual and release runs
-also check npm's `stable` and `latest` versions. Equal versions run once.
+with the Bun version pinned in `.bun-version`. Daily scheduled runs at 10:00
+Asia/Shanghai check only npm's `latest` Claude version. Branch pushes, pull requests,
+manual and release runs check npm's `stable` and `latest` versions. Equal versions
+run once.
 
 `installer-checks.yml` covers installation, rollback, standalone uninstallation,
 downloads, native extraction, compiled startup, and source fallback. Its matrix

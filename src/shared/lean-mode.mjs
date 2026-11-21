@@ -23,12 +23,7 @@ const SETTINGS = {
 };
 const LEGACY_SHARED_DENY = [...DENY, ...LOOP_TOOLS, "ReportFindings"];
 
-const FEATURES_LOCKED_ON = [
-  'agent-teams', 'computer-use', 'ultraplan', 'ultrareview',
-  'remote-settings', 'wiggly-dove', 'bun-ant-shim',
-];
-
-function leanApply(clawgodSettingsPath, sharedSettingsPath, patchesJsonPath) {
+function leanApply(clawgodSettingsPath, sharedSettingsPath) {
   const writeSettings = (file, value) => {
     try {
       fs.mkdirSync(dirname(file), { recursive: true });
@@ -42,7 +37,6 @@ function leanApply(clawgodSettingsPath, sharedSettingsPath, patchesJsonPath) {
   if (!s.permissions || typeof s.permissions !== 'object' || Array.isArray(s.permissions)) throw new Error('[clawgod] Invalid ' + clawgodSettingsPath + ': permissions must be an object.');
   if (s.permissions.deny === undefined) s.permissions.deny = [];
   if (!Array.isArray(s.permissions.deny)) throw new Error('[clawgod] Invalid ' + clawgodSettingsPath + ': permissions.deny must be an array.');
-  const p = patchesJsonPath ? readJsonConfig(patchesJsonPath) : undefined;
   const shared = sharedSettingsPath ? readJsonConfig(sharedSettingsPath) : undefined;
   let changed = false;
   if (!("tui" in s)) {
@@ -62,13 +56,6 @@ function leanApply(clawgodSettingsPath, sharedSettingsPath, patchesJsonPath) {
   const ex = new Set(s.permissions.deny);
   for (const t of DENY) { if (!ex.has(t)) { s.permissions.deny.push(t); changed = true; } }
   if (changed) writeSettings(clawgodSettingsPath, s);
-  if (patchesJsonPath) {
-    let pchanged = false;
-    for (const k of FEATURES_LOCKED_ON) {
-      if (!(k in p)) { p[k] = true; pchanged = true; }
-    }
-    if (pchanged) writeSettings(patchesJsonPath, p);
-  }
   if (sharedSettingsPath) {
     let touched = false;
     for (const k of FLAGS) { if (shared[k] === true) { delete shared[k]; touched = true; } }

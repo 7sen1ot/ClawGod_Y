@@ -13,23 +13,29 @@ const isUndefined = node => node?.type === 'UnaryExpression' && node.operator ==
 
 export const AST_PATCH_IDS = [
   'user-type-ant', 'bun-standalone-executable', 'growthbook-env-overrides-graph', 'growthbook-config-overrides-graph',
-  'computer-use-default', 'ultraplan', 'voice-mode',
+  'computer-use-default', 'ultraplan',
   'geo-stego-date', 'remote-settings-off', 'wiggly-dove',
   'agent-teams-graph',
   'computer-use-gate-semantic', 'ultrareview-command',
+  'auto-mode-rules-off', 'script-caps-off',
+  'classifier-model', 'classifier-retries', 'classifier-timeout',
+  'ultrareview-gate', 'geo-detect-probe', 'geo-apostrophe-stego', 'remove-not-logged-in',
   'tool-result-pairing-recovery',
   'session-project-paths', 'session-history-paths', 'session-state-paths', 'instruction-files-off', 'agents-md-off',
 ];
 
 const anchors = ['external', 'isStandaloneExecutable', 'environmentOverridesParsed',
-  'pixelValidation', 'ultraplan', 'tengu_amber_quartz_disabled', 's date is ', 'getEnvironmentOverrides',
+  'pixelValidation', 'ultraplan', 's date is ', 'getEnvironmentOverrides',
   'Remote settings:', 'remote-settings.json', 'tengu_wiggly_dove', 'tengu_amber_flint',
   'isEnabled', 'enabled', 'ultrareview', 'amber_flint', 'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS',
   '[Tool result missing due to internal error]',
   'projects', 'history.jsonl', 'sessions', 'tasks', 'todos', 'teams', 'plans',
   'file-history', 'session-env', 'shell-snapshots', 'debug',
-  'instructionFiles', 'claudeMdExcludes', 'sessionPath'];
-const gate = id => `globalThis.__clawgodPatches?.[${JSON.stringify(id)}]!==!1`;
+  'instructionFiles', 'claudeMdExcludes', 'sessionPath',
+  '<permissions_template>', 'scriptCapsLatched', 'modelByMainModel', 'maxRetries', 'Math',
+  'tengu_review_bughunter_config', 'Asia/Shanghai', 'Asia/Urumqi',
+  '\u2019', '\u02bc', '\u02b9', 'Not logged in.'];
+const patchMarker = id => `/*clawgod:${id}*/`;
 function pairingScopeResolver(tree, sentinel) {
   const scopes = new WeakMap(), writes = [];
   const declare = (scope, pattern, value) => {
@@ -94,15 +100,6 @@ function pairingScopeResolver(tree, sentinel) {
 }
 
 
-function hasGate(node, id) {
-  return contains(node, child =>
-    member(child, id) && member(child.object, '__clawgodPatches') &&
-      child.object.object.name === 'globalThis' ||
-    child.type === 'CallExpression' && member(child.callee, 'enablePredicate') &&
-      member(child.callee.object, '__clawgodHelpers') &&
-      child.callee.object.object.name === 'globalThis' && literal(child.arguments[1], id));
-}
-
 function hasRemoteSettingsContext(node) {
   return contains(node, child => {
     const text = staticText(child);
@@ -115,8 +112,6 @@ function hasRemoteSettingsContext(node) {
 function scanSessionPaths(tree, code, context, results, edit) {
   const entries = new Set(['projects', 'history.jsonl', 'sessions', 'tasks', 'todos', 'teams',
     'plans', 'file-history', 'session-env', 'shell-snapshots', 'debug']);
-  const ids = ['session-project-paths', 'session-history-paths', 'session-state-paths', 'instruction-files-off', 'agents-md-off'];
-  for (const id of ids) if (code.includes(`/*clawgod:${id}*/`)) results[id].patched = true;
   const isConfigRoot = node => {
     const value = context.resolve(node);
     if (value?.node?.type !== 'CallExpression' || value.node.arguments.length) return false;
@@ -169,18 +164,30 @@ function scanSessionPaths(tree, code, context, results, edit) {
 export function scanAstPatches(code, readTree = () => parsePatchSource(code), readContext) {
   /** @type {Record<string, PatchScan>} */
   const results = Object.fromEntries(AST_PATCH_IDS.map(id => [id, { matches: [], protected: [], present: false, patched: false }]));
+  for (const id of AST_PATCH_IDS) if (code.includes(patchMarker(id))) results[id].patched = true;
   if (!hasPatchAnchors(code, anchors)) return results;
   const tree = readTree();
   const context = readContext ? readContext() : createPatchContext(tree, code);
   const isCandidate = createPatchCandidateFilter(tree, code, () => context);
   const teamCandidate = isCandidate(['CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS', 'agent-teams-graph']);
   const computerCandidate = isCandidate(['enabled', 'computer-use-gate-semantic']);
+  const scriptCapsCandidate = isCandidate(['scriptCapsLatched', 'script-caps-off']);
+  const classifierCandidate = isCandidate(['modelByMainModel', 'maxRetries', 'classifier-model', 'classifier-retries']);
+  const timeoutCandidate = isCandidate(['Math', 'classifier-timeout']);
+  const reviewCandidate = isCandidate(['enabled', 'tengu_review_bughunter_config', 'ultrareview-gate']);
+  const geoProbeCandidate = isCandidate(['Asia/Shanghai', 'Asia/Urumqi', 'geo-detect-probe']);
+  const apostropheCandidate = isCandidate(['\u2019', '\u02bc', '\u02b9', 'geo-apostrophe-stego']);
   const edit = (id, node, replacement, strategy = 'ast') => {
     results[id].matches.push({ start: node.start, end: node.end, replacement, strategy });
   };
   scanSessionPaths(tree, code, context, results, edit);
+  const hasPatchMarker = (node, id) => {
+    const marker = patchMarker(id);
+    return code.slice(node.start, node.end).includes(marker) ||
+      code.slice(Math.max(0, node.start - marker.length), node.start) === marker;
+  };
   const alreadyPatched = (node, id) => {
-    if (!hasGate(node, id)) return false;
+    if (!hasPatchMarker(node, id)) return false;
     results[id].protected.push([node.start, node.end]);
     return true;
   };
@@ -190,7 +197,7 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
     const body = fn.body;
     const original = code.slice(body.start, body.end);
     if (body.type !== 'BlockStatement') {
-      edit(id, body, `(${gate(id)}?${value}:(${original}))`);
+      edit(id, body, `(${patchMarker(id)}${value})`);
       return true;
     }
     let insertion = body.start + 1;
@@ -199,7 +206,8 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
       insertion = statement.end;
     }
     const offset = insertion - body.start;
-    edit(id, body, `${original.slice(0, offset)};if(${gate(id)})return ${value};${original.slice(offset)}`);
+    // Retain the original statements so rescans can still identify the upstream function.
+    edit(id, body, `${original.slice(0, offset)};${patchMarker(id)}if(!0)return ${value};${original.slice(offset)}`);
     return true;
   };
   const overridePredicate = (id, value, property) => {
@@ -210,22 +218,224 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
     if (!functionNode(resolved?.node)) {
       const dynamic = node => ['Identifier', 'MemberExpression', 'CallExpression', 'ChainExpression'].includes(node?.type);
       if (!dynamic(value) || resolved?.node && !dynamic(resolved.node)) return false;
-      replace(`globalThis.__clawgodHelpers.enablePredicate(${code.slice(value.start, value.end)},${JSON.stringify(id)})`, 'runtime-hook');
+      replace(`globalThis.__clawgodHelpers.enablePredicate(${patchMarker(id)}${code.slice(value.start, value.end)})`, 'runtime-hook');
       return true;
     }
     if (resolved.node.async || resolved.node.generator) return false;
-    replace(`((_original)=>function(){'use strict';if(${gate(id)})return!0;return _original.apply(this,arguments)})(${code.slice(value.start, value.end)})`);
+    replace(`(${code.slice(value.start, value.end)},${patchMarker(id)}()=>!0)`);
     return true;
   };
-  const returnValues = fn => fn.body.type !== 'BlockStatement' ? [fn.body]
-    : ownReturns(fn.body).map(statement => statement.argument).filter(Boolean);
+  const returnCache = new WeakMap();
+  const returnValues = fn => {
+    let values = returnCache.get(fn);
+    if (!values) {
+      values = fn.body.type !== 'BlockStatement' ? [fn.body]
+        : ownReturns(fn.body).map(statement => statement.argument).filter(Boolean);
+      returnCache.set(fn, values);
+    }
+    return values;
+  };
+  const resolvedNode = node => context.resolve(node)?.node ?? node;
+  const mathCall = (node, name) => {
+    const value = resolvedNode(node);
+    return value?.type === 'CallExpression' && member(value.callee, name) &&
+      value.callee.object.name === 'Math' ? value : undefined;
+  };
+  const injectOverride = (id, fn, statements) => {
+    if (alreadyPatched(fn, id)) { results[id].patched = true; return; }
+    results[id].present = true;
+    const body = fn.body, original = code.slice(body.start, body.end);
+    const override = `{${patchMarker(id)}${statements}}`;
+    if (body.type !== 'BlockStatement') {
+      edit(id, body, `{${override}return (${original});}`);
+      return;
+    }
+    let insertion = body.start + 1;
+    for (const statement of body.body) {
+      if (!statement.directive) break;
+      insertion = statement.end;
+    }
+    const offset = insertion - body.start;
+    edit(id, body, `${original.slice(0, offset)};${override}${original.slice(offset)}`);
+  };
 
-  const wigglyLiterals = new Set(), wigglyHandled = new Set();
+  const wigglyLiterals = new Set(), wigglyHandled = new Set(), wigglyCalls = [];
   let pairingHandled = false;
   const MISSING_SENTINEL = '[Tool result missing due to internal error]';
   const hasMissingSentinel = hasPatchAnchors(code, [MISSING_SENTINEL]);
   const resolvesToMissingSentinel = hasMissingSentinel ? pairingScopeResolver(tree, MISSING_SENTINEL) : () => false;
   walk(tree, (node, parent) => {
+    if ((node.type === 'Literal' || node.type === 'TemplateLiteral') &&
+        (/^Not logged in\. Run (?:\/[\w-]+|[\w ]+) to authenticate\.$/.test(staticText(node) ?? '') ||
+          node.type === 'TemplateLiteral' && node.expressions.length > 0 &&
+          node.quasis[0].value.cooked === 'Not logged in. Run ' && node.quasis.at(-1).value.cooked === ' to authenticate.')) {
+      const id = 'remove-not-logged-in';
+      results[id].present = true;
+      edit(id, node, `${patchMarker(id)}""`);
+      return false;
+    }
+    if (node.type === 'CallExpression' && (member(node.callee, 'replace') || member(node.callee, 'replaceAll')) &&
+        node.arguments.length >= 2 && (context.text(node.arguments[0]) === '<permissions_template>' ||
+          node.arguments[0].regex?.pattern === '<permissions_template>')) {
+      const id = 'auto-mode-rules-off', replacement = node.arguments[1];
+      if (alreadyPatched(replacement, id)) results[id].patched = true;
+      else {
+        results[id].present = true;
+        edit(id, replacement, `(${patchMarker(id)}"")`);
+      }
+      return false;
+    }
+    if (scriptCapsCandidate && functionNode(node) && !node.async && !node.generator && node.body.type === 'BlockStatement') {
+      const id = 'script-caps-off';
+      if (node.body.body.length === 1 && node.body.body[0].type === 'ReturnStatement' &&
+          node.body.body[0].argument == null && alreadyPatched(node.body, id)) {
+        results[id].patched = true;
+        return false;
+      }
+      const hasCaps = containsOwn(node.body, child => member(child, 'scriptCapsLatched'));
+      if (hasCaps) {
+        const guards = node.body.body.filter(statement => !statement.directive && statement.type !== 'EmptyStatement').slice(0, 2);
+        const enabled = guards[0]?.test, latch = guards[1]?.test;
+        const latched = latch?.type === 'SequenceExpression' ? latch.expressions.at(-1) : latch;
+        const hasEntryGuards = guards.length === 2 && guards.every(statement =>
+          statement.type === 'IfStatement' && !statement.alternate &&
+          statement.consequent.type === 'ReturnStatement' && statement.consequent.argument == null) &&
+          enabled?.type === 'UnaryExpression' && enabled.operator === '!' &&
+          enabled.argument.type === 'CallExpression' && !enabled.argument.arguments.length &&
+          latched?.type === 'UnaryExpression' && latched.operator === '!' && member(latched.argument, 'scriptCapsLatched');
+        const hasLimit = containsOwn(node.body, child =>
+          staticText(child)?.includes('Script call limit exceeded') ||
+          child.type === 'TemplateLiteral' && child.quasis.some(quasi =>
+            quasi.value.cooked?.includes('Script call limit exceeded')));
+        if (hasLimit || hasEntryGuards) {
+          results[id].present = true;
+          edit(id, node.body, `{${patchMarker(id)}return;}`);
+          return false;
+        }
+      }
+    }
+    if (functionNode(node) && !node.async && !node.generator) {
+      // Command callbacks may already have been replaced by their containing descriptor.
+      if (Object.values(results).some(result => result.matches.some(match =>
+        match.start <= node.body.start && match.end >= node.body.end))) return false;
+      const values = returnValues(node);
+      if (classifierCandidate && !node.params.length) {
+        const hasSource = source => values.some(value => containsOwn(resolvedNode(value), child =>
+          child.type === 'ObjectExpression' && context.field(child, 'value') &&
+          context.text(context.field(child, 'src')?.node) === source));
+        if (hasSource('default')) {
+          if (containsOwn(node.body, child => context.refers(child, 'modelByMainModel'))) {
+            injectOverride('classifier-model', node,
+              'let value=process.env.CLAWGOD_CLASSIFIER_MODEL?.trim();if(value)return{value,src:"default"};');
+            return false;
+          }
+          if (hasSource('gb') && containsOwn(node.body, child => context.refers(child, 'maxRetries'))) {
+            injectOverride('classifier-retries', node,
+              'let value=process.env.CLAWGOD_CLASSIFIER_RETRIES?.trim();' +
+              'if(value!==undefined&&value!==""&&Number.isInteger(+value)&&+value>=0)return{value:+value,src:"default"};');
+            return false;
+          }
+        }
+      }
+      if (timeoutCandidate && node.params.length === 1 && node.params[0].type === 'Identifier' && values.length === 1) {
+        const id = 'classifier-timeout';
+        if (alreadyPatched(node, id)) { results[id].patched = true; return false; }
+        const clamp = mathCall(values[0], 'min');
+        const scaledStep = expression => {
+          const product = resolvedNode(expression);
+          if (product?.type !== 'BinaryExpression' || product.operator !== '*') return false;
+          const step = literal(resolvedNode(product.left), 10000) ? product.right :
+            literal(resolvedNode(product.right), 10000) ? product.left : undefined;
+          const max = step && mathCall(step, 'max');
+          if (!max || max.arguments.length !== 2) return false;
+          const rounded = literal(resolvedNode(max.arguments[0]), 0) ? max.arguments[1] :
+            literal(resolvedNode(max.arguments[1]), 0) ? max.arguments[0] : undefined;
+          const ceil = rounded && mathCall(rounded, 'ceil');
+          const quotient = ceil?.arguments.length === 1 && resolvedNode(ceil.arguments[0]);
+          if (quotient?.type !== 'BinaryExpression' || quotient.operator !== '/' ||
+              !literal(resolvedNode(quotient.right), 50000)) return false;
+          const difference = resolvedNode(quotient.left);
+          return difference?.type === 'BinaryExpression' && difference.operator === '-' &&
+            context.same(difference.left, node.params[0]) && literal(resolvedNode(difference.right), 50000);
+        };
+        if (clamp?.arguments.some(argument => {
+          const sum = resolvedNode(argument);
+          return sum?.type === 'BinaryExpression' && sum.operator === '+' &&
+            (scaledStep(sum.left) || scaledStep(sum.right));
+        })) {
+          results[id].present = true;
+          edit(id, values[0], `((_result)=>{${patchMarker(id)}` +
+            'let _floor=globalThis.__clawgodHelpers.classifierTimeoutFloor(process.env.CLAWGOD_CLASSIFIER_TIMEOUT_MS);' +
+            `return _floor===null?_result:Math.max(_result,_floor)})(${code.slice(values[0].start, values[0].end)})`);
+          return false;
+        }
+      }
+      if (reviewCandidate && !node.params.length) {
+        const reviewResult = (expression, budget = 16) => {
+          if (!expression || budget <= 0) return false;
+          const value = resolvedNode(expression);
+          if (value.type === 'LogicalExpression') return reviewResult(value.left, budget - 1) || reviewResult(value.right, budget - 1);
+          if (value.type === 'UnaryExpression' && value.operator === '!' &&
+              value.argument.type === 'UnaryExpression' && value.argument.operator === '!') {
+            return reviewResult(value.argument.argument, budget - 1);
+          }
+          if (value.type === 'BinaryExpression') {
+            const expected = ['===', '=='].includes(value.operator) ? true :
+              ['!==', '!='].includes(value.operator) ? false : undefined;
+            return expected !== undefined &&
+              (boolean(value.left, expected) && reviewResult(value.right, budget - 1) ||
+               boolean(value.right, expected) && reviewResult(value.left, budget - 1));
+          }
+          if (value.type === 'ConditionalExpression' && boolean(value.consequent, true) && boolean(value.alternate, false)) {
+            return reviewResult(value.test, budget - 1);
+          }
+          if (!member(value, 'enabled')) return false;
+          const config = resolvedNode(value.object);
+          if (config?.type !== 'CallExpression') return false;
+          if (context.text(config.arguments[0]) === 'tengu_review_bughunter_config') return true;
+          const getter = context.resolve(config.callee);
+          return functionNode(getter?.node) && containsOwn(getter.node.body, call =>
+            call.type === 'CallExpression' && getter.context.text(call.arguments[0]) === 'tengu_review_bughunter_config');
+        };
+        if (values.some(value => reviewResult(value)) && values.every(value =>
+          boolean(resolvedNode(value), true) || boolean(resolvedNode(value), false) || reviewResult(value))) {
+          const id = 'ultrareview-gate';
+          if (alreadyPatched(node, id)) results[id].patched = true;
+          else { results[id].present = true; injectReturn(id, node, '!0'); }
+          return false;
+        }
+      }
+      if (geoProbeCandidate && !node.params.length &&
+          containsOwn(node.body, child => context.text(child) === 'Asia/Shanghai') &&
+          containsOwn(node.body, child => context.text(child) === 'Asia/Urumqi') &&
+          containsOwn(node.body, child => child.type === 'Property' && propertyName(child) === 'cnTZ')) {
+        const id = 'geo-detect-probe';
+        if (alreadyPatched(node, id)) results[id].patched = true;
+        else { results[id].present = true; injectReturn(id, node, 'null'); }
+        return false;
+      }
+      if (apostropheCandidate && node.params.length === 2 && values.length) {
+        const outputs = new Set();
+        const apostropheResult = (expression, budget = 16) => {
+          if (!expression || budget <= 0) return false;
+          const value = resolvedNode(expression), text = context.text(value);
+          if (["'", '\u2019', '\u02bc', '\u02b9'].includes(text)) { outputs.add(text); return true; }
+          if (value?.type === 'MemberExpression' && value.computed) {
+            const table = resolvedNode(value.object);
+            return table?.type === 'ArrayExpression' && table.elements.length === 4 &&
+              table.elements.every(element => apostropheResult(element, budget - 1));
+          }
+          return value?.type === 'ConditionalExpression' &&
+            apostropheResult(value.consequent, budget - 1) && apostropheResult(value.alternate, budget - 1);
+        };
+        if (values.every(value => apostropheResult(value)) && outputs.size === 4) {
+          const id = 'geo-apostrophe-stego';
+          if (alreadyPatched(node, id)) results[id].patched = true;
+          else { results[id].present = true; injectReturn(id, node, '"\'"'); }
+          return false;
+        }
+      }
+    }
     if (node.type === 'ClassDeclaration' || node.type === 'ClassExpression') {
       const members = new Map(node.body.body.map(entry => [propertyName(entry), entry]));
       const reader = members.get('getEnvironmentOverrides');
@@ -263,6 +473,15 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
       }
     }
     if (literal(node, 'tengu_wiggly_dove') && !literal(parent, 'tengu_wiggly_dove')) wigglyLiterals.add(node.start);
+    if (node.type === 'CallExpression' && node.arguments.length >= 2 &&
+        boolean(node.arguments[1], false) && context.text(node.arguments[0]) === 'tengu_wiggly_dove' &&
+        (['ReturnStatement', 'VariableDeclarator', 'LogicalExpression', 'BinaryExpression'].includes(parent?.type) ||
+          parent?.type === 'UnaryExpression' && parent.operator === '!' ||
+          ['IfStatement', 'ConditionalExpression'].includes(parent?.type) && parent.test === node)) {
+      wigglyCalls.push(node);
+      const flag = context.resolve(node.arguments[0]);
+      if (flag?.context === context) wigglyHandled.add(flag.node.start);
+    }
     if (teamCandidate && functionNode(node) && node.params.length === 0) {
       const flagArguments = [];
       let teamEnv = false;
@@ -311,10 +530,13 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
               boolean(call.arguments[1], false);
           });
         });
-        if (candidates.length !== 1) continue;
+        if (!candidates.length) continue;
         wigglyHandled.add(flag.init.start);
-        if (alreadyPatched(candidates[0], id)) results[id].patched = true;
-        else injectReturn(id, candidates[0], '!1');
+        for (const candidate of candidates) {
+          if (results[id].matches.some(match => match.start === candidate.body.start)) continue;
+          if (alreadyPatched(candidate, id)) results[id].patched = true;
+          else { results[id].present = true; injectReturn(id, candidate, '!1'); }
+        }
       }
     }
 
@@ -348,7 +570,7 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
           results[id].present = true;
           if (['Identifier', 'CallExpression', 'MemberExpression', 'LogicalExpression', 'ConditionalExpression'].includes(value.type) ||
               boolean(value, false) || boolean(value, true)) {
-            edit(id, value, `(${gate(id)}?!0:(${code.slice(value.start, value.end)}))`);
+            edit(id, value, `(${patchMarker(id)}!0)`);
           } else results[id].skipped = (results[id].skipped ?? 0) + 1;
         }
       }
@@ -397,7 +619,7 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
       if (computerConfig && !inlineConfig) {
         // Keep the organization/HIPAA guards around the merged configuration's enabled flag.
         if (mergedConfig) {
-          for (const child of enabledSites) edit(id, child, `(${gate(id)}?!0:(${code.slice(child.start, child.end)}))`);
+          for (const child of enabledSites) edit(id, child, `(${patchMarker(id)}!0)`);
         } else injectReturn(id, node, '!0');
       } else if (candidate) results[id].skipped = (results[id].skipped ?? 0) + 1;
     }
@@ -468,12 +690,6 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
            (bunType(expr.left) && literal(expr.right, 'undefined') || bunType(expr.right) && literal(expr.left, 'undefined')));
       if (standalone(value) || (value?.type === 'LogicalExpression' && value.operator === '&&' &&
           typeofBun(value.left) && standalone(value.right))) edit('bun-standalone-executable', value, '!0');
-      if (value?.type === 'UnaryExpression' && value.operator === '!' &&
-          value.argument.type === 'CallExpression' && value.argument.callee.type === 'Identifier' &&
-          value.argument.arguments.length === 2 && literal(value.argument.arguments[0], 'tengu_amber_quartz_disabled') &&
-          boolean(value.argument.arguments[1], false)) {
-        edit('voice-mode', value, `(${gate('voice-mode')}?!0:(${code.slice(value.start, value.end)}))`);
-      }
     }
 
     if (functionNode(node) && node.params.length === 0 && node.body.type === 'BlockStatement' &&
@@ -520,7 +736,7 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
       });
       if (isHistoryArray) {
         const id = 'tool-result-pairing-recovery';
-        if (hasGate(node, id)) {
+        if (hasPatchMarker(node, id)) {
           results[id].patched = true;
           pairingHandled = true;
         } else {
@@ -562,9 +778,8 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
                 const idVar = freshId('_id');
                 const contentExpr = code.slice(contentProp.value.start, contentProp.value.end);
                 const replacement =
-                  `(${idVar})=>{` +
+                  `(${idVar})=>{${patchMarker(id)}` +
                   `let ${pVar};` +
-                  `if(${gate(id)}){` +
                   `for(let ${mVar} of ${historyParam}){` +
                   `if(${mVar}?.message?.content&&Array.isArray(${mVar}.message.content)){` +
                   `for(let ${bVar} of ${mVar}.message.content){` +
@@ -574,7 +789,6 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
                   `}` +
                   `}` +
                   `if(${pVar})break;` +
-                  `}` +
                   `}` +
                   `return ${pVar}?{...${pVar}}:{type:"tool_result",tool_use_id:${idVar},content:${contentExpr},is_error:!0}` +
                   `}`;
@@ -606,9 +820,17 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
       }
     }
   });
-  if ([...wigglyLiterals].some(start => !wigglyHandled.has(start))) {
+  for (const call of wigglyCalls) {
+    const id = 'wiggly-dove';
+    if (results[id].matches.some(match => match.start <= call.start && match.end >= call.end) ||
+        results[id].protected.some(([start, end]) => start <= call.start && end >= call.end)) continue;
+    results[id].present = true;
+    edit(id, call, `(${patchMarker(id)}!1)`);
+  }
+  const unhandledWiggly = [...wigglyLiterals].filter(start => !wigglyHandled.has(start));
+  if (unhandledWiggly.length) {
     results['wiggly-dove'].present = true;
-    results['wiggly-dove'].matches = [];
+    results['wiggly-dove'].skipped = unhandledWiggly.length;
   }
   if (hasMissingSentinel && !pairingHandled) {
     results['tool-result-pairing-recovery'].present = true;
