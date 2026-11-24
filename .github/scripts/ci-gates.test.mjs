@@ -70,7 +70,7 @@ try {
   check(report([], 'Runtime fallback installed; activation is checked at call time'), false);
   check(report([], '', 1), false);
   check(report().replace(`${PATCHES.length} applied, 0 skipped`, `${PATCHES.length - 1} applied, 1 skipped`), false);
-  for (const version of ['2.1.323', '2.1.330', '2.1.331']) for (const platform of ['linux', 'macos', 'windows']) {
+  for (const version of ['2.1.323', '2.1.325', '2.1.330', '2.1.331']) for (const platform of ['linux', 'macos', 'windows']) {
     const gaps = [
       '⚠️  Neutralize geo-steganography in date string (qla) (0 matches, no sentinel — cannot verify)',
       '⚠️  Neutralize geo-detection probe (rdp) (0 matches, no sentinel — cannot verify)',
