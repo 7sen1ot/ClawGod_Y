@@ -109,6 +109,28 @@ function hasRemoteSettingsContext(node) {
   });
 }
 
+function hasRemoteSettingsReader(call, context) {
+  const pending = [call.callee, ...call.arguments].map(node => ({ node, context }));
+  const seen = new Set();
+  // Follow only resolved functions and their single-return forwarding calls.
+  for (let budget = 32; pending.length && budget > 0; budget--) {
+    const next = pending.pop();
+    const target = next.context.resolve(next.node);
+    const fn = target?.node;
+    if (!functionNode(fn) || fn.async || fn.generator || seen.has(fn)) continue;
+    seen.add(fn);
+    if (hasRemoteSettingsContext(fn)) return true;
+    const statements = fn.body.type === 'BlockStatement'
+      ? fn.body.body.filter(statement => !statement.directive && statement.type !== 'EmptyStatement') : [];
+    const returned = fn.body.type !== 'BlockStatement' ? fn.body :
+      statements.length === 1 && statements[0].type === 'ReturnStatement' ? statements[0].argument : undefined;
+    if (returned?.type === 'CallExpression') {
+      for (const node of [returned.callee, ...returned.arguments]) pending.push({ node, context: target.context });
+    }
+  }
+  return false;
+}
+
 function scanSessionPaths(tree, code, context, results, edit) {
   const entries = new Set(['projects', 'history.jsonl', 'sessions', 'tasks', 'todos', 'teams',
     'plans', 'file-history', 'session-env', 'shell-snapshots', 'debug']);
@@ -722,21 +744,9 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
       const eligibility = statements.filter(statement => statement.type === 'VariableDeclaration')
         .flatMap(statement => statement.declarations).find(declaration => declaration.id.type === 'ObjectPattern' &&
         declaration.init?.type === 'CallExpression' &&
-        declaration.init.callee.type === 'Identifier' &&
         declaration.id.properties.some(property => property.type === 'Property' &&
           propertyName(property) === 'eligible'));
-      // Newer builds pass the eligibility reader through a credential-scope wrapper.
-      const helpers = eligibility && [eligibility.init.callee, ...eligibility.init.arguments]
-        .flatMap(value => {
-          const helper = context.resolve(value)?.node;
-          if (!functionNode(helper)) return [];
-          const returned = helper.body.type === 'BlockStatement' && helper.body.body.length === 1 &&
-            helper.body.body[0].type === 'ReturnStatement' ? helper.body.body[0].argument : helper.body;
-          // 2.1.332 forwards the reader through another single-return wrapper.
-          return [helper, ...(returned?.type === 'CallExpression' ? returned.arguments
-            .map(argument => context.resolve(argument)?.node) : [])];
-        });
-      if (helpers?.some(helper => functionNode(helper) && hasRemoteSettingsContext(helper))) {
+      if (eligibility && hasRemoteSettingsReader(eligibility.init, context)) {
         const id = 'remote-settings-off';
         if (!cachedReturn) results[id].present = true;
         else {
