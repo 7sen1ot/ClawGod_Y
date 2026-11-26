@@ -21,7 +21,7 @@ if (versionArg && sourceVersion && versionArg !== sourceVersion) throw new Error
 // Reviewed gaps in Claude 2.1.316 (actions/runs/41206844027) and stable 2.1.309.
 // New versions must not silently inherit these exceptions.
 const reviewed = Bun.semver.satisfies(installedVersion, '2.1.309 || 2.1.316');
-const currentReviewed = Bun.semver.satisfies(installedVersion, '2.1.323 || 2.1.325 || 2.1.330 || 2.1.331');
+const currentReviewed = Bun.semver.satisfies(installedVersion, '2.1.323 || 2.1.325 || 2.1.330 || 2.1.331 || 2.1.332');
 const baseline = reviewed ? new Map([
   ['computer-use-gate-semantic', 'absent'],
   ['geo-stego-date', 'unverified'],
@@ -36,6 +36,7 @@ const baseline = reviewed ? new Map([
 ]) : currentReviewed ? new Map([
   // Reviewed against extracted 2.1.323/2.1.330/2.1.331 sources and runs 44894960767/45392178058.
   // Stable 2.1.325 has the same reviewed gaps across all platforms (run 45405762804).
+  // 2.1.332 retains these gaps (run 45722776006 and extracted sources).
   // The geo encoders/provider helper are absent; clipboard fallback is upstream.
   ['geo-stego-date', 'unverified'],
   ['geo-detect-probe', 'unverified'],

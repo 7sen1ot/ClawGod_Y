@@ -727,7 +727,15 @@ export function scanAstPatches(code, readTree = () => parsePatchSource(code), re
           propertyName(property) === 'eligible'));
       // Newer builds pass the eligibility reader through a credential-scope wrapper.
       const helpers = eligibility && [eligibility.init.callee, ...eligibility.init.arguments]
-        .map(value => context.resolve(value)?.node);
+        .flatMap(value => {
+          const helper = context.resolve(value)?.node;
+          if (!functionNode(helper)) return [];
+          const returned = helper.body.type === 'BlockStatement' && helper.body.body.length === 1 &&
+            helper.body.body[0].type === 'ReturnStatement' ? helper.body.body[0].argument : helper.body;
+          // 2.1.332 forwards the reader through another single-return wrapper.
+          return [helper, ...(returned?.type === 'CallExpression' ? returned.arguments
+            .map(argument => context.resolve(argument)?.node) : [])];
+        });
       if (helpers?.some(helper => functionNode(helper) && hasRemoteSettingsContext(helper))) {
         const id = 'remote-settings-off';
         if (!cachedReturn) results[id].present = true;

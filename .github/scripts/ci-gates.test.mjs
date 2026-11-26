@@ -70,7 +70,7 @@ try {
   check(report([], 'Runtime fallback installed; activation is checked at call time'), false);
   check(report([], '', 1), false);
   check(report().replace(`${PATCHES.length} applied, 0 skipped`, `${PATCHES.length - 1} applied, 1 skipped`), false);
-  for (const version of ['2.1.323', '2.1.325', '2.1.330', '2.1.331']) for (const platform of ['linux', 'macos', 'windows']) {
+  for (const version of ['2.1.323', '2.1.325', '2.1.330', '2.1.331', '2.1.332']) for (const platform of ['linux', 'macos', 'windows']) {
     const gaps = [
       '⚠️  Neutralize geo-steganography in date string (qla) (0 matches, no sentinel — cannot verify)',
       '⚠️  Neutralize geo-detection probe (rdp) (0 matches, no sentinel — cannot verify)',
@@ -86,7 +86,7 @@ try {
     );
     const currentReport = report(gaps).replace('v2.1.316', `v${version}`);
     check(currentReport, true, platform);
-    check(currentReport.replace(`v${version}`, 'v2.1.332'), false, platform);
+    check(currentReport.replace(`v${version}`, 'v2.1.333'), false, platform);
     if (platform !== 'macos') check(currentReport, false, 'macos');
     check(report([], '⚠️  ultraplan: 1 site(s) NOT patched — coverage is partial')
       .replace('v2.1.316', `v${version}`), false, platform);
