@@ -6,7 +6,7 @@ import { applyAstEdits, parsePatchSource, hasPatchAnchors,
   getPatchNodeIndex, getCachedPatchContext, releasePatchContexts, releasePatchSource } from './ast-helpers.mjs';
 import { PENTEST_AST_PATCH_IDS, PENTEST_REQUIRED, scanPentestPatches, scanFinalPolicyEdits, scanFinalBrandingEdits, findAppliedPromptHooks } from './pentest-patches.mjs';
 import { createRuntimeGraphAnalysis, pruneRuntimeGraph } from './pentest-pruner.mjs';
-import { FEATURES, PATCHES as patches, featuresMeta } from './patch-registry.mjs';
+import { FEATURES, PATCHES as patches, featuresMeta, isRequiredPatch } from './patch-registry.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TARGET = join(__dirname, 'cli.original.cjs');
@@ -199,7 +199,7 @@ function collectMatches(p) {
 
 let applied = 0, failed = 0;
 const unverified = new Set();
-const skips = { version: 0, covered: 0, absent: 0, stale: 0, unverified: 0, pending: 0, unchanged: 0 };
+const skips = { version: 0, covered: 0, stale: 0, unverified: 0, pending: 0, unchanged: 0 };
 const appliedIds = new Set();
 
 const astMatches = new Map([...AST_PATCH_IDS, ...PENTEST_AST_PATCH_IDS].map(id => [id, []]));
@@ -293,7 +293,7 @@ for (const p of [...patches.filter(p => p.ast), ...patches.filter(p => !p.ast)])
       appliedIds.add(p.id);
       continue;
     }
-    if (p.required || promptRequired && PENTEST_REQUIRED.has(p.id)) {
+    if (isRequiredPatch(p, promptRequired)) {
       console.log(`  ❌ [${p.id}] ${p.name} (required runtime hook did not match — upstream runtime changed)`);
       failed++;
       continue;
@@ -311,11 +311,7 @@ for (const p of [...patches.filter(p => p.ast), ...patches.filter(p => !p.ast)])
       skips.covered++;
       continue;
     }
-    if (p.optional && !anchorPresent) {
-      console.log(`  ⏭  [${p.id}] ${p.name} (not present in this version)`);
-      skips.absent++;
-      continue;
-    }
+    // A missing match does not prove that an optional feature is absent upstream.
     if (p.sentinel !== undefined || (p.ast && anchorPresent)) {
       if (anchorPresent) {
         const detail = sentinels.map((s) => JSON.stringify(s)).join(', ');
@@ -377,12 +373,13 @@ for (const p of [...patches.filter(p => p.ast), ...patches.filter(p => !p.ast)])
     console.log(`  ✅ [${p.id}] ${p.name} (${fileChangedCount} replacement${fileChangedCount > 1 ? 's' : ''} in ${appliedFiles} file${appliedFiles > 1 ? 's' : ''}${skippedNote})`);
     if (strategies.size) console.log(`     Fallbacks: ${[...strategies].map(([kind, count]) => `${count} ${kind}`).join(', ')}`);
     if (strategies.has('runtime-hook')) {
-      console.warn('     Runtime fallback installed; boolean result and activation are checked at call time, not verified during patching.');
+      console.warn(`     [${p.id}] Runtime fallback installed; boolean result and activation are checked at call time, not verified during patching.`);
       unverified.add(p.id);
+      if (isRequiredPatch(p, promptRequired)) failed++;
     }
     if (astSkipped.get(p.id)) {
       console.warn(`  ⚠️  ${p.id}: ${astSkipped.get(p.id)} site(s) NOT patched — coverage is partial`);
-      if (promptRequired && PENTEST_REQUIRED.has(p.id)) failed++;
+      if (isRequiredPatch(p, promptRequired)) failed++;
       else unverified.add(p.id);
     }
     applied++;

@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { PATCHES } from '../shared/patch-registry.mjs';
+import { PATCHES, isRequiredPatch } from '../shared/patch-registry.mjs';
 
 const [logPath, platform, versionArg] = process.argv.slice(2);
 if (!logPath || !['linux', 'macos', 'windows'].includes(platform) || versionArg && !/^\d+\.\d+\.\d+$/.test(versionArg)) {
@@ -18,61 +18,35 @@ const installedVersion = versionArg || sourceVersion;
 if (!installedVersion) throw new Error('Installed Claude version is missing from the install log');
 if (versionArg && sourceVersion && versionArg !== sourceVersion) throw new Error('Claude version argument does not match the install log');
 
-// Reviewed gaps in Claude 2.1.316 (actions/runs/41206844027) and stable 2.1.309.
-// New versions must not silently inherit these exceptions.
-const reviewed = Bun.semver.satisfies(installedVersion, '2.1.309 || 2.1.316');
-const currentReviewed = Bun.semver.satisfies(installedVersion, '2.1.323 || 2.1.325 || 2.1.330 || 2.1.331 || 2.1.332');
-const baseline = reviewed ? new Map([
-  ['computer-use-gate-semantic', 'absent'],
-  ['geo-stego-date', 'unverified'],
-  ['permission-mcp-allowlist-off', 'absent'],
-  ['computer-use-gate', 'unverified'],
-  ['auto-mode-helper-gate', 'absent'],
-  ['macos-cmdv-image-paste', 'stale'],
-  ['restore-search-tools', platform === 'windows' ? 'stale' : 'absent'],
-  ['geo-detect-probe', 'unverified'],
-  ['geo-apostrophe-stego', 'absent'],
-  ['remove-cautious-actions', 'unverified'],
-]) : currentReviewed ? new Map([
-  // Reviewed against extracted 2.1.323/2.1.330/2.1.331 sources and runs 44894960767/45392178058.
-  // Stable 2.1.325 has the same reviewed gaps across all platforms (run 45405762804).
-  // 2.1.332 retains these gaps (run 45722776006 and extracted sources).
-  // The geo encoders/provider helper are absent; clipboard fallback is upstream.
-  ['geo-stego-date', 'unverified'],
-  ['geo-detect-probe', 'unverified'],
-  ['geo-apostrophe-stego', 'absent'],
-  ['auto-mode-helper-gate', 'absent'],
-  ['macos-cmdv-image-paste', 'absent'],
-]) : new Map();
-if (reviewed && platform !== 'macos') {
-  baseline.set('computer-use-default', 'unverified');
-  baseline.set('computer-use-sub', 'unverified');
-}
-if (currentReviewed && platform !== 'macos') {
-  // These native packages do not include the macOS Computer Use implementation.
-  baseline.set('computer-use-default', 'unverified');
-  baseline.set('computer-use-sub', 'unverified');
-  baseline.set('computer-use-gate', 'unverified');
-  baseline.set('computer-use-gate-semantic', 'absent');
-}
-const partialLimits = reviewed ? new Map([['ultraplan', 1]]) : new Map();
-
 const expected = new Map(PATCHES.map(patch => [patch.id, patch]));
 const results = new Map(), partials = new Map(), covered = [];
-const errors = [];
+const errors = [], warnings = new Map();
+const reportGap = (id, message) => {
+  const patch = expected.get(id);
+  if (!patch) errors.push(`Unknown patch ID: ${id}`);
+  else if (isRequiredPatch(patch)) errors.push(`Required patch coverage gap: [${id}] ${message}`);
+  else warnings.set(id, message);
+};
 if (expected.size !== PATCHES.length) errors.push('Patch registry contains duplicate IDs');
 if (Number(summary[3]) !== 0) errors.push(`Patcher reported ${summary[3]} failed patches`);
 const body = log.slice(start, start + summary.index);
 let records = 0;
 const observed = { applied: 0, skipped: 0, failed: 0 };
 for (const raw of body.split(/\r?\n/)) {
+  if (raw.includes('Runtime fallback installed;')) {
+    const id = raw.match(/^\s*\[([\w-]+)\] Runtime fallback installed;/)?.[1];
+    if (!id) errors.push('Runtime fallback is missing a rule ID');
+    else reportGap(id, 'Runtime fallback activation has not been verified');
+    continue;
+  }
   const status = raw.trim().match(/^(✅|⏭|⚠️|❌)\s+(.+)/u);
   if (!status) continue;
   const [, icon, text] = status;
   const partial = text.match(/^([\w-]+): (\d+) site\(s\) NOT patched/);
   if (partial) {
     const [, id, count] = partial;
-    if (!expected.has(id) || partials.has(id) || Number(count) > (partialLimits.get(id) ?? 0)) errors.push(text);
+    if (!expected.has(id) || partials.has(id)) errors.push(text);
+    else reportGap(id, text);
     partials.set(id, Number(count));
     continue;
   }
@@ -86,7 +60,7 @@ for (const raw of body.split(/\r?\n/)) {
   results.set(id, icon);
   const patch = expected.get(id);
   const partialCount = message.match(/, (\d+) site\(s\) left unpatched\)/);
-  if (partialCount && Number(partialCount[1]) > (partialLimits.get(id) ?? 0)) errors.push(`[${id}] ${message}`);
+  if (partialCount && Number(partialCount[1]) > 0) reportGap(id, message);
   if (icon === '✅') continue;
   if (icon === '❌') { errors.push(`[${id}] ${message}`); continue; }
   const covering = message.match(/ \(covered by applied rule: ([\w-]+)\)$/);
@@ -101,10 +75,11 @@ for (const raw of body.split(/\r?\n/)) {
   const outOfRange = message.match(/ \(outside supported versions: (.+)\)$/);
   if (icon === '⏭' && outOfRange && patch.versions === outOfRange[1] &&
       !Bun.semver.satisfies(installedVersion, patch.versions)) continue;
-  const missing = message.match(/ \((not present in this version|no matching anchor; application cannot be verified|0 matches, no sentinel — cannot verify)\)$/);
+  const missing = message.match(/ \((not present in this version|no matching anchor; application cannot be verified|0 matches, no sentinel — cannot verify|no change needed)\)$/);
   const stale = / — (?:regex|AST matcher) stale,/.test(message);
-  const state = stale ? 'stale' : missing?.[1] === 'not present in this version' ? 'absent' : 'unverified';
-  if ((!missing && !stale) || baseline.get(id) !== state) errors.push(`New patch coverage gap: [${id}] ${message}`);
+  // Legacy "not present" rows are also uncertain: absence of a match is not proof of absence.
+  if (!missing && !stale) errors.push(`Unrecognized patch result: [${id}] ${message}`);
+  else reportGap(id, message);
 }
 for (const id of expected.keys()) if (!results.has(id)) errors.push(`Missing patch result: ${id}`);
 for (const [id, coveringId] of covered) {
@@ -117,9 +92,10 @@ if (records !== PATCHES.length || observed.applied === 0) errors.push(`Patch rep
 if (observed.applied !== Number(summary[1]) || observed.skipped !== Number(summary[2]) || observed.failed !== Number(summary[3])) {
   errors.push('Patch status counts do not match the summary');
 }
-if (body.includes('Runtime fallback installed;')) errors.push('New runtime fallback requires coverage review');
+for (const [id, message] of warnings) console.warn(`::warning::Optional patch [${id}] is not fully verified: ${message}`);
 if (errors.length) {
   for (const error of errors) console.error(`::error::${error}`);
   process.exit(1);
 }
-console.log(`Patch coverage (${platform}, Claude ${installedVersion}, ${PATCHES.length} rules): ${summary[0]}; no new coverage gaps`);
+console.log(`Patch coverage (${platform}, Claude ${installedVersion}, ${PATCHES.length} rules): ${summary[0]}; ` +
+  (warnings.size ? `${warnings.size} optional rule(s) not fully verified; full feature coverage is not confirmed` : 'all reported patches verified'));

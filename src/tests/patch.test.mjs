@@ -149,9 +149,10 @@ try {
     const target = join(testDir, graph ? 'bunfs/commands.js' : 'cli.original.cjs');
     writeFileSync(target, minimal);
     const missing = spawnSync(process.execPath, [join(testDir, 'patch.mjs')], { encoding: 'utf8' });
-    assert.equal(missing.status, 0, `${graph ? 'graph' : 'legacy'}: absent optional anchors do not abort the install`);
+    assert.equal(missing.status, 0, `${graph ? 'graph' : 'legacy'}: unmatched best-effort features do not abort the install`);
     assert.match(missing.stdout, /0 failed/);
-    assert.match(missing.stdout, /not present in this version/);
+    assert.doesNotMatch(missing.stdout, /not present in this version/);
+    assert.match(missing.stdout, /cannot verify|application cannot be verified/);
     assert.match(missing.stdout, /unverified or partial coverage/);
     const drifted = requiredRuntime + 'async function decide(a,b,c,d,e,f){return a.checkPermissions("tengu_mcp_server_policy_bypass_exempt")}';
     writeFileSync(target, drifted);

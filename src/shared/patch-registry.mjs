@@ -1,10 +1,16 @@
 
 import { upstreamPatches } from './patch-rules.mjs';
 import { PENTEST_AST_PATCH_IDS, PENTEST_AST_META } from './pentest-scanners.mjs';
+import { PENTEST_REQUIRED } from './pentest-patches.mjs';
 
 export const PATCHES = upstreamPatches.concat(
   PENTEST_AST_PATCH_IDS.map(id => ({ id, name: PENTEST_AST_META[id], ast: true, optional: true })),
 );
+
+// Installation and CI use the same boundary between required hooks and best-effort features.
+export function isRequiredPatch(patch, promptRequired = true) {
+  return patch.required === true || promptRequired && PENTEST_REQUIRED.has(patch.id);
+}
 
 // Review impact is scoped to each feature. Low affects display, medium changes
 // data handling or exposes a command, high changes policy or autonomous actions.

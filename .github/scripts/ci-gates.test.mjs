@@ -46,31 +46,37 @@ try {
     const failed = special.filter(row => row.startsWith('❌')).length;
     return `Target: cli.original.cjs (v2.1.316)\nMode: APPLY\n${rows.join('\n')}\n${extra}\nResult: ${rows.length - skipped - failed + countDelta} applied, ${skipped} skipped, ${failed} failed\n`;
   };
-  const check = (log, ok, platform = 'linux', encoding = 'utf8') => {
+  const check = (log, ok, platform = 'linux', encoding = 'utf8', warningIds = []) => {
     writeFileSync(logPath, encoding === 'utf16le' ? '\ufeff' + log : log, encoding);
     const child = spawnSync(process.execPath, [join(repository, 'src/ci/check-patch-coverage.mjs'), logPath, platform], { encoding: 'utf8', timeout: 10000 });
     assert.ok(Number.isInteger(child.status), child.error?.message || 'Coverage checker did not exit normally');
     assert.equal(child.status === 0, ok, child.stdout + child.stderr);
+    for (const id of warningIds) assert.ok(child.stderr.includes(`::warning::Optional patch [${id}]`), child.stderr);
+    if (warningIds.length) assert.match(child.stdout, /full feature coverage is not confirmed/);
   };
   for (const platform of ['linux', 'macos', 'windows']) for (const encoding of ['utf8', 'utf16le']) {
     check(report().replaceAll('\n', '\r\n').replaceAll('✅', '\x1b[32m✅\x1b[0m'), true, platform, encoding);
   }
   check(report(['⏭  Computer Use gate (resolved configuration contract) (not present in this version)']), true);
   check(report(['⚠️  Computer Use default enabled (0 matches, no sentinel — cannot verify)']), true);
-  check(report(['⚠️  Computer Use default enabled (0 matches, no sentinel — cannot verify)']), false, 'macos');
+  check(report(['⚠️  Computer Use default enabled (0 matches, no sentinel — cannot verify)']), true, 'macos', 'utf8', ['computer-use-default']);
   check(report(['⚠️  Restore Glob/Grep tools (un-inline EMBEDDED_SEARCH_TOOLS) — regex stale, sentinel still in source: anchor']), true, 'windows');
+  check(report(['⚠️  Computer Use gate (resolved configuration contract) — AST matcher stale, sentinel still in source: anchor']), true, 'linux', 'utf8', ['computer-use-gate-semantic']);
   for (const row of [
     '⏭  New missing rule (not present in this version)',
-    '⚠️  Computer Use gate (resolved configuration contract) — AST matcher stale, sentinel still in source: anchor',
     '❌ Required prompt injection hook did not match',
   ]) check(report([row]), false);
   check(report([], '⚠️  ultraplan: 1 site(s) NOT patched — coverage is partial'), true);
-  check(report([], '⚠️  ultraplan: 2 site(s) NOT patched — coverage is partial'), false);
+  check(report([], '⚠️  ultraplan: 2 site(s) NOT patched — coverage is partial'), true, 'linux', 'utf8', ['ultraplan']);
   check(report([], '⚠️  another-rule: 1 site(s) NOT patched — coverage is partial'), false);
   check(report([], 'Runtime fallback installed; activation is checked at call time'), false);
+  check(report([], '[ultraplan] Runtime fallback installed; activation is checked at call time'), true, 'linux', 'utf8', ['ultraplan']);
+  check(report([], '[session-project-paths] Runtime fallback installed; activation is checked at call time'), false);
+  check(report([], '⚠️  session-project-paths: 1 site(s) NOT patched — coverage is partial'), false);
   check(report([], '', 1), false);
   check(report().replace(`${PATCHES.length} applied, 0 skipped`, `${PATCHES.length - 1} applied, 1 skipped`), false);
-  for (const version of ['2.1.323', '2.1.325', '2.1.330', '2.1.331', '2.1.332']) for (const platform of ['linux', 'macos', 'windows']) {
+  // Old, current and future version numbers use the same capability policy.
+  for (const version of ['0.1.0', '2.1.326', '2.1.333', '3.0.0']) for (const platform of ['linux', 'macos', 'windows']) {
     const gaps = [
       '⚠️  Neutralize geo-steganography in date string (qla) (0 matches, no sentinel — cannot verify)',
       '⚠️  Neutralize geo-detection probe (rdp) (0 matches, no sentinel — cannot verify)',
@@ -85,13 +91,20 @@ try {
       '⏭  Computer Use gate (resolved configuration contract) (not present in this version)',
     );
     const currentReport = report(gaps).replace('v2.1.316', `v${version}`);
-    check(currentReport, true, platform);
-    check(currentReport.replace(`v${version}`, 'v2.1.333'), false, platform);
-    if (platform !== 'macos') check(currentReport, false, 'macos');
+    check(currentReport, true, platform, 'utf8', ['geo-stego-date', 'geo-detect-probe']);
+    if (platform !== 'macos') check(currentReport, true, 'macos');
     check(report([], '⚠️  ultraplan: 1 site(s) NOT patched — coverage is partial')
-      .replace('v2.1.316', `v${version}`), false, platform);
+      .replace('v2.1.316', `v${version}`), true, platform);
     check(report(['⚠️  macOS Cmd+V image paste fallback to clipboard read — regex stale, sentinel still in source: anchor'])
-      .replace('v2.1.316', `v${version}`), false, platform);
+      .replace('v2.1.316', `v${version}`), true, platform, 'utf8', ['macos-cmdv-image-paste']);
+    for (const id of ['session-project-paths', 'pentest-prompt-request']) {
+      const patch = PATCHES.find(patch => patch.id === id);
+      for (const reason of ['not present in this version', 'no matching anchor; application cannot be verified']) {
+        check(report([`⏭  ${patch.name} (${reason})`]).replace('v2.1.316', `v${version}`), false, platform);
+      }
+      check(report([`✅ ${patch.name} (1 replacement in 1 file, 1 site(s) left unpatched)`])
+        .replace('v2.1.316', `v${version}`), false, platform);
+    }
   }
   for (const bad of ['', `Mode: VERIFY\nResult: ${PATCHES.length} applied, 0 skipped, 0 failed`,
     'Mode: APPLY\nResult: 0 applied, 0 skipped, 0 failed', report() + 'Mode: APPLY\ntruncated']) check(bad, false);
