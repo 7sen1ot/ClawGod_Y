@@ -17,8 +17,9 @@ New-Item -ItemType Directory -Path $work | Out-Null
 try {
     $archive = Join-Path $work 'clawgod-runtime.tar.gz'
     Invoke-WebRequest "$base/clawgod-runtime.tar.gz" -OutFile $archive -UseBasicParsing
-    $sums = (Invoke-WebRequest "$base/SHA256SUMS" -UseBasicParsing).Content
-    if ($sums -notmatch '(?m)^([a-f0-9]{64})  clawgod-runtime\.tar\.gz\r?$') { throw 'Missing runtime checksum' }
+    $sumsRaw = (Invoke-WebRequest "$base/SHA256SUMS" -UseBasicParsing).Content
+    $sums = if ($sumsRaw -is [byte[]]) { [Text.Encoding]::UTF8.GetString($sumsRaw) } else { [string]$sumsRaw }
+    if ($sums -notmatch '(?m)^([a-f0-9]{64})[ \t]+\*?clawgod-runtime\.tar\.gz[ \t]*\r?$') { throw 'Missing runtime checksum' }
     if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ine $Matches[1]) { throw 'Runtime SHA-256 mismatch' }
     & tar.exe -xzf $archive -C $work
     if ($LASTEXITCODE -ne 0) { throw 'Runtime extraction failed' }
